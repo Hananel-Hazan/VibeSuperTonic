@@ -1,0 +1,25 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+*.user
+
+# Distribution composition area
+dist/
+
+# Downloaded ONNX models — too large for git, fetched on first run
+*.onnx
+models/
+
+# IDE
+.vs/
+.idea/
+*.swp
+
+# Logs
+corehost-trace.log
+*.log
+
+# Upstream Supertonic source — vendored copy of Helper.cs already lives in
+# src/VibeSuperTonic.Engine/Synth/SupertonicSdk.cs with attribution; the rest
+# of the upstream tree is fetched at build time, not tracked.
+external/

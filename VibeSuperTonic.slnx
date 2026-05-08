@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj" />
+    <Project Path="src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj" />
+    <Project Path="src/VibeSuperTonic.TestHarness/VibeSuperTonic.TestHarness.csproj" />
+  </Folder>
+</Solution>
