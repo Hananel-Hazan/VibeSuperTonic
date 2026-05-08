@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Restore + build engine (x64)
+        run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x64 --no-self-contained --nologo
+
+      - name: Restore + build engine (x86)
+        run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x86 --no-self-contained --nologo
+
+      - name: Restore + build launcher (x64 single-file)
+        run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x64 --nologo
+
+      - name: Compose release ZIP
+        run: ./build/pack-zip.ps1 -Version "ci-${{ github.sha }}"
+        shell: pwsh
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VibeSuperTonic-ci-${{ github.sha }}
+          path: dist/*.zip
+          retention-days: 14

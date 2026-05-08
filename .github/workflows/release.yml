@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v(.+)$') { $version = $Matches[1] }
+          elseif ('${{ inputs.version }}' -ne '') { $version = '${{ inputs.version }}' }
+          else { $version = '0.0.0-' + '${{ github.sha }}'.Substring(0, 7) }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version: $version"
+
+      - name: Build release ZIP
+        shell: pwsh
+        run: ./build/pack-zip.ps1 -Version "${{ steps.version.outputs.version }}"
+
+      - name: Locate ZIP
+        id: zip
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/*.zip | Select-Object -First 1
+          "path=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($zip.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: VibeSuperTonic ${{ steps.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+          body: |
+            ## VibeSuperTonic ${{ steps.version.outputs.version }}
+
+            Portable Windows SAPI 5 TTS engine wrapping Supertone's Supertonic neural TTS.
+            10 English voices visible to any SAPI client (Balabolka, NVDA, Narrator, …).
+
+            ### Install
+
+            1. Download `${{ steps.zip.outputs.name }}` below.
+            2. Extract anywhere.
+            3. Run `VibeSuperTonic.exe` once (UAC prompt — registers voice tokens).
+            4. Models (~380 MB) download on first speak.
+
+            Requires **.NET 10 Desktop Runtime** (x64; x86 also for 32-bit SAPI clients).
+
+            See the README in the repo for full docs and limitations.
+          files: ${{ steps.zip.outputs.path }}
