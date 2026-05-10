@@ -1,0 +1,22 @@
+VibeSuperTonic benchmark sample text.
+
+This file ships with a short public-domain excerpt so the Benchmark tab works
+out of the box. To benchmark longer runs (up to 100k words), replace this
+file with the full text of "Twenty Thousand Leagues Under the Sea" by Jules
+Verne, freely available from Project Gutenberg:
+
+  https://www.gutenberg.org/ebooks/2488
+
+----------------------------------------------------------------------------
+
+The year 1866 was marked by a strange event, an unexplained and inexplicable
+phenomenon, which no one could have forgotten. For some time past, vessels
+had encountered an enormous thing, a long object, spindle-shaped, occasionally
+phosphorescent, and infinitely larger and more rapid in its movements than a
+whale.
+
+The deep sea, sir, is unknown to us. What may exist in its abysmal depths?
+What beings can or do live twelve or fifteen miles below the surface of the
+ocean? Of what organisation are these animals? It is scarcely possible to
+conjecture. However, the solution of this problem may be reserved for me.
+Either I will know, or I will not exist.

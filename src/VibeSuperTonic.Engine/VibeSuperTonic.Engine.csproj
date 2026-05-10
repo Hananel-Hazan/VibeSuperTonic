@@ -13,7 +13,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
+    <!--
+      DirectML build of ORT: same managed API as the CPU package, plus the
+      AppendExecutionProvider_DML(deviceId) call. Default behavior is identical
+      to CPU; users opt in to GPU via the "Use DirectML" toggle in the Control
+      Panel's Advanced tab. Adds ~30 MB of native DLLs to the engine folder.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" />
     <PackageReference Include="System.Text.Json" Version="9.0.1" />
   </ItemGroup>
 

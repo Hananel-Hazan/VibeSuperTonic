@@ -10,10 +10,10 @@
     those are downloaded at first launch from Hugging Face.
 
 .PARAMETER Version
-    Version string to embed in the ZIP filename. Defaults to "0.1.0-spike".
+    Version string to embed in the ZIP filename. Defaults to "0.2.0".
 #>
 param(
-    [string]$Version = "0.1.0-spike"
+    [string]$Version = "0.2.0"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +62,17 @@ Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x86\p
 Get-ChildItem "$staging\engine" -Filter *.pdb -Recurse | Remove-Item -Force
 Copy-Item "$root\README.md" "$staging\README.md"
 Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
+
+# Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs against)
+if (Test-Path "$root\models-manifest.json") {
+    Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
+}
+
+# Benchmark sample text (Twenty Thousand Leagues excerpt — replaceable by user)
+if (Test-Path "$root\samples") {
+    New-Item -ItemType Directory -Path "$staging\samples" -Force | Out-Null
+    Copy-Item "$root\samples\*" "$staging\samples\" -Recurse
+}
 
 # A pointer for users on what they're agreeing to when models download
 @"

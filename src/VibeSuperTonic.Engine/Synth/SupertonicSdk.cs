@@ -519,19 +519,39 @@ namespace Supertonic
             return new InferenceSession(onnxPath, opts);
         }
 
-        public static (InferenceSession dp, InferenceSession textEnc, InferenceSession vectorEst, InferenceSession vocoder) 
+        public static (InferenceSession dp, InferenceSession textEnc, InferenceSession vectorEst, InferenceSession vocoder)
             LoadOnnxAll(string onnxDir, SessionOptions opts)
+            => LoadOnnxAll(onnxDir, opts, writeOptimizedTo: null, null);
+
+        public static (InferenceSession dp, InferenceSession textEnc, InferenceSession vectorEst, InferenceSession vocoder)
+            LoadOnnxAll(string onnxDir, SessionOptions opts, string? writeOptimizedTo, string[]? modelNames)
         {
-            var dpPath = Path.Combine(onnxDir, "duration_predictor.onnx");
-            var textEncPath = Path.Combine(onnxDir, "text_encoder.onnx");
-            var vectorEstPath = Path.Combine(onnxDir, "vector_estimator.onnx");
-            var vocoderPath = Path.Combine(onnxDir, "vocoder.onnx");
+            modelNames ??= new[] { "duration_predictor", "text_encoder", "vector_estimator", "vocoder" };
+
+            InferenceSession LoadOne(string name)
+            {
+                var path = Path.Combine(onnxDir, name + ".onnx");
+                if (writeOptimizedTo is null) return LoadOnnx(path, opts);
+                // Per-model OptimizedModelFilePath — needs its own SessionOptions because the
+                // path isn't part of the per-call API. Mirror the master options here.
+                var perModel = new SessionOptions
+                {
+                    GraphOptimizationLevel = opts.GraphOptimizationLevel,
+                    ExecutionMode = opts.ExecutionMode,
+                    EnableMemoryPattern = opts.EnableMemoryPattern,
+                    EnableCpuMemArena = opts.EnableCpuMemArena,
+                    InterOpNumThreads = opts.InterOpNumThreads,
+                    IntraOpNumThreads = opts.IntraOpNumThreads,
+                    OptimizedModelFilePath = Path.Combine(writeOptimizedTo, name + ".onnx"),
+                };
+                return LoadOnnx(path, perModel);
+            }
 
             return (
-                LoadOnnx(dpPath, opts),
-                LoadOnnx(textEncPath, opts),
-                LoadOnnx(vectorEstPath, opts),
-                LoadOnnx(vocoderPath, opts)
+                LoadOne(modelNames[0]),
+                LoadOne(modelNames[1]),
+                LoadOne(modelNames[2]),
+                LoadOne(modelNames[3])
             );
         }
 
@@ -676,20 +696,70 @@ namespace Supertonic
         // TextToSpeech loading
         // ============================================================================
 
-        public static TextToSpeech LoadTextToSpeech(string onnxDir, bool useGpu = false)
+        public static TextToSpeech LoadTextToSpeech(string onnxDir, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0)
         {
-            var opts = new SessionOptions();
+            // When useGpu is true, append the DirectML execution provider for the device.
+            // DirectML uses optimization passes specific to the GPU graph, so it cannot
+            // share the CPU-optimized cache — we bypass the disk cache when on GPU.
+            // Memory pattern + CPU mem arena are CPU-side optimizations; with DML they
+            // either help less or interact poorly, so we disable them in that path.
+
+            // Default ORT SessionOptions are conservative — basic graph opt, default threads,
+            // memory patterns. For our streaming-TTS workload these defaults leave noticeable
+            // CPU on the table. ORT_ENABLE_ALL fuses Conv+BN+ReLU and similar nodes; sequential
+            // execution skips the inter-op parallel scheduler we don't need (one model at a
+            // time). IntraOp / InterOp 0 = ORT auto-pick.
+            //
+            // First-run cost: graph optimization adds ~1-3s per model. We persist the optimized
+            // graph alongside the original (in models\onnx-optimized\) so subsequent process
+            // starts skip optimization entirely — load straight from the optimized .onnx.
+            string optimizedDir = Path.Combine(onnxDir, "..", "onnx-optimized");
+            optimizedDir = Path.GetFullPath(optimizedDir);
+
+            var modelNames = new[] { "duration_predictor", "text_encoder", "vector_estimator", "vocoder" };
+            bool cacheHit = !useGpu
+                && Directory.Exists(optimizedDir)
+                && modelNames.All(n => File.Exists(Path.Combine(optimizedDir, n + ".onnx")));
+
+            string loadDir = cacheHit ? optimizedDir : onnxDir;
+
+            var opts = new SessionOptions
+            {
+                GraphOptimizationLevel = cacheHit
+                    ? GraphOptimizationLevel.ORT_DISABLE_ALL
+                    : GraphOptimizationLevel.ORT_ENABLE_ALL,
+                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                EnableMemoryPattern = !useGpu,
+                EnableCpuMemArena = !useGpu,
+                InterOpNumThreads = Math.Max(0, interOpThreads),
+                IntraOpNumThreads = Math.Max(0, intraOpThreads),
+            };
+
             if (useGpu)
             {
-                throw new NotImplementedException("GPU mode is not supported yet");
+                // AppendExecutionProvider_DML takes priority — ops it can't run fall back to CPU.
+                // Throws if the DirectML provider can't initialize (e.g. no DX12 GPU). We let
+                // that bubble up so the caller can fall back to CPU + log the failure.
+                try
+                {
+                    opts.AppendExecutionProvider_DML(directMLDevice);
+                    Console.WriteLine($"DirectML provider appended (device {directMLDevice})");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"DirectML init failed, falling back to CPU: {ex.Message}");
+                    // Continue without DML; opts has only the default CPU provider.
+                }
             }
-            else
+            else if (!cacheHit)
             {
-                Console.WriteLine("Using CPU for inference");
+                try { Directory.CreateDirectory(optimizedDir); } catch { /* best-effort */ }
             }
 
             var cfgs = LoadCfgs(onnxDir);
-            var (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) = LoadOnnxAll(onnxDir, opts);
+            var writeOptimizedTo = (!useGpu && !cacheHit) ? optimizedDir : null;
+            var (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) =
+                LoadOnnxAll(loadDir, opts, writeOptimizedTo: writeOptimizedTo, modelNames);
             var textProcessor = LoadTextProcessor(onnxDir);
 
             return new TextToSpeech(cfgs, textProcessor, dpOrt, textEncOrt, vectorEstOrt, vocoderOrt);

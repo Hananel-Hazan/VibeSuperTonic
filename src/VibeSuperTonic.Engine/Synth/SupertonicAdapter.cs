@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using Supertonic;
+using VibeSuperTonic.Engine.Settings;
 
 namespace VibeSuperTonic.Engine.Synth;
 
@@ -43,7 +44,22 @@ internal sealed class SupertonicAdapter
             string onnxDir = Path.Combine(baseDir, "models", "onnx");
             if (!Directory.Exists(onnxDir))
                 throw new FileNotFoundException($"Supertonic ONNX directory missing: {onnxDir}");
-            _sharedTts = Helper.LoadTextToSpeech(onnxDir, useGpu: false);
+            // Pull the user's tweaks from the registry-backed settings (cached by
+            // Settings\Version). The Control Panel surfaces all of these on the Advanced
+            // tab so users can experiment with their CPU/GPU.
+            int intraOp = 0, interOp = 1, dmlDevice = 0;
+            bool useDml = false;
+            try
+            {
+                var es = EngineSettingsCache.Resolve();
+                intraOp = es.OnnxThreads;
+                interOp = es.OnnxInterOpThreads;
+                useDml = es.UseDirectML;
+                dmlDevice = es.DirectMLDeviceId;
+            }
+            catch { /* defaults */ }
+            _sharedTts = Helper.LoadTextToSpeech(onnxDir, useGpu: useDml,
+                intraOpThreads: intraOp, interOpThreads: interOp, directMLDevice: dmlDevice);
             _ttsOnnxDir = onnxDir;
             return _sharedTts;
         }

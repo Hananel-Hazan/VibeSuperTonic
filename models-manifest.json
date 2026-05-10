@@ -1,0 +1,42 @@
+{
+  "version": "1",
+  "_comment": "Each entry: path is relative to BaseDir; url is where to download; sha256 is hex; bytes is exact size. Files with empty url are skipped by the Repair flow with a 'manifest is a template' note. Fill in real URLs and SHA-256 hashes during a release build to enable fully automatic install. The current file list mirrors the actual Supertonic-3 model layout (verified against dist/spike).",
+  "files": [
+    {
+      "path": "models/onnx/text_encoder.onnx",
+      "url": "",
+      "sha256": "",
+      "bytes": 36388790
+    },
+    {
+      "path": "models/onnx/duration_predictor.onnx",
+      "url": "",
+      "sha256": "",
+      "bytes": 3700866
+    },
+    {
+      "path": "models/onnx/vector_estimator.onnx",
+      "url": "",
+      "sha256": "",
+      "bytes": 256580158
+    },
+    {
+      "path": "models/onnx/vocoder.onnx",
+      "url": "",
+      "sha256": "",
+      "bytes": 101428778
+    },
+    {
+      "path": "models/onnx/tts.json",
+      "url": "",
+      "sha256": "",
+      "bytes": 0
+    },
+    {
+      "path": "models/onnx/unicode_indexer.json",
+      "url": "",
+      "sha256": "",
+      "bytes": 0
+    }
+  ]
+}
