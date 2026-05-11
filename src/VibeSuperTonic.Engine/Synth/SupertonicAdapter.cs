@@ -9,6 +9,12 @@ namespace VibeSuperTonic.Engine.Synth;
 /// is shared statically across all voice ids — only the small <see cref="Style"/>
 /// (per-voice embedding JSON) is per-instance. Synthesis is serialized via a static
 /// gate because ONNX <c>InferenceSession.Run</c> is not safe under concurrent calls.
+///
+/// DirectML device-loss recovery: when the GPU is reset (TDR, sleep/resume, driver
+/// crash) every <c>InferenceSession</c> in this process becomes permanently dead.
+/// We catch the device-loss exception, dispose+null the shared session, rebuild
+/// it, and retry once. Repeated losses within a short window latch DML off for
+/// the rest of the process — the session reloads on CPU and the user keeps working.
 /// </summary>
 internal sealed class SupertonicAdapter
 {
@@ -18,6 +24,25 @@ internal sealed class SupertonicAdapter
     private static readonly object _ttsGate = new();
     private static TextToSpeech? _sharedTts;
     private static string? _ttsOnnxDir;
+
+    // Process-local DML health latch. Set true after repeated device-loss; once set,
+    // GetSharedTts ignores the registry's UseDirectML and loads on CPU. Never
+    // persisted — a driver glitch shouldn't silently downgrade the user's settings.
+    private static volatile bool _useDmlLatchedOff;
+    // Sliding window of recent device-loss timestamps for the latch heuristic.
+    private static readonly object _lossLogGate = new();
+    private static readonly List<long> _lossTimestampsMs = new();
+    private const int LossLatchThreshold = 3;
+    private const int LossLatchWindowMs = 60_000;
+
+    // External reset request — set by SessionRegistry when the launcher writes a
+    // <pid>.reset marker. Consumed at the top of every Synthesize call.
+    private static volatile bool _resetRequested;
+    // Counter exposed to the launcher as part of session telemetry.
+    private static int _deviceLossCount;
+    public static int DeviceLossCount => _deviceLossCount;
+    public static bool DmlLatchedOff => _useDmlLatchedOff;
+    public static void RequestReset() => _resetRequested = true;
 
     private readonly object _styleGate = new();
     private readonly string _voiceId;
@@ -58,10 +83,63 @@ internal sealed class SupertonicAdapter
                 dmlDevice = es.DirectMLDeviceId;
             }
             catch { /* defaults */ }
+            // Honor the in-process latch: repeated GPU device-loss in this process
+            // means the DML path is unhealthy here; force CPU until process exit.
+            if (_useDmlLatchedOff) useDml = false;
             _sharedTts = Helper.LoadTextToSpeech(onnxDir, useGpu: useDml,
                 intraOpThreads: intraOp, interOpThreads: interOp, directMLDevice: dmlDevice);
             _ttsOnnxDir = onnxDir;
             return _sharedTts;
+        }
+    }
+
+    /// <summary>
+    /// Disposes the shared <see cref="TextToSpeech"/> sessions and nulls the cache so
+    /// the next <see cref="GetSharedTts"/> rebuilds. Caller must hold <c>_ttsGate</c>.
+    /// </summary>
+    private static void DisposeSharedTtsLocked()
+    {
+        var dead = _sharedTts;
+        _sharedTts = null;
+        _ttsOnnxDir = null;
+        try { dead?.Dispose(); } catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// Returns true if the exception is a DirectML device-loss / device-removed
+    /// failure. ORT wraps the DXGI HRESULT into an OnnxRuntimeException whose
+    /// message contains the HRESULT and a description we can match on.
+    /// </summary>
+    private static bool IsDeviceLoss(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException!)
+        {
+            string msg = e.Message ?? "";
+            if (msg.Contains("887A0005", StringComparison.Ordinal)) return true;
+            if (msg.Contains("887A0020", StringComparison.Ordinal)) return true; // DXGI_ERROR_DRIVER_INTERNAL_ERROR
+            if (msg.Contains("device has been suspended", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("device removed", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("GetDeviceRemovedReason", StringComparison.Ordinal)) return true;
+            if (msg.Contains("DXGI_ERROR", StringComparison.OrdinalIgnoreCase)) return true;
+            if (e.InnerException is null) break;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Records a device-loss event and returns true if the latch should engage.
+    /// Window-based: <see cref="LossLatchThreshold"/> losses within
+    /// <see cref="LossLatchWindowMs"/> trips the latch.
+    /// </summary>
+    private static bool RecordLossAndShouldLatch()
+    {
+        Interlocked.Increment(ref _deviceLossCount);
+        long now = Environment.TickCount64;
+        lock (_lossLogGate)
+        {
+            _lossTimestampsMs.Add(now);
+            _lossTimestampsMs.RemoveAll(t => now - t > LossLatchWindowMs);
+            return _lossTimestampsMs.Count >= LossLatchThreshold;
         }
     }
 
@@ -80,12 +158,62 @@ internal sealed class SupertonicAdapter
 
     public short[] Synthesize(string text, int totalStep = 8, float speed = DefaultSpeed)
     {
+        // Honor an external reset request (launcher → SessionRegistry → here) before
+        // we hand any new work to the (possibly-dead) shared session.
+        if (_resetRequested)
+        {
+            _resetRequested = false;
+            lock (_ttsGate) DisposeSharedTtsLocked();
+        }
+
         var tts = GetSharedTts(out string baseDir);
         EnsureStyleLoaded(baseDir);
-        lock (_ttsGate)
+        try
         {
-            var (wav, _) = tts.Call(text, "en", _style!, totalStep, speed);
-            return FloatToInt16(wav);
+            lock (_ttsGate)
+            {
+                var (wav, _) = tts.Call(text, "en", _style!, totalStep, speed);
+                return FloatToInt16(wav);
+            }
+        }
+        catch (Exception ex) when (IsDeviceLoss(ex))
+        {
+            // GPU device-loss: every session in this process is now dead. Drop the
+            // shared cache so GetSharedTts rebuilds, latch CPU if we've seen too many
+            // losses already, and retry once. A second failure surfaces to the caller.
+            //
+            // Concurrency: the dispose + rebuild + retry must happen under a single
+            // _ttsGate hold so a parallel thread (also seeing device-loss) doesn't
+            // dispose the session we just built before we get to use it. Monitor is
+            // re-entrant, so GetSharedTts reacquiring the gate inside this block is fine.
+            bool latchNow = RecordLossAndShouldLatch();
+            try
+            {
+                lock (_ttsGate)
+                {
+                    // If another thread already replaced the cached session while we were
+                    // throwing, skip the dispose — `tts` is stale-and-orphaned, but the
+                    // current `_sharedTts` belongs to that other thread and is alive.
+                    if (ReferenceEquals(_sharedTts, tts))
+                    {
+                        DisposeSharedTtsLocked();
+                        if (latchNow) _useDmlLatchedOff = true;
+                    }
+                    var rebuilt = GetSharedTts(out _);
+                    var (wav, _) = rebuilt.Call(text, "en", _style!, totalStep, speed);
+                    return FloatToInt16(wav);
+                }
+            }
+            catch (Exception retryEx)
+            {
+                // Retry failed too. Surface both causes — the retry exception's
+                // message often points at the rebuild path (eg. CPU fallback init
+                // failing) while the original tells the operator which DXGI code
+                // triggered the loss. Bundle them so engine.log captures both.
+                throw new AggregateException(
+                    "DirectML device-loss recovery failed after one retry.",
+                    ex, retryEx);
+            }
         }
     }
 

@@ -328,8 +328,12 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             try
                             {
                                 double firstByte = chunksDone == 1 ? (synthEndMs - firstSynthStartMs) : 0;
-                                TelemetryWriter.Update(true, _voiceId,
-                                    chunk.Text.Length > 80 ? chunk.Text.Substring(0, 80) : chunk.Text,
+                                // Send the full chunk text — the Monitor tab's "Currently
+                                // synthesizing" pane is multi-line and scrollable, so there's
+                                // no UI reason to truncate. (Earlier MMF telemetry had a 4 KB
+                                // segment ceiling that made truncation necessary; the JSON
+                                // file backend has no such limit.)
+                                TelemetryWriter.Update(true, _voiceId, chunk.Text ?? "",
                                     resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
                                     firstByte, rollingRtf, 1, 0, resolved.OnnxThreads, 0, "");
                             }
@@ -806,10 +810,12 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         get
         {
             if (_logPath != null) return _logPath;
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "VibeSuperTonic", "logs");
-            Directory.CreateDirectory(dir);
+            // DataPaths resolves the user's portable data root (default
+            // <BaseDir>\data, override in HKCU\SOFTWARE\VibeSuperTonic\DataDir).
+            // We cache the resolved path; if the user changes DataDir, new logs
+            // appear at the new location after the next engine load.
+            string dir = Settings.DataPaths.LogsDir;
+            try { Directory.CreateDirectory(dir); } catch { }
             _logPath = Path.Combine(dir, "engine.log");
             return _logPath;
         }

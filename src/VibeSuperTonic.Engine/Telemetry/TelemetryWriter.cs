@@ -1,26 +1,49 @@
 using System.Diagnostics;
-using System.IO.MemoryMappedFiles;
-using System.Runtime.InteropServices;
-using System.Text;
+using System.Text.Json;
+using VibeSuperTonic.Engine.Settings;
+using VibeSuperTonic.Engine.Synth;
 
 namespace VibeSuperTonic.Engine.Telemetry;
 
 /// <summary>
-/// Writes a single-snapshot view (most-recent state, not a full ring buffer) of
-/// the engine into a named shared-memory segment. The Control Panel's Monitor
-/// tab opens it read-only and refreshes ~5 Hz. Layout MUST exactly match
-/// VibeSuperTonic.Launcher.Telemetry.TelemetryReader.RawHeader.
+/// Writes a per-PID JSON snapshot of this engine instance into
+/// <see cref="DataPaths.SessionsDir"/>. The Control Panel's Monitor tab
+/// enumerates the directory at ~5 Hz so multiple SAPI clients (Lingoes +
+/// Balabolka + Word + …) all show up at once with their own state.
+///
+/// File freshness — the engine ID is the filename (the host process's PID); a
+/// stale file (mtime &gt; 5s) means the host crashed or the engine never updated.
+/// On graceful process exit we delete our own file via <see cref="AppDomain.ProcessExit"/>.
+///
+/// Reset signal — the launcher writes <c>&lt;pid&gt;.reset</c> as a sentinel. We poll
+/// for it on every <see cref="Update"/> tick; on detection we tell
+/// <see cref="SupertonicAdapter"/> to drop its shared ONNX/DML session and delete
+/// the marker. The next Speak rebuilds the session — Lingoes does NOT need to
+/// restart.
+///
+/// Path resolution: we DO NOT cache the data directory at type load time. The
+/// engine DLL is loaded inside arbitrary host processes (Lingoes, NVDA, …) at
+/// unpredictable moments — sometimes before the launcher has populated
+/// <c>HKCU\SOFTWARE\VibeSuperTonic\BaseDir</c>. Caching would freeze a bad path
+/// for the rest of that host's lifetime. <see cref="DataPaths"/> reads the
+/// registry on every call; the cost is sub-microsecond.
 /// </summary>
 internal static class TelemetryWriter
 {
-    public const string SegmentName = @"Local\VibeSuperTonic.Telemetry";
-    public const int SegmentSize = 4096;
-    private const int Magic = 0x56535453; // 'VSTS'
+    public const int SchemaVersion = 2;
 
     private static readonly object _gate = new();
-    private static MemoryMappedFile? _mmf;
-    private static MemoryMappedViewAccessor? _view;
-    private static bool _initFailed;
+    private static readonly int _pid = Environment.ProcessId;
+    private static readonly string _processName = SafeProcessName();
+
+    private static bool _exitHandlerRegistered;
+    private static System.Threading.Timer? _resetPoll;
+
+    // Diagnostic throttle: log the first failure of each kind to engine.log,
+    // then suppress subsequent identical failures so we don't fill the disk.
+    // Cleared if a write later succeeds — recoverable problems re-log when
+    // they recur.
+    private static string? _lastFailureSignature;
 
     private static long _engineCpuStartTicks;
     private static long _engineCpuStartWallMs;
@@ -40,13 +63,27 @@ internal static class TelemetryWriter
         int underrunCount,
         string lastError)
     {
-        if (_initFailed) return;
+        // Resolve every call — see class-level note. If the caller hasn't
+        // registered yet (BaseDir empty), we fall through to AppContext.BaseDir
+        // which is the host process's folder; the directory create below
+        // catches the writability problem and we log it.
+        string sessionsDir, filePath, resetMarker;
         try
         {
-            EnsureOpen();
-            if (_view is null) return;
+            sessionsDir = DataPaths.SessionsDir;
+            filePath = Path.Combine(sessionsDir, $"{_pid}.json");
+            resetMarker = Path.Combine(sessionsDir, $"{_pid}.reset");
+        }
+        catch (Exception ex)
+        {
+            LogFailure("resolve-paths", ex);
+            return;
+        }
 
-            // Compute engine CPU% over the time delta since last update.
+        try
+        {
+            EnsureInitialized(sessionsDir, resetMarker);
+
             var proc = Process.GetCurrentProcess();
             long nowCpuTicks = proc.TotalProcessorTime.Ticks;
             long nowWallMs = Environment.TickCount64;
@@ -62,10 +99,19 @@ internal static class TelemetryWriter
             _engineCpuStartWallMs = nowWallMs;
             double rssMb = proc.WorkingSet64 / (1024.0 * 1024.0);
 
-            var hdr = new RawHeader
+            // Pick up any pending reset marker from the launcher BEFORE we publish the
+            // snapshot, so the snapshot reflects post-reset state on the next tick.
+            CheckResetMarker(resetMarker);
+
+            var snap = new SessionSnapshotDto
             {
-                Magic = Magic,
-                IsActive = isActive ? 1 : 0,
+                SchemaVersion = SchemaVersion,
+                Pid = _pid,
+                ProcessName = _processName,
+                IsActive = isActive,
+                VoiceId = voiceId ?? "",
+                CurrentText = textSnippet ?? "",
+                LastError = lastError ?? "",
                 TotalStep = totalStep,
                 EngineSpeed = engineSpeed,
                 DspRate = dspRate,
@@ -77,25 +123,25 @@ internal static class TelemetryWriter
                 EngineRssMb = rssMb,
                 OnnxThreads = onnxThreads,
                 UnderrunCount = underrunCount,
-                SampleTimeBinary = DateTime.UtcNow.ToBinary(),
+                DeviceLossCount = SupertonicAdapter.DeviceLossCount,
+                DmlLatchedOff = SupertonicAdapter.DmlLatchedOff,
+                SampleTimeUtc = DateTime.UtcNow,
             };
 
             lock (_gate)
             {
-                _view.Write(0, ref hdr);
-                int offset = Marshal.SizeOf<RawHeader>();
-                WriteLenPrefixedString(_view, ref offset, voiceId ?? "");
-                WriteLenPrefixedString(_view, ref offset, Truncate(textSnippet, 80));
-                WriteLenPrefixedString(_view, ref offset, lastError ?? "");
+                WriteAtomic(filePath, snap);
             }
+
+            // Successful write — clear the failure signature so a future
+            // recurrence will log again.
+            _lastFailureSignature = null;
         }
-        catch
+        catch (Exception ex)
         {
-            // If anything goes wrong (security, OOM, GC during write), turn off telemetry
-            // for this process. Engine MUST keep speaking — telemetry is best-effort.
-            _initFailed = true;
-            try { _view?.Dispose(); _mmf?.Dispose(); } catch { }
-            _view = null; _mmf = null;
+            // Telemetry must never break TTS. We just log the first occurrence
+            // and try again on the next tick — no permanent latch.
+            LogFailure($"update@{sessionsDir}", ex);
         }
     }
 
@@ -109,62 +155,145 @@ internal static class TelemetryWriter
             onnxThreads: 0, underrunCount: 0, lastError: "");
     }
 
-    private static void EnsureOpen()
+    private static void EnsureInitialized(string sessionsDir, string resetMarker)
     {
-        if (_view is not null) return;
+        // Always make sure the directory exists — paths can change between
+        // calls if the user updated the DataDir override, and CreateDirectory
+        // is a no-op when the directory's already there.
+        Directory.CreateDirectory(sessionsDir);
+
+        if (_exitHandlerRegistered) return;
         lock (_gate)
         {
-            if (_view is not null) return;
+            if (_exitHandlerRegistered) return;
+            // Sweep stale ".tmp" files left by a prior crashed instance with our
+            // PID (rare but real — Windows reuses PIDs). Unfiltered .tmp files
+            // accumulate forever otherwise.
             try
             {
-                _mmf = MemoryMappedFile.CreateOrOpen(SegmentName, SegmentSize, MemoryMappedFileAccess.ReadWrite);
-                _view = _mmf.CreateViewAccessor(0, SegmentSize, MemoryMappedFileAccess.ReadWrite);
+                foreach (var tmp in Directory.EnumerateFiles(sessionsDir, $"{_pid}.json.tmp"))
+                {
+                    try { File.Delete(tmp); } catch { }
+                }
             }
-            catch
+            catch { /* best-effort */ }
+
+            // Clean up our snapshot on graceful process exit. COM in-proc DLLs may
+            // skip this on host crash — readers also use mtime staleness as a
+            // safety net so a leftover file isn't displayed as a live session.
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
             {
-                _initFailed = true;
-                _view = null;
-                _mmf?.Dispose();
-                _mmf = null;
-            }
+                // Stop the heartbeat timer first so it can't fire after we've
+                // started tearing down. Then delete our session+marker files.
+                try { _resetPoll?.Dispose(); } catch { }
+                _resetPoll = null;
+                RemoveOwnedFiles();
+            };
+            // Background tick: poll the reset marker AND refresh our snapshot's
+            // mtime so we don't get marked stale by the launcher between Speak
+            // calls. The launcher's freshness window is 5 s — a 1 Hz tick keeps
+            // us comfortably alive without thrashing the disk. Reset responds
+            // within 1 s even if the engine is idle or stuck mid-chunk.
+            _resetPoll = new System.Threading.Timer(_ =>
+            {
+                try { CheckResetMarker(Path.Combine(DataPaths.SessionsDir, $"{_pid}.reset")); } catch { }
+                try { Heartbeat(Path.Combine(DataPaths.SessionsDir, $"{_pid}.json")); } catch { }
+            }, null, dueTime: 1000, period: 1000);
+            _exitHandlerRegistered = true;
         }
     }
 
-    private static string Truncate(string s, int max)
+    private static void CheckResetMarker(string resetMarker)
     {
-        if (string.IsNullOrEmpty(s)) return "";
-        return s.Length <= max ? s : s.Substring(0, max);
-    }
-
-    private static void WriteLenPrefixedString(MemoryMappedViewAccessor view, ref int offset, string text)
-    {
-        var bytes = Encoding.UTF8.GetBytes(text ?? "");
-        if (offset + 4 + bytes.Length > SegmentSize) return;
-        view.Write(offset, bytes.Length);
-        offset += 4;
-        if (bytes.Length > 0)
+        try
         {
-            view.WriteArray(offset, bytes, 0, bytes.Length);
-            offset += bytes.Length;
+            if (!File.Exists(resetMarker)) return;
+            // Tell the adapter to drop its shared session at the next Synthesize.
+            // We delete the marker first so a slow filesystem can't double-trigger.
+            try { File.Delete(resetMarker); } catch { /* will retry next tick */ }
+            SupertonicAdapter.RequestReset();
+        }
+        catch { /* never let a marker check break telemetry */ }
+    }
+
+    private static void WriteAtomic(string filePath, SessionSnapshotDto snap)
+    {
+        // Write to a sibling temp file then rename — readers either see the old
+        // contents or the new contents, never a half-written file.
+        string tmp = filePath + ".tmp";
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(snap, SnapshotJsonContext.Default.SessionSnapshotDto);
+        File.WriteAllBytes(tmp, bytes);
+        try { File.Move(tmp, filePath, overwrite: true); }
+        catch
+        {
+            // File.Move with overwrite can fail under AV scans; fall back to delete+move.
+            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+            File.Move(tmp, filePath);
         }
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct RawHeader
+    /// <summary>
+    /// Touch the snapshot file to refresh its mtime — the launcher uses mtime as
+    /// a heartbeat. If the file doesn't exist yet (no Speak has happened), do
+    /// nothing; <see cref="Update"/> will create it on first call.
+    /// </summary>
+    private static void Heartbeat(string filePath)
     {
-        public int    Magic;
-        public int    IsActive;
-        public int    TotalStep;
-        public float  EngineSpeed;
-        public float  DspRate;
-        public double FirstByteLatencyMs;
-        public double RollingRtf;
-        public int    PipelineDepth;
-        public double InterChunkGapMs;
-        public double EngineCpuPct;
-        public double EngineRssMb;
-        public int    OnnxThreads;
-        public int    UnderrunCount;
-        public long   SampleTimeBinary;
+        if (!File.Exists(filePath)) return;
+        try { File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow); } catch { }
+    }
+
+    private static void RemoveOwnedFiles()
+    {
+        try
+        {
+            string dir = DataPaths.SessionsDir;
+            string filePath = Path.Combine(dir, $"{_pid}.json");
+            string resetMarker = Path.Combine(dir, $"{_pid}.reset");
+            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+            try { if (File.Exists(resetMarker)) File.Delete(resetMarker); } catch { }
+        }
+        catch { /* shutdown best-effort */ }
+    }
+
+    /// <summary>
+    /// Append a one-line failure record to engine.log. Throttled by signature
+    /// so identical failures on every tick don't fill the disk. The launcher
+    /// can read engine.log to surface "telemetry not writing because of X".
+    /// </summary>
+    private static void LogFailure(string where, Exception ex)
+    {
+        string sig = where + "|" + ex.GetType().Name + "|" + ex.Message;
+        if (sig == _lastFailureSignature) return;
+        _lastFailureSignature = sig;
+        try
+        {
+            string logDir = DataPaths.LogsDir;
+            // If LogsDir itself isn't writable, the catch below swallows it —
+            // we tried our best to surface the problem.
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, "engine.log");
+            File.AppendAllText(logPath,
+                $"[{DateTime.Now:HH:mm:ss.fff}] TelemetryWriter.{where} EXCEPTION: " +
+                $"{ex.GetType().Name}: {ex.Message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Last-ditch: try the user's TEMP. If even that fails, give up.
+            try
+            {
+                string fallback = Path.Combine(Path.GetTempPath(), "VibeSuperTonic-engine.log");
+                File.AppendAllText(fallback,
+                    $"[{DateTime.Now:HH:mm:ss.fff}] TelemetryWriter.{where} EXCEPTION: " +
+                    $"{ex.GetType().Name}: {ex.Message}{Environment.NewLine}");
+            }
+            catch { }
+        }
+    }
+
+    private static string SafeProcessName()
+    {
+        try { return Process.GetCurrentProcess().ProcessName; }
+        catch { return "(unknown)"; }
     }
 }

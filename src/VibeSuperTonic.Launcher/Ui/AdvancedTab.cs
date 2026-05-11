@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Forms;
 using VibeSuperTonic.Launcher.Integrity;
 
@@ -9,6 +10,9 @@ internal sealed class AdvancedTab : UserControl
     private readonly NumericUpDown _synthSilence, _rateClamp;
     private readonly CheckBox _useDirectML;
     private readonly Button _save, _reset;
+    private readonly TextBox _dataDirOverride;
+    private readonly Label _dataDirResolved;
+    private readonly Button _dataDirBrowse, _dataDirReset, _dataDirOpen, _dataDirApply;
 
     public AdvancedTab()
     {
@@ -76,6 +80,87 @@ internal sealed class AdvancedTab : UserControl
                 "IMPORTANT: GPU and ONNX-thread changes take effect on the next engine load. To apply, you MUST close every program currently using the engine — every SAPI client (Lingoes, Balabolka, NVDA, …) AND this Control Panel itself if you've used the Benchmark tab. Then re-open them.",
         };
 
+        // ─── Data folder ─────────────────────────────────────────────────────
+        // VibeSuperTonic is portable: settings.json, engine.log, and per-PID
+        // session telemetry all live under a single data folder. Default sits
+        // next to the .exe so a USB-stick install travels with its state. The
+        // override accepts env vars (%LOCALAPPDATA%\VibeSuperTonic), absolute
+        // paths, and relative paths (anchored at the program directory).
+        var dataDirBox = new GroupBox
+        {
+            Text = "Data folder (logs, sessions, settings)",
+            Dock = DockStyle.Top,
+            Padding = new Padding(8, 18, 8, 8),
+            Height = 130,
+        };
+        var dataDirGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 4,
+            Padding = new Padding(0),
+        };
+        dataDirGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        dataDirGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        dataDirGrid.Controls.Add(new Label { Text = "Override path", AutoSize = true, Margin = new Padding(0, 8, 12, 0) }, 0, 0);
+        var overridePanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            Margin = new Padding(0),
+        };
+        overridePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        overridePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        overridePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        overridePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _dataDirOverride = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            PlaceholderText = "(empty = default: <program folder>\\data)",
+        };
+        var dirTip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400, ReshowDelay = 400 };
+        dirTip.SetToolTip(_dataDirOverride,
+            "Where VibeSuperTonic writes logs, telemetry, and settings.\n\n" +
+            "Accepts:\n" +
+            "  • A relative path (data, ..\\shared) — resolved against the program folder\n" +
+            "  • An absolute path (D:\\portable-data)\n" +
+            "  • Environment variables (%LOCALAPPDATA%\\VibeSuperTonic)\n\n" +
+            "Leave empty to use the default (<program folder>\\data).\n\n" +
+            "After changing, click Apply. Already-loaded engine instances\n" +
+            "(SAPI clients) will pick up the new location on their next reload —\n" +
+            "easiest is to close them and reopen.");
+        _dataDirBrowse = new Button { Text = "Browse…", AutoSize = true, Margin = new Padding(4, 0, 0, 0) };
+        _dataDirReset  = new Button { Text = "Default", AutoSize = true, Margin = new Padding(4, 0, 0, 0) };
+        _dataDirApply  = new Button { Text = "Apply",   AutoSize = true, Margin = new Padding(4, 0, 0, 0) };
+        _dataDirBrowse.Click += (_, _) => OnBrowseDataDir();
+        _dataDirReset.Click  += (_, _) => { _dataDirOverride.Text = ""; UpdateResolvedLabel(); };
+        _dataDirApply.Click  += (_, _) => OnApplyDataDir();
+        _dataDirOverride.TextChanged += (_, _) => UpdateResolvedLabel();
+        overridePanel.Controls.Add(_dataDirOverride, 0, 0);
+        overridePanel.Controls.Add(_dataDirBrowse, 1, 0);
+        overridePanel.Controls.Add(_dataDirReset,  2, 0);
+        overridePanel.Controls.Add(_dataDirApply,  3, 0);
+        dataDirGrid.Controls.Add(overridePanel, 1, 0);
+
+        dataDirGrid.Controls.Add(new Label { Text = "Resolves to", AutoSize = true, Margin = new Padding(0, 8, 12, 0), ForeColor = Color.Gray }, 0, 1);
+        _dataDirResolved = new Label
+        {
+            Dock = DockStyle.Fill,
+            AutoEllipsis = true,
+            Margin = new Padding(0, 4, 0, 0),
+            Font = new Font(FontFamily.GenericMonospace, 9f),
+        };
+        var resolvedPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+        resolvedPanel.Controls.Add(_dataDirResolved);
+        _dataDirOpen = new Button { Text = "Open", AutoSize = true, Margin = new Padding(8, 0, 0, 0) };
+        _dataDirOpen.Click += (_, _) => OnOpenDataDir();
+        resolvedPanel.Controls.Add(_dataDirOpen);
+        dataDirGrid.Controls.Add(resolvedPanel, 1, 1);
+
+        dataDirBox.Controls.Add(dataDirGrid);
+
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(8) };
         _save  = new Button { Text = "Save", AutoSize = true };
         _reset = new Button { Text = "Reset all to defaults", AutoSize = true };
@@ -123,9 +208,112 @@ internal sealed class AdvancedTab : UserControl
 
         Controls.Add(dangerBox);
         Controls.Add(buttons);
+        Controls.Add(dataDirBox);
         Controls.Add(grid);
         Controls.Add(info);
         Load();
+    }
+
+    /// <summary>
+    /// Resolve and display the effective data folder for the current override
+    /// text — runs every keystroke so the user sees what their entry expands
+    /// to before clicking Apply.
+    /// </summary>
+    private void UpdateResolvedLabel()
+    {
+        try
+        {
+            string raw = _dataDirOverride.Text;
+            string resolved = DataPaths.ResolveDataDir(raw, DataPaths.BaseDir);
+            _dataDirResolved.Text = resolved;
+        }
+        catch (Exception ex)
+        {
+            _dataDirResolved.Text = "(invalid path: " + ex.Message + ")";
+        }
+    }
+
+    private void OnBrowseDataDir()
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "Pick a folder for VibeSuperTonic logs, sessions, and settings.",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            InitialDirectory = Directory.Exists(DataPaths.DataDir) ? DataPaths.DataDir : DataPaths.BaseDir,
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        _dataDirOverride.Text = dlg.SelectedPath;
+    }
+
+    private void OnApplyDataDir()
+    {
+        string raw = _dataDirOverride.Text.Trim();
+        string targetDir;
+        try { targetDir = DataPaths.ResolveDataDir(raw, DataPaths.BaseDir); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"That path can't be resolved:\n\n{ex.Message}",
+                "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Try to ensure we can actually write there before committing the override.
+        // If we don't probe, a typo'd path silently breaks logging + telemetry.
+        try { Directory.CreateDirectory(targetDir); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Couldn't create the target folder:\n\n{ex.Message}",
+                "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        try
+        {
+            string probe = Path.Combine(targetDir, ".write-probe");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"The target folder isn't writable:\n\n{ex.Message}",
+                "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Snapshot the current settings under the OLD location, persist the
+        // override, then re-save the settings under the NEW location so the
+        // user keeps their tunings when they move the data folder.
+        EngineSettings settings;
+        try { settings = EngineSettingsRegistry.Load(); } catch { settings = new EngineSettings(); }
+
+        DataPaths.SetDataDirOverride(string.IsNullOrWhiteSpace(raw) ? null : raw);
+
+        try { EngineSettingsRegistry.Save(settings); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Settings saved location updated, but writing settings.json failed:\n\n{ex.Message}",
+                "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        MessageBox.Show(this,
+            $"Data folder set to:\n  {targetDir}\n\n" +
+            "New logs and session telemetry will appear here. Already-loaded SAPI " +
+            "engine instances pick up the new location on their next reload — close " +
+            "and reopen any SAPI clients to see them in the Monitor tab again.",
+            "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void OnOpenDataDir()
+    {
+        string dir = DataPaths.DataDir;
+        try { Directory.CreateDirectory(dir); } catch { }
+        try { Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true }); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Couldn't open the folder:\n\n{ex.Message}",
+                "VibeSuperTonic", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private static NumericUpDown AddNumeric(TableLayoutPanel grid, int row, string title, int min, int max, int step, string? helpText = null)
@@ -152,6 +340,8 @@ internal sealed class AdvancedTab : UserControl
         _onnxThreads.Value       = Clamp(s.OnnxThreads, _onnxThreads);
         _onnxInterOpThreads.Value = Clamp(s.OnnxInterOpThreads, _onnxInterOpThreads);
         _useDirectML.Checked     = s.UseDirectML;
+        _dataDirOverride.Text    = DataPaths.RawDataDirOverride ?? "";
+        UpdateResolvedLabel();
     }
 
     private static decimal Clamp(int v, NumericUpDown nud) => Math.Min(nud.Maximum, Math.Max(nud.Minimum, v));

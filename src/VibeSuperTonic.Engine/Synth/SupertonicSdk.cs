@@ -259,7 +259,7 @@ namespace Supertonic
     // TextToSpeech class
     // ============================================================================
 
-    public class TextToSpeech
+    public class TextToSpeech : IDisposable
     {
         private readonly Config _cfgs;
         private readonly UnicodeProcessor _textProcessor;
@@ -271,6 +271,20 @@ namespace Supertonic
         private readonly int _baseChunkSize;
         private readonly int _chunkCompressFactor;
         private readonly int _ldim;
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // Each session owns native handles for its ONNX graph + DML command queue;
+            // they must be released explicitly. Swallow per-session errors so a bad
+            // handle doesn't stop us from releasing the others.
+            try { _dpOrt?.Dispose(); } catch { }
+            try { _textEncOrt?.Dispose(); } catch { }
+            try { _vectorEstOrt?.Dispose(); } catch { }
+            try { _vocoderOrt?.Dispose(); } catch { }
+        }
 
         public TextToSpeech(
             Config cfgs,

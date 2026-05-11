@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Forms;
 using VibeSuperTonic.Launcher.Telemetry;
 using VibeSuperTonic.Launcher.Integrity;
@@ -19,67 +20,163 @@ internal sealed class MonitorTab : UserControl
     private readonly Label _threads;
     private readonly Label _underruns;
     private readonly Label _holders;
+    private readonly Label _device;
     private readonly TextBox _text;
     private readonly TextBox _error;
+    private readonly DataGridView _sessionsGrid;
+    private readonly Label _sessionsLabel;
+    private readonly Button _resetSelectedBtn;
+    private readonly Button _copyTextBtn;
+    private readonly Button _copyErrorBtn;
+
+    private readonly List<TelemetrySnapshot> _currentSessions = new();
+    private int _selectedPid = -1;
 
     public MonitorTab()
     {
+        // Auto-scroll keeps the tab usable when the user resizes the window
+        // smaller than our preferred content height (~720 px). Without it, the
+        // bottom panes (Last error, Currently synthesizing) get clipped.
+        AutoScroll = true;
+
+        // ─── Sessions table (one row per live engine instance) ──────────────
+        _sessionsGrid = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AllowUserToResizeRows = false,
+            RowHeadersVisible = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BackgroundColor = SystemColors.Window,
+            BorderStyle = BorderStyle.FixedSingle,
+            ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+        };
+        _sessionsGrid.Columns.Add(MakeColumn("Pid",      "PID",     60,  false));
+        _sessionsGrid.Columns.Add(MakeColumn("Process",  "Process", 0,   true));
+        _sessionsGrid.Columns.Add(MakeColumn("Voice",    "Voice",   80,  false));
+        _sessionsGrid.Columns.Add(MakeColumn("State",    "State",   80,  false));
+        _sessionsGrid.Columns.Add(MakeColumn("Rtf",      "RTF",     60,  false));
+        _sessionsGrid.Columns.Add(MakeColumn("Cpu",      "CPU",     60,  false));
+        _sessionsGrid.Columns.Add(MakeColumn("Loss",     "GPU loss",80, false));
+        _sessionsGrid.Columns.Add(MakeColumn("Device",   "Backend", 80,  false));
+        _sessionsGrid.SelectionChanged += (_, _) => OnSessionSelectionChanged();
+
+        var sessionsBox = new GroupBox
+        {
+            Text = "Active connections",
+            Dock = DockStyle.Top,
+            Height = 200,
+            Padding = new Padding(8, 18, 8, 8),
+        };
+        _resetSelectedBtn = new Button
+        {
+            Text = "Reset selected",
+            Dock = DockStyle.Right,
+            Width = 130,
+            Enabled = false,
+        };
+        _resetSelectedBtn.Click += (_, _) => OnResetSelected();
+        _sessionsLabel = new Label
+        {
+            Text = "No connections.",
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            ForeColor = Color.Gray,
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        sessionsBox.Controls.Add(_sessionsGrid);
+        sessionsBox.Controls.Add(_resetSelectedBtn);
+        sessionsBox.Controls.Add(_sessionsLabel);
+
+        // ─── Per-session metric grid ────────────────────────────────────────
         var grid = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             ColumnCount = 4,
-            RowCount = 6,
-            Padding = new Padding(8),
+            RowCount = 4,
+            Padding = new Padding(8, 4, 8, 8),
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
         for (int i = 0; i < 4; i++)
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
 
-        _state    = AddCell(grid, 0, 0, "State",         "Idle");
-        _voice    = AddCell(grid, 0, 1, "Voice",         "—");
+        _state    = AddCell(grid, 0, 0, "State",          "Idle");
+        _voice    = AddCell(grid, 0, 1, "Voice",          "—");
         _resolved = AddCell(grid, 0, 2, "Resolved knobs", "—");
         _latency  = AddCell(grid, 0, 3, "1st-byte latency", "—");
-        _rtf      = AddCell(grid, 1, 0, "RTF (rolling)", "—");
+        _rtf      = AddCell(grid, 1, 0, "RTF (rolling)",  "—");
         _pipeline = AddCell(grid, 1, 1, "Pipeline depth", "—");
-        _gap      = AddCell(grid, 1, 2, "Inter-chunk gap", "—");
-        _cpu      = AddCell(grid, 1, 3, "Engine CPU",    "—");
-        _rss      = AddCell(grid, 2, 0, "Engine RAM",    "—");
-        _threads  = AddCell(grid, 2, 1, "ONNX threads",  "—");
-        _underruns= AddCell(grid, 2, 2, "Underruns",     "0");
-        _holders  = AddCell(grid, 2, 3, "Engine in use by", "—");
+        _gap      = AddCell(grid, 1, 2, "Inter-chunk gap","—");
+        _cpu      = AddCell(grid, 1, 3, "Engine CPU",     "—");
+        _rss      = AddCell(grid, 2, 0, "Engine RAM",     "—");
+        _threads  = AddCell(grid, 2, 1, "ONNX threads",   "—");
+        _underruns= AddCell(grid, 2, 2, "Underruns",      "0");
+        _device   = AddCell(grid, 2, 3, "Backend",        "—");
+        _holders  = AddCell(grid, 3, 0, "DLL held by",    "—");
 
-        var textBox = new GroupBox { Text = "Currently synthesizing", Dock = DockStyle.Top, Height = 90 };
+        // ─── Currently synthesizing — multi-line, scrollable, with Copy ─────
+        var textBox = new GroupBox { Text = "Currently synthesizing", Dock = DockStyle.Top, Height = 160, Padding = new Padding(8, 18, 8, 8) };
         _text = new TextBox
         {
             Dock = DockStyle.Fill,
             Multiline = true,
             ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            WordWrap = true,
             Font = new Font(FontFamily.GenericSerif, 9.5f),
         };
+        _copyTextBtn = new Button { Text = "Copy", Dock = DockStyle.Right, Width = 80 };
+        _copyTextBtn.Click += (_, _) => CopyToClipboard(_text.Text);
         textBox.Controls.Add(_text);
+        textBox.Controls.Add(_copyTextBtn);
 
-        var errBox = new GroupBox { Text = "Last error", Dock = DockStyle.Top, Height = 60 };
+        // ─── Last error — taller, scrollable, with Copy ─────────────────────
+        var errBox = new GroupBox { Text = "Last error", Dock = DockStyle.Top, Height = 240, Padding = new Padding(8, 18, 8, 8) };
         _error = new TextBox
         {
             Dock = DockStyle.Fill,
             Multiline = true,
             ReadOnly = true,
-            Font = new Font(FontFamily.GenericMonospace, 8.25f),
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = new Font(FontFamily.GenericMonospace, 8.5f),
             ForeColor = Color.Firebrick,
         };
+        _copyErrorBtn = new Button { Text = "Copy", Dock = DockStyle.Right, Width = 80 };
+        _copyErrorBtn.Click += (_, _) => CopyToClipboard(_error.Text);
         errBox.Controls.Add(_error);
+        errBox.Controls.Add(_copyErrorBtn);
 
+        // Order matters — controls dock from outside in, so add the largest /
+        // last things first. Sessions go on top, then metric grid, then text +
+        // error panes (which fill remaining space).
         Controls.Add(errBox);
         Controls.Add(textBox);
         Controls.Add(grid);
+        Controls.Add(sessionsBox);
 
         _timer = new System.Windows.Forms.Timer { Interval = 200 };
-        _timer.Tick += (_, _) => { if (!IsDisposed && Visible) RefreshTelemetry(); };
+        _timer.Tick += (_, _) =>
+        {
+            if (IsDisposed || Disposing || !Visible) return;
+            try { RefreshTelemetry(); }
+            catch (ObjectDisposedException) { /* tab tearing down — ignore */ }
+            catch (Exception ex)
+            {
+                // Don't let a transient filesystem hiccup crash the launcher.
+                // Surface to the status label so the user can see something's off.
+                try { _sessionsLabel.Text = "Refresh error: " + ex.Message; } catch { }
+            }
+        };
         _timer.Start();
 
         // Pause timer entirely when this tab isn't the active one — RefreshTelemetry
-        // is cheap (memory-mapped file read) but UpdateHolders calls Restart Manager
+        // is cheap (filesystem enumeration) but UpdateHolders calls Restart Manager
         // which is genuinely expensive. No need to do either if the user can't see it.
         VisibleChanged += (_, _) =>
         {
@@ -97,27 +194,24 @@ internal sealed class MonitorTab : UserControl
 
     private void RefreshTelemetry()
     {
-        if (!TelemetryReader.IsAvailable())
+        var sessions = TelemetryReader.ListLiveSessions();
+        UpdateSessionsGrid(sessions);
+
+        TelemetrySnapshot? snap = ResolveSelectedSnapshot(sessions);
+        if (snap is null)
         {
-            _state.Text = "Engine not loaded — start a SAPI client (or run Benchmark) to wake it";
+            _state.Text = sessions.Count == 0
+                ? "Engine not loaded — start a SAPI client (or run Benchmark) to wake it"
+                : "Select a connection above to see its details";
             _voice.Text = _resolved.Text = _latency.Text = "—";
             _rtf.Text = _pipeline.Text = _gap.Text = _cpu.Text = "—";
-            _rss.Text = _threads.Text = "—";
+            _rss.Text = _threads.Text = _device.Text = "—";
             _underruns.Text = "0";
             _text.Text = "";
             _error.Text = "";
             UpdateHolders();
             return;
         }
-
-        var snap = TelemetryReader.TryRead();
-        if (snap is null)
-        {
-            _state.Text = "Segment present but unreadable (struct mismatch?)";
-            UpdateHolders();
-            return;
-        }
-        // The segment can stay around after MarkIdle; that's fine — we display IsActive explicitly.
 
         _state.Text    = snap.IsActive ? "Speaking" : "Idle";
         _voice.Text    = string.IsNullOrEmpty(snap.VoiceId) ? "—" : snap.VoiceId;
@@ -130,9 +224,115 @@ internal sealed class MonitorTab : UserControl
         _rss.Text      = $"{snap.EngineRssMb:F0} MB";
         _threads.Text  = snap.OnnxThreads.ToString();
         _underruns.Text= snap.UnderrunCount.ToString();
-        _text.Text     = snap.TextSnippet;
-        _error.Text    = snap.LastError;
+        _device.Text   = DeviceLabel(snap);
+        _text.Text     = snap.CurrentText ?? "";
+        _error.Text    = snap.LastError ?? "";
         UpdateHolders();
+    }
+
+    private TelemetrySnapshot? ResolveSelectedSnapshot(List<TelemetrySnapshot> sessions)
+    {
+        if (sessions.Count == 0) { _selectedPid = -1; return null; }
+        if (_selectedPid > 0)
+        {
+            var found = sessions.FirstOrDefault(s => s.Pid == _selectedPid);
+            if (found is not null) return found;
+        }
+        // Auto-select: prefer the active session, else the most recent.
+        return sessions[0];
+    }
+
+    private void UpdateSessionsGrid(List<TelemetrySnapshot> sessions)
+    {
+        // Detect changes by composing a simple signature; rebuild only when needed
+        // so we don't flicker the selection at 5 Hz.
+        bool changed = sessions.Count != _currentSessions.Count;
+        if (!changed)
+        {
+            for (int i = 0; i < sessions.Count; i++)
+                if (sessions[i].Pid != _currentSessions[i].Pid) { changed = true; break; }
+        }
+
+        if (changed)
+        {
+            _sessionsGrid.SuspendLayout();
+            int prevSelectedPid = _selectedPid;
+            _sessionsGrid.Rows.Clear();
+            foreach (var s in sessions)
+            {
+                int rowIdx = _sessionsGrid.Rows.Add(
+                    s.Pid,
+                    LockProbe.FriendlyName((s.ProcessName ?? "").ToLowerInvariant() + ".exe"),
+                    string.IsNullOrEmpty(s.VoiceId) ? "—" : s.VoiceId,
+                    s.IsActive ? "Speaking" : "Idle",
+                    double.IsNaN(s.RollingRtf) ? "—" : s.RollingRtf.ToString("F2"),
+                    $"{s.EngineCpuPct:F0}%",
+                    s.DeviceLossCount.ToString(),
+                    DeviceLabel(s));
+                if (s.Pid == prevSelectedPid)
+                    _sessionsGrid.Rows[rowIdx].Selected = true;
+            }
+            _sessionsGrid.ResumeLayout();
+        }
+        else
+        {
+            // Same set of PIDs — just update changing cells in place.
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                var s = sessions[i];
+                var row = _sessionsGrid.Rows[i];
+                row.Cells["State"].Value  = s.IsActive ? "Speaking" : "Idle";
+                row.Cells["Rtf"].Value    = double.IsNaN(s.RollingRtf) ? "—" : s.RollingRtf.ToString("F2");
+                row.Cells["Cpu"].Value    = $"{s.EngineCpuPct:F0}%";
+                row.Cells["Loss"].Value   = s.DeviceLossCount.ToString();
+                row.Cells["Device"].Value = DeviceLabel(s);
+                row.Cells["Voice"].Value  = string.IsNullOrEmpty(s.VoiceId) ? "—" : s.VoiceId;
+            }
+        }
+
+        _currentSessions.Clear();
+        _currentSessions.AddRange(sessions);
+
+        if (sessions.Count == 0)
+        {
+            _sessionsLabel.Text = "No active connections — open a SAPI client (Lingoes, Word, NVDA, …) or run Benchmark.";
+            _resetSelectedBtn.Enabled = false;
+            _selectedPid = -1;
+            return;
+        }
+        _sessionsLabel.Text = sessions.Count == 1
+            ? "1 active connection."
+            : $"{sessions.Count} active connections.";
+        _resetSelectedBtn.Enabled = _selectedPid > 0 || _sessionsGrid.SelectedRows.Count > 0;
+    }
+
+    private void OnSessionSelectionChanged()
+    {
+        if (_sessionsGrid.SelectedRows.Count == 0) return;
+        var row = _sessionsGrid.SelectedRows[0];
+        if (row.Cells["Pid"].Value is int pid) _selectedPid = pid;
+        else if (int.TryParse(row.Cells["Pid"].Value?.ToString(), out int p)) _selectedPid = p;
+        _resetSelectedBtn.Enabled = _selectedPid > 0;
+    }
+
+    private void OnResetSelected()
+    {
+        if (_selectedPid <= 0) return;
+        var match = _currentSessions.FirstOrDefault(s => s.Pid == _selectedPid);
+        string who = match is null
+            ? $"PID {_selectedPid}"
+            : $"{match.ProcessName} (PID {_selectedPid})";
+        var confirm = MessageBox.Show(this,
+            $"Drop the engine session inside {who}?\n\n" +
+            "The next time the app speaks, the engine will rebuild its ONNX models. " +
+            "If a phrase is currently playing it will play to the end first. " +
+            "The host application does NOT need to restart.",
+            "Reset engine session", MessageBoxButtons.OKCancel, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+        if (confirm != DialogResult.OK) return;
+
+        TelemetryReader.RequestReset(_selectedPid);
+        _sessionsLabel.Text = $"Reset requested for PID {_selectedPid} — takes effect on the next Speak.";
     }
 
     private void UpdateHolders()
@@ -152,6 +352,49 @@ internal sealed class MonitorTab : UserControl
                 : string.Join(", ", holders.Select(h => $"{h.FriendlyName} ({h.Pid})"));
         }
         catch { _holders.Text = "—"; }
+    }
+
+    private static string DeviceLabel(TelemetrySnapshot s)
+    {
+        if (s.DmlLatchedOff) return "CPU (latch)";
+        // We don't know the actual loaded backend without an extra field, but
+        // GPU-loss=0 + steady RTF suggests stable. Show a neutral label and let
+        // the per-session details pane reveal the loss counter.
+        return s.DeviceLossCount > 0 ? $"GPU ({s.DeviceLossCount} loss)" : "—";
+    }
+
+    private static void CopyToClipboard(string text)
+    {
+        try
+        {
+            // Empty strings throw on SetText — guard so the Copy button degrades
+            // to a no-op when there's nothing to copy.
+            if (string.IsNullOrEmpty(text)) { Clipboard.Clear(); return; }
+            Clipboard.SetText(text);
+        }
+        catch { /* clipboard contention is transient; ignore */ }
+    }
+
+    private static DataGridViewTextBoxColumn MakeColumn(string name, string header, int width, bool fill)
+    {
+        var col = new DataGridViewTextBoxColumn
+        {
+            Name = name,
+            HeaderText = header,
+            ReadOnly = true,
+            SortMode = DataGridViewColumnSortMode.NotSortable,
+        };
+        if (fill)
+        {
+            col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            col.FillWeight = 100;
+        }
+        else
+        {
+            col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            col.Width = width;
+        }
+        return col;
     }
 
     private static Label AddCell(TableLayoutPanel grid, int row, int col, string title, string initial)

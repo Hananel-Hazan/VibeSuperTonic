@@ -7,10 +7,14 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "VibeSuperTonic Control Panel";
-        Width = 980;
-        Height = 740;
+        // Sized for the Monitor tab's worst-case layout: sessions grid (180) +
+        // detail-metric grid (~170) + Currently-synthesizing pane (140) + Last
+        // error pane (220) + tabs/chrome ≈ 880 px tall. Wider than before so the
+        // 8-column sessions grid has room for the Process column to breathe.
+        Width = 1240;
+        Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(820, 620);
+        MinimumSize = new Size(1040, 780);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var tabs = new TabControl { Dock = DockStyle.Fill };

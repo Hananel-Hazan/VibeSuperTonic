@@ -1,18 +1,23 @@
-using System.IO.MemoryMappedFiles;
-using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace VibeSuperTonic.Launcher.Telemetry;
 
 /// <summary>
-/// Snapshot of the engine's most recent state. The engine writes this struct
-/// (Phase 2) into a named shared-memory segment. The Control Panel's Monitor
-/// tab polls this reader at ~5 Hz. Until Phase 2 lands the segment will not
-/// exist — IsAvailable returns false and the Monitor tab shows "Idle".
+/// Engine-side snapshot for one SAPI client process. Mirrors
+/// <c>VibeSuperTonic.Engine.Telemetry.SessionSnapshotDto</c> — keep field names
+/// in sync. JSON files are at
+/// <c>%LOCALAPPDATA%\VibeSuperTonic\sessions\&lt;pid&gt;.json</c>.
 /// </summary>
 internal sealed class TelemetrySnapshot
 {
+    public int    SchemaVersion { get; set; }
+    public int    Pid { get; set; }
+    public string ProcessName { get; set; } = "";
+    public bool   IsActive { get; set; }
     public string VoiceId { get; set; } = "";
-    public string TextSnippet { get; set; } = "";
+    public string CurrentText { get; set; } = "";
+    public string LastError { get; set; } = "";
     public int    TotalStep { get; set; }
     public float  EngineSpeed { get; set; }
     public float  DspRate { get; set; }
@@ -24,93 +29,118 @@ internal sealed class TelemetrySnapshot
     public double EngineRssMb { get; set; }
     public int    OnnxThreads { get; set; }
     public int    UnderrunCount { get; set; }
-    public string LastError { get; set; } = "";
+    public int    DeviceLossCount { get; set; }
+    public bool   DmlLatchedOff { get; set; }
     public DateTime SampleTimeUtc { get; set; }
-    public bool   IsActive { get; set; }
+
+    /// <summary>
+    /// File mtime of the snapshot — used as a heartbeat. A snapshot whose mtime
+    /// is older than <see cref="TelemetryReader.StaleAfter"/> is treated as a
+    /// dead engine instance and filtered out.
+    /// </summary>
+    public DateTime FileMtimeUtc { get; set; }
 }
 
+[JsonSourceGenerationOptions(WriteIndented = false)]
+[JsonSerializable(typeof(TelemetrySnapshot))]
+internal partial class SnapshotJsonContext : JsonSerializerContext { }
+
+/// <summary>
+/// Enumerates the per-PID JSON files written by every engine instance. Designed
+/// for the Monitor tab's polling loop: cheap to call at ~5 Hz.
+/// </summary>
 internal static class TelemetryReader
 {
-    public const string SegmentName = @"Local\VibeSuperTonic.Telemetry";
-    public const int SegmentSize = 4096;
-    private const int Magic = 0x56535453; // 'VSTS'
+    public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(5);
+
+    public static string SessionsDir => DataPaths.SessionsDir;
 
     public static bool IsAvailable()
     {
-        try
-        {
-            using var mmf = MemoryMappedFile.OpenExisting(SegmentName, MemoryMappedFileRights.Read);
-            return true;
-        }
-        catch (FileNotFoundException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
+        try { return ListLiveSessions().Count > 0; }
+        catch { return false; }
     }
 
-    public static TelemetrySnapshot? TryRead()
+    /// <summary>
+    /// All sessions whose snapshot file mtime is within
+    /// <see cref="StaleAfter"/>. Sorted: active first, then most-recent sample.
+    /// </summary>
+    public static List<TelemetrySnapshot> ListLiveSessions()
     {
-        try
-        {
-            using var mmf = MemoryMappedFile.OpenExisting(SegmentName, MemoryMappedFileRights.Read);
-            using var view = mmf.CreateViewAccessor(0, SegmentSize, MemoryMappedFileAccess.Read);
-            view.Read(0, out RawHeader hdr);
-            if (hdr.Magic != Magic) return null;
+        var live = new List<TelemetrySnapshot>();
+        string dir = SessionsDir;
+        if (!Directory.Exists(dir)) return live;
 
-            var snap = new TelemetrySnapshot
+        DateTime cutoff = DateTime.UtcNow - StaleAfter;
+        foreach (var path in EnumerateSessionFiles(dir))
+        {
+            TelemetrySnapshot? snap;
+            DateTime mtime;
+            try
             {
-                IsActive = hdr.IsActive != 0,
-                TotalStep = hdr.TotalStep,
-                EngineSpeed = hdr.EngineSpeed,
-                DspRate = hdr.DspRate,
-                FirstByteLatencyMs = hdr.FirstByteLatencyMs,
-                RollingRtf = hdr.RollingRtf,
-                PipelineDepth = hdr.PipelineDepth,
-                InterChunkGapMs = hdr.InterChunkGapMs,
-                EngineCpuPct = hdr.EngineCpuPct,
-                EngineRssMb = hdr.EngineRssMb,
-                OnnxThreads = hdr.OnnxThreads,
-                UnderrunCount = hdr.UnderrunCount,
-                SampleTimeUtc = DateTime.FromBinary(hdr.SampleTimeBinary),
-            };
-
-            // Strings live after the header. Each is a UTF-8 length-prefixed buffer.
-            int offset = Marshal.SizeOf<RawHeader>();
-            snap.VoiceId = ReadLenPrefixedString(view, ref offset);
-            snap.TextSnippet = ReadLenPrefixedString(view, ref offset);
-            snap.LastError = ReadLenPrefixedString(view, ref offset);
-            return snap;
+                mtime = File.GetLastWriteTimeUtc(path);
+                if (mtime < cutoff) continue;
+                snap = ReadSnapshot(path);
+            }
+            catch { continue; }
+            if (snap is null) continue;
+            snap.FileMtimeUtc = mtime;
+            live.Add(snap);
         }
-        catch (FileNotFoundException) { return null; }
-        catch (Exception) { return null; }
+
+        live.Sort((a, b) =>
+        {
+            int byActive = (b.IsActive ? 1 : 0) - (a.IsActive ? 1 : 0);
+            if (byActive != 0) return byActive;
+            return b.SampleTimeUtc.CompareTo(a.SampleTimeUtc);
+        });
+        return live;
     }
 
-    private static string ReadLenPrefixedString(MemoryMappedViewAccessor view, ref int offset)
+    /// <summary>
+    /// Asks the engine running in <paramref name="pid"/> to drop its shared ONNX
+    /// session and rebuild on the next request. Mechanism: we touch a sentinel
+    /// file in the sessions dir; the engine polls for it at 1 Hz (and at every
+    /// telemetry tick).
+    /// </summary>
+    public static void RequestReset(int pid)
     {
-        if (offset + 4 > SegmentSize) return "";
-        int len = view.ReadInt32(offset);
-        offset += 4;
-        if (len <= 0 || offset + len > SegmentSize) return "";
-        var buf = new byte[len];
-        view.ReadArray(offset, buf, 0, len);
-        offset += len;
-        return System.Text.Encoding.UTF8.GetString(buf);
+        try
+        {
+            string dir = SessionsDir;
+            Directory.CreateDirectory(dir);
+            string marker = Path.Combine(dir, $"{pid}.reset");
+            File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
+        }
+        catch { /* best-effort; if it fails the user can retry */ }
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct RawHeader
+    private static IEnumerable<string> EnumerateSessionFiles(string dir)
     {
-        public int    Magic;
-        public int    IsActive;
-        public int    TotalStep;
-        public float  EngineSpeed;
-        public float  DspRate;
-        public double FirstByteLatencyMs;
-        public double RollingRtf;
-        public int    PipelineDepth;
-        public double InterChunkGapMs;
-        public double EngineCpuPct;
-        public double EngineRssMb;
-        public int    OnnxThreads;
-        public int    UnderrunCount;
-        public long   SampleTimeBinary;
+        // Filter to "{pid}.json" — skip the .tmp atomic-write swap files and
+        // .reset markers. PIDs are integers so the regex is trivial.
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(dir, "*.json"); }
+        catch { yield break; }
+        foreach (var path in files)
+        {
+            string name = Path.GetFileNameWithoutExtension(path);
+            if (int.TryParse(name, out _)) yield return path;
+        }
+    }
+
+    private static TelemetrySnapshot? ReadSnapshot(string path)
+    {
+        // The engine writes atomically (tmp + rename); a torn read is unlikely but
+        // possible during AV scans. On JsonException treat as not-yet-readable.
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return JsonSerializer.Deserialize(fs, SnapshotJsonContext.Default.TelemetrySnapshot);
+        }
+        catch (JsonException) { return null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 }
