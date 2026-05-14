@@ -432,7 +432,7 @@ internal static class Program
         try
         {
             string passage = string.Concat(Enumerable.Repeat(
-                "The phase vocoder reconstructs audio by analyzing short overlapping windows of the input signal. ", 22));
+                "Sonic resamples audio by aligning consecutive pitch periods and overlapping them with a smooth crossfade. ", 22));
             using var synth = new SpeechSynthesizer();
             synth.SelectVoice(TargetVoice);
             synth.SetOutputToNull();

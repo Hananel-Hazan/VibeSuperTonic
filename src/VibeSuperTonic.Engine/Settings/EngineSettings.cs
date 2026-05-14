@@ -35,7 +35,6 @@ internal sealed class EngineSettings
     public int    OnnxInterOpThreads  { get; set; } = 1;
     public bool   UseDirectML         { get; set; } = true;
     public int    DirectMLDeviceId    { get; set; } = 0;
-    public int    VocoderMode         { get; set; } = 3;
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
 
     /// <summary>Per-voice resolution: <c>PerVoice[id].Knob</c> if set, else <c>this.Knob</c>.</summary>
@@ -171,7 +170,6 @@ internal static class EngineSettingsCache
         if (k.GetValue("OnnxInterOpThreads")  is int    iot) s.OnnxInterOpThreads = iot;
         if (k.GetValue("UseDirectML")         is int    udm) s.UseDirectML = udm != 0;
         if (k.GetValue("DirectMLDeviceId")    is int    did) s.DirectMLDeviceId = did;
-        if (k.GetValue("VocoderMode")         is int    vm)  s.VocoderMode = vm;
     }
 
     private static float ParseFloat(string s, float fallback) =>

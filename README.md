@@ -7,7 +7,7 @@
 > - **First run needs administrator rights.** Hooking a voice into Windows SAPI requires writing the voice token under `HKLM` — that's a system-wide registry hive and Windows guards it with UAC. The Control Panel self-elevates, you'll see the standard UAC prompt once, and after that the folder is fully portable (move it anywhere, no admin needed).
 > - **First sentence is slow.** The engine loads ~380 MB of ONNX models into memory on first use; expect 2–5 s of "did it crash?" silence before the first word on CPU (less on GPU). Subsequent sentences start in well under a second.
 > - **GPU is on by default, falls back to CPU automatically.** DirectML / Direct3D 12 inference if your hardware supports it — typical 2-5× speedup on iGPU, more on dGPU. If DirectML init fails (no DX12, driver issue, etc.) the engine quietly drops to CPU and keeps working.
-> - **DSP rate up to 2.0×.** A phase-locked phase vocoder handles the speed-up cleanly. Quality starts to fall off around 1.6–1.8× depending on the voice — your mileage will vary.
+> - **DSP rate up to 2.0×.** Sonic (pitch-synchronous overlap-add) handles the speed-up cleanly across the whole range. Voice formants stay put because each output pitch period is bit-perfect from the input — no robotic / metallic edge at high stretch.
 >
 > If those tradeoffs are fine, you've got 10 surprisingly good neural voices that work in literally any SAPI app on Windows. Read on.
 
@@ -19,7 +19,7 @@ The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. Th
 
 ## Status
 
-**v0.2.0** — out of "spike" stage. Working install with 10 voices, full SAPI event surface (word boundaries, sentence boundaries, bookmarks, end-of-stream), per-fragment SSML rate control, sentence-level skip support, pipelined synthesis for smooth long-form playback, GPU acceleration via DirectML, and a phase-locked phase vocoder for time-stretch up to 2.0×. See [Roadmap](#roadmap) for what's next.
+**v0.2.x** — out of "spike" stage. Working install with 10 voices, full SAPI event surface (word boundaries, sentence boundaries, bookmarks, end-of-stream), per-fragment SSML rate control, sentence-level skip support, pipelined synthesis for smooth long-form playback, GPU acceleration via DirectML, and pitch-preserving DSP time-stretch (Sonic — pitch-synchronous overlap-add) up to 2.0×. See [Roadmap](#roadmap) for what's next.
 
 ## Features
 
@@ -28,7 +28,7 @@ The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. Th
 - Portable: move the folder anywhere, re-run `VibeSuperTonic.exe`, no admin needed after first install
 - **Control Panel GUI** — Status / Tune / Benchmark / Monitor / Advanced / About tabs in one EXE; CLI flags preserved for scripting (`--register`, `--unregister`, `--repair`, `--bench`, `--set k=v`)
 - **GPU acceleration via DirectML** — opt-in (default on); falls back to CPU automatically on hardware/driver issues
-- **Phase-locked phase vocoder** — time-stretch up to 2.0× without the robotic / dropped-syllable artifacts the original WSOLA had
+- **Sonic time-stretch** — pitch-synchronous overlap-add up to 2.0× with the voice's formants preserved (no robotic edge, no formant smearing — each output pitch period is bit-perfect from the input)
 - **Live engine telemetry** — RTF, latency, CPU/RAM, voice and resolved knob values, updated 5 Hz
 - **Self-fixing install** — Status tab runs 12 integrity checks (registry, model files, .NET runtime, voice tokens) with one-click Repair; lock-aware (tells you which process is holding the engine DLLs)
 - Hybrid registration: HKLM voice token (one-time admin write) + HKCU CLSID (rewritten on every launch from current path)
@@ -98,7 +98,7 @@ The 10 voices have distinct timbres — try a few to find one you like:
 | M1–M5 | Male | Range from warm to crisp |
 | F1–F5 | Female | Range from gentle to bright |
 
-The rate slider works in any SAPI client. For larger speed-ups, use the Tune tab's **DSP rate** knob (0.5×–2.0×, pitch-preserving phase vocoder) instead of pushing the SAPI rate past 1.3× — the model itself drops syllables above that, but the DSP path keeps audio clean.
+The rate slider works in any SAPI client. For larger speed-ups, use the Tune tab's **DSP rate** knob (0.5×–2.0×, pitch-preserving Sonic time-stretch) instead of pushing the SAPI rate past 1.3× — the model itself drops syllables above that, but the DSP path keeps audio clean.
 
 ### Tune tab
 
@@ -107,7 +107,7 @@ The rate slider works in any SAPI client. For larger speed-ups, use the Tune tab
 | **Quality preset** | Bundles totalStep into Draft / Balanced / Quality / HiFi (4 / 6 / 8 / 12 diffusion iterations) |
 | **Diffusion steps** | Direct totalStep slider 2–16. Linear CPU cost — 8 takes 2× longer than 4 |
 | **Engine speed** | Locked at 1.0× (the model truncates phonemes above 1.0; speedup goes through DSP) |
-| **DSP rate** | Phase-locked phase vocoder time-stretch, 0.5×–2.0× |
+| **DSP rate** | Sonic pitch-synchronous overlap-add time-stretch, 0.5×–2.0× |
 | **Volume trim** | dB gain layered on top of the SAPI client's volume slider |
 | **Default voice** | Used when a SAPI client doesn't pick one |
 
@@ -148,7 +148,7 @@ SapiEngine (C#, [ComVisible])
    ├── Walks SPVTEXTFRAG list → typed Speak plan
    ├── Sentence-chunks text + balances chunk sizes
    ├── Synthesizes via SupertonicAdapter (ONNX shared across voices, DirectML if enabled)
-   ├── Phase-vocoder time-stretch (Synth/TimeStretch.cs)
+   ├── Sonic time-stretch (Synth/Sonic.cs via Synth/TimeStretch.cs)
    ├── Real-time write throttle into SAPI buffer (prevents trailing-word cuts)
    ├── Drain wait at end of Speak (audio device finishes pulling before return)
    ├── Pipelines synth(N+1) with write(N)
@@ -179,7 +179,7 @@ src/
   VibeSuperTonic.Engine/        Pure-C# SAPI engine (ComHosting → comhost.dll)
     Interop/                    SAPI COM interfaces, structs, constants
     Settings/                   Engine-side EngineSettings + cache
-    Synth/                      Supertonic SDK wrapper, phase vocoder, FFT
+    Synth/                      Supertonic SDK wrapper, Sonic time-stretch
     Telemetry/                  Shared-memory writer
     SapiEngine.cs               ISpTTSEngine + ISpObjectWithToken implementation
   VibeSuperTonic.Launcher/      Self-elevating Control Panel + CLI EXE
@@ -215,7 +215,7 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 
 ## Limitations
 
-- **DSP rate cap 2.0×** — phase vocoder quality degrades sharply past that. Lifting it requires a more complex algorithm (e.g., Élastique-class commercial pitch shifter).
+- **DSP rate cap 2.0×** — Sonic's crossfade quality degrades sharply past that as the source pitch periods are sampled too sparsely. Lifting it would need a different algorithm class (e.g., a true PSOLA with explicit F0 tracking, or a commercial Élastique-class library).
 - **Engine speed locked at 1.0×** — the Supertonic model under-renders the trailing phoneme above 1.0×. All speedup goes through the DSP path instead.
 - **First-byte latency 2-5 s on CPU** (less on GPU) — model is heavy on first load.
 - **English only** — Supertonic supports 31 languages but voice tokens for other languages aren't registered yet.
@@ -226,7 +226,7 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 
 - [x] Phase 1: Control Panel GUI replacing the CLI launcher
 - [x] Phase 2: registry-backed settings + live telemetry
-- [x] Phase 3: phase vocoder for clean 0.5×–2× speed range
+- [x] Phase 3: clean 0.5×–2× DSP time-stretch (phase vocoder → Sonic PSOLA after perceptual A/B)
 - [x] Phase 3: GPU acceleration via DirectML
 - [x] Phase 4: portable data folder — settings.json, logs, and per-PID session telemetry under `<install>\data\`, user-configurable
 - [x] Phase 4: live multi-client Monitor tab with per-session reset (no need to kill Lingoes/Balabolka/etc. when the engine wedges)

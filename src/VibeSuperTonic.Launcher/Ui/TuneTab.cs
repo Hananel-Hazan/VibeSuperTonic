@@ -91,12 +91,13 @@ internal sealed class TuneTab : UserControl
         // Engine speed locked at 1.0x: the Supertonic duration predictor under-renders
         // the trailing phoneme at speeds > 1.0, which manifests as the last word being
         // truncated. We always render at 1.0x and route any user-requested speedup
-        // through the DSP path (phase vocoder), which preserves the full audio.
+        // through the DSP path (Sonic pitch-synchronous overlap-add), which preserves
+        // the full audio AND keeps the voice's formants intact.
         (_engineSpeed,  _engineSpeedLabel)  = AddSliderRow(body, 2, "Engine speed (model)",   100, 100, 100, helpText:
             "Locked at 1.0x. The Supertonic model truncates the last phoneme at higher engine speeds. All speed adjustments now go through DSP rate, which handles them cleanly.");
         _engineSpeed.Enabled = false;
         (_dspRate,      _dspRateLabel)      = AddSliderRow(body, 3, "DSP rate (post)",        50, 200, 100, helpText:
-            "Pitch-preserving phase-vocoder time-stretch applied after the model. 1.0 = no DSP. The new phase vocoder handles 0.5x - 2x cleanly without the robotic artifacts the previous WSOLA version had above 1.6x.");
+            "Pitch-preserving time-stretch applied after the model. 1.0 = no DSP. Sonic (pitch-synchronous overlap-add) handles 0.5x - 2x cleanly — formants stay put because each output pitch period is bit-perfect from the input.");
         (_volumeTrim,   _volumeTrimLabel)   = AddSliderRow(body, 4, "Volume trim (dB)",      -12, 6,    1, helpText:
             "Pre-output gain on top of the SAPI client's volume slider. -6 dB = half volume; +6 dB = double (may clip).");
 
@@ -249,7 +250,6 @@ internal sealed class TuneTab : UserControl
             VolumeTrimDb = _volumeTrim.Value,
             DefaultVoice = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id,
             Preset = CurrentPreset(),
-            VocoderMode = s.VocoderMode, // preserve any value (user can override via --set vocodermode=N)
             // Tier B knobs preserved from existing settings
             MaxChunkChars = s.MaxChunkChars,
             MinChunkChars = s.MinChunkChars,

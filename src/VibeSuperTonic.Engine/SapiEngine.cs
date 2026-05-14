@@ -269,8 +269,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             var completeSkip = (delegate* unmanaged[Stdcall]<IntPtr, int, int>)vtbl[10];
 
             // Kick off synthesis of the first chunk on a background thread.
-            // Synthesize-then-WSOLA-stretch happens together on the worker thread so the
-            // synth-only and the stretch both fall under pipeline cover.
+            // Synthesis + DSP time-stretch run together on the worker thread so both
+            // fall under the same pipeline cover, hiding the stretch cost behind the
+            // next chunk's synthesis.
             int nextSynthIdx = 1;
             var firstChunkExec = (SpeakChunkExec)execPlan[synthIndices[0]];
             var (firstSynth, firstStretch) = ComputeSpeed(siteRate, firstChunkExec.RateAdj, resolved);
@@ -494,10 +495,11 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// Compute the synthesis speed and DSP stretch for a chunk. Returns
     /// (synthSpeed, stretchFactor).
     /// <para>
-    /// The model is driven in its empirically-safe range [0.9, ceiling]. WSOLA stretch
-    /// (pitch-preserving time-scale) takes whatever extra speed the user asked for that
-    /// the model couldn't supply — that's how the DSP knob extends past the model's
-    /// 1.3× ceiling. <c>stretchFactor &gt; 1</c> = play faster; <c>&lt; 1</c> = play slower.
+    /// The model is driven in its empirically-safe range [0.9, ceiling]. DSP
+    /// time-stretch (pitch-preserving, currently <see cref="Sonic"/>) takes
+    /// whatever extra speed the user asked for that the model couldn't supply —
+    /// that's how the DSP knob extends past the model's 1.3× ceiling.
+    /// <c>stretchFactor &gt; 1</c> = play faster; <c>&lt; 1</c> = play slower.
     /// </para>
     /// <para>
     /// Composition: total perceived rate ≈ synthSpeed × (1 / stretchFactor) when stretch
@@ -518,10 +520,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
 
         // Clamp the model's speed to its safe zone; DSP stretch absorbs the remainder.
         float synthSpeed = Math.Clamp(baseEngine * ratePower, 0.9f, ceiling);
-        // stretchFactor is how much WSOLA needs to compress/expand the rendered PCM.
-        // E.g., synth=1.3, requested=2.0 → stretch needs to play 1.54× faster.
-        // TimeStretch.Stretch interprets its parameter as the speed multiplier on the
-        // rendered audio (>1 = compress in time, <1 = expand). Confirmed below.
+        // stretchFactor is how much the DSP path needs to compress/expand the
+        // rendered PCM. E.g., synth=1.3, requested=2.0 → stretch needs to play
+        // 1.54× faster. TimeStretch.Stretch interprets its parameter as the
+        // speed multiplier on the rendered audio (>1 = compress, <1 = expand).
         double stretchFactor = synthSpeed > 0 ? requestedTotal / synthSpeed : 1.0;
         // Hard ceiling on DSP — extreme stretch sounds bad.
         stretchFactor = Math.Clamp(stretchFactor, 0.5, 2.0);

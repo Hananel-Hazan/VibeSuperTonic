@@ -30,7 +30,6 @@ internal sealed class EngineSettings
     public int OnnxInterOpThreads { get; set; } = 1;
     public bool UseDirectML { get; set; } = true;
     public int DirectMLDeviceId { get; set; } = 0;
-    public int VocoderMode { get; set; } = 3;
 
     /// <summary>
     /// Schema version of the on-disk format. Bumped when fields are added or
@@ -76,7 +75,7 @@ internal static class EngineSettingsRegistry
     private const string LegacyRegRoot = @"SOFTWARE\VibeSuperTonic\Settings";
     private const string LegacyDefaultSub = "Default";
     private const string LegacyPerVoiceSub = "PerVoice";
-    private const int CurrentSchemaVersion = 4;
+    private const int CurrentSchemaVersion = 5;
     private static readonly object _writeGate = new();
 
     public static EngineSettings Load()
@@ -165,6 +164,12 @@ internal static class EngineSettingsRegistry
     ///            <see cref="Load"/> reads the legacy keys when the file is
     ///            missing; this migration writes them out as JSON, then deletes
     ///            the legacy subtree so the data root is the only source of truth.
+    ///   v4 → v5: DSP path swapped from phase vocoder to Sonic (PSOLA). The
+    ///            <c>VocoderMode</c> field was removed from the schema; existing
+    ///            JSON entries deserialize harmlessly (ignored) and are dropped
+    ///            on the next <see cref="Save"/>. Bumping the version triggers
+    ///            one such Save here so the user's <c>settings.json</c> sheds
+    ///            the stale field without waiting for a Tune-tab edit.
     /// Idempotent — re-running is a no-op once SchemaVersion == CurrentSchemaVersion.
     /// </summary>
     public static void EnsureMigrated()
@@ -188,6 +193,9 @@ internal static class EngineSettingsRegistry
             foreach (var pv in s.PerVoice.Values) pv.EngineSpeed = 1.0f;
         }
         // schema < 4: just persist to disk so we own the data.
+        // schema < 5: the VocoderMode field is gone — the Save() below drops it
+        //             from settings.json since the property no longer exists in
+        //             the schema. Same for any VocoderMode entries in PerVoice.
 
         s.SchemaVersion = CurrentSchemaVersion;
         Save(s);
@@ -237,7 +245,6 @@ internal static class EngineSettingsRegistry
                 case "onnxinteropthreads":  s.OnnxInterOpThreads = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "usedirectml":         s.UseDirectML = bool.Parse(value); break;
                 case "directmldeviceid":    s.DirectMLDeviceId = int.Parse(value, CultureInfo.InvariantCulture); break;
-                case "vocodermode":         s.VocoderMode = int.Parse(value, CultureInfo.InvariantCulture); break;
                 default:               error = $"Unknown key: {key}"; return false;
             }
             Save(s);
@@ -296,7 +303,6 @@ internal static class EngineSettingsRegistry
         if (k.GetValue("OnnxInterOpThreads") is int iot) s.OnnxInterOpThreads = iot;
         if (k.GetValue("UseDirectML") is int udm) s.UseDirectML = udm != 0;
         if (k.GetValue("DirectMLDeviceId") is int did) s.DirectMLDeviceId = did;
-        if (k.GetValue("VocoderMode") is int vm) s.VocoderMode = vm;
     }
 
     private static float ParseFloat(string s, float fallback) =>
