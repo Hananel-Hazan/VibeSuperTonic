@@ -40,14 +40,6 @@ jobs:
         shell: pwsh
         run: ./build/pack-zip.ps1 -Version "${{ steps.version.outputs.version }}"
 
-      - name: Locate ZIP
-        id: zip
-        shell: pwsh
-        run: |
-          $zip = Get-ChildItem dist/*.zip | Select-Object -First 1
-          "path=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "name=$($zip.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -64,7 +56,7 @@ jobs:
 
             ### Install
 
-            1. Download `${{ steps.zip.outputs.name }}` below.
+            1. Download either `VibeSuperTonic-${{ steps.version.outputs.version }}-win-x64.zip` or `VibeSuperTonic-${{ steps.version.outputs.version }}-win-x86.zip` below.
             2. Extract anywhere.
             3. Run `VibeSuperTonic.exe` once (UAC prompt — registers voice tokens).
             4. Models (~380 MB) download on first speak.
@@ -72,4 +64,4 @@ jobs:
             Requires **.NET 10 Desktop Runtime** (x64; x86 also for 32-bit SAPI clients).
 
             See the README in the repo for full docs and limitations.
-          files: ${{ steps.zip.outputs.path }}
+          files: dist/*.zip
