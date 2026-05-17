@@ -3,8 +3,9 @@
     Build a portable VibeSuperTonic release ZIP.
 
 .DESCRIPTION
-    Publishes the Engine (x64+x86, framework-dependent) and the Launcher (x64,
-    self-contained single-file), composes a portable folder layout, and zips it.
+    Publishes the Engine (x64+x86, framework-dependent) and the Launcher
+    (x64+x86, self-contained single-file), composes portable folder layouts,
+    and zips them.
 
     The output ZIP contains everything the end user needs except the ONNX models —
     those are downloaded at first launch from Hugging Face.
@@ -19,8 +20,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$staging = Join-Path $root "dist\release\VibeSuperTonic"
-$zipPath = Join-Path $root "dist\VibeSuperTonic-$Version-win.zip"
+$stagingRoot = Join-Path $root "dist\release"
+$launchRids = @("win-x64", "win-x86")
 
 function Step($msg) { Write-Host ">>> $msg" -ForegroundColor Cyan }
 
@@ -43,39 +44,14 @@ Step "Publishing Launcher (x64) single-file self-contained…"
     --nologo --verbosity minimal | Out-Null
 if ($LASTEXITCODE) { throw "Launcher publish failed" }
 
-# ----------------------------------------------------------------- compose
-Step "Composing portable folder at $staging…"
-if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
-New-Item -ItemType Directory -Path $staging | Out-Null
-New-Item -ItemType Directory -Path "$staging\engine\x64" | Out-Null
-New-Item -ItemType Directory -Path "$staging\engine\x86" | Out-Null
-New-Item -ItemType Directory -Path "$staging\models\onnx" | Out-Null
-New-Item -ItemType Directory -Path "$staging\models\voice_styles" | Out-Null
-
-Copy-Item "$root\src\VibeSuperTonic.Launcher\bin\Release\net10.0-windows\win-x64\publish\VibeSuperTonic.exe" `
-    "$staging\VibeSuperTonic.exe"
-Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x64\publish\*" `
-    "$staging\engine\x64\" -Recurse
-Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x86\publish\*" `
-    "$staging\engine\x86\" -Recurse
-# strip .pdb to keep ZIP small
-Get-ChildItem "$staging\engine" -Filter *.pdb -Recurse | Remove-Item -Force
-Copy-Item "$root\README.md" "$staging\README.md"
-Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
-
-# Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs against)
-if (Test-Path "$root\models-manifest.json") {
-    Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
-}
-
-# Benchmark sample text (Twenty Thousand Leagues excerpt — replaceable by user)
-if (Test-Path "$root\samples") {
-    New-Item -ItemType Directory -Path "$staging\samples" -Force | Out-Null
-    Copy-Item "$root\samples\*" "$staging\samples\" -Recurse
-}
+Step "Publishing Launcher (x86) single-file self-contained…"
+& dotnet publish "$root\src\VibeSuperTonic.Launcher\VibeSuperTonic.Launcher.csproj" `
+    -c Release -r win-x86 `
+    --nologo --verbosity minimal | Out-Null
+if ($LASTEXITCODE) { throw "Launcher x86 publish failed" }
 
 # A pointer for users on what they're agreeing to when models download
-@"
+$modelsLicense = @"
 The VibeSuperTonic engine code is MIT licensed.
 
 The neural voice models (downloaded by VibeSuperTonic.exe on first launch) are
@@ -87,10 +63,10 @@ launcher and accepting the model download, you agree to Supertone's terms:
 VibeSuperTonic does not redistribute the models — they are downloaded directly
 from Hugging Face at install time. The sha256 hashes pinned in the launcher
 prevent tampering.
-"@ | Out-File "$staging\LICENSE-MODELS.txt" -Encoding utf8
+"@
 
 # Brief plain-text install instructions for users who don't read the README
-@"
+$installText = @"
 VibeSuperTonic — Quick install
 ==============================
 
@@ -106,19 +82,58 @@ update registry — no admin needed for moves.
 Uninstall:  VibeSuperTonic.exe --unregister  (UAC to clean HKLM)
 
 See README.md for full documentation.
-"@ | Out-File "$staging\INSTALL.txt" -Encoding utf8
+"@
 
-# ----------------------------------------------------------------- zip
-Step "Creating $zipPath…"
-if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-Compress-Archive -Path "$staging\*" -DestinationPath $zipPath -CompressionLevel Optimal
+# ----------------------------------------------------------------- compose + zip
+if (Test-Path $stagingRoot) { Remove-Item -Recurse -Force $stagingRoot }
 
-$size = (Get-Item $zipPath).Length / 1MB
-Step ("Done. ZIP size: {0:N1} MB → {1}" -f $size, $zipPath)
+foreach ($launcherRid in $launchRids) {
+    $archLabel = if ($launcherRid -eq "win-x64") { "x64" } else { "x86" }
+    $staging = Join-Path $stagingRoot "VibeSuperTonic-$archLabel"
+    $zipPath = Join-Path $root "dist\VibeSuperTonic-$Version-win-$archLabel.zip"
 
-# ----------------------------------------------------------------- summary
-Write-Host ""
-Write-Host "Layout:" -ForegroundColor Yellow
-Get-ChildItem $staging -Recurse | Where-Object { -not $_.PSIsContainer } |
-    Select-Object @{N='Path';E={$_.FullName.Substring($staging.Length+1)}}, Length |
-    Format-Table -AutoSize
+    Step "Composing portable folder for $archLabel at $staging…"
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    New-Item -ItemType Directory -Path "$staging\engine\x64" | Out-Null
+    New-Item -ItemType Directory -Path "$staging\engine\x86" | Out-Null
+    New-Item -ItemType Directory -Path "$staging\models\onnx" | Out-Null
+    New-Item -ItemType Directory -Path "$staging\models\voice_styles" | Out-Null
+
+    Copy-Item "$root\src\VibeSuperTonic.Launcher\bin\Release\net10.0-windows\$launcherRid\publish\VibeSuperTonic.exe" `
+        "$staging\VibeSuperTonic.exe"
+    Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x64\publish\*" `
+        "$staging\engine\x64\" -Recurse
+    Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x86\publish\*" `
+        "$staging\engine\x86\" -Recurse
+    # strip .pdb to keep ZIP small
+    Get-ChildItem "$staging\engine" -Filter *.pdb -Recurse | Remove-Item -Force
+    Copy-Item "$root\README.md" "$staging\README.md"
+    Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
+
+    # Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs against)
+    if (Test-Path "$root\models-manifest.json") {
+        Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
+    }
+
+    # Benchmark sample text (Twenty Thousand Leagues excerpt — replaceable by user)
+    if (Test-Path "$root\samples") {
+        New-Item -ItemType Directory -Path "$staging\samples" -Force | Out-Null
+        Copy-Item "$root\samples\*" "$staging\samples\" -Recurse
+    }
+
+    $modelsLicense | Out-File "$staging\LICENSE-MODELS.txt" -Encoding utf8
+    $installText | Out-File "$staging\INSTALL.txt" -Encoding utf8
+
+    Step "Creating $zipPath…"
+    if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+    Compress-Archive -Path "$staging\*" -DestinationPath $zipPath -CompressionLevel Optimal
+
+    $size = (Get-Item $zipPath).Length / 1MB
+    Step ("Done. ZIP size: {0:N1} MB → {1}" -f $size, $zipPath)
+
+    Write-Host ""
+    Write-Host "Layout ($archLabel launcher):" -ForegroundColor Yellow
+    Get-ChildItem $staging -Recurse | Where-Object { -not $_.PSIsContainer } |
+        Select-Object @{N='Path';E={$_.FullName.Substring($staging.Length+1)}}, Length |
+        Format-Table -AutoSize
+}

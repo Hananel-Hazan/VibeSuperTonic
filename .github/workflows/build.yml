@@ -33,6 +33,9 @@ jobs:
       - name: Restore + build launcher (x64 single-file)
         run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x64 --nologo
 
+      - name: Restore + build launcher (x86 single-file)
+        run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x86 --nologo
+
       - name: Compose release ZIP
         run: ./build/pack-zip.ps1 -Version "ci-${{ github.sha }}"
         shell: pwsh

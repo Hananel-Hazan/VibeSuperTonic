@@ -51,7 +51,7 @@ The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. Th
 
 ## Installation (end user)
 
-1. Download the latest `VibeSuperTonic-<version>-win.zip` from [Releases](https://github.com/Hananel-Hazan/VibeSuperTonic/releases).
+1. Download the latest `VibeSuperTonic-<version>-win-x64.zip` (recommended) or `VibeSuperTonic-<version>-win-x86.zip` from [Releases](https://github.com/Hananel-Hazan/VibeSuperTonic/releases).
 2. Extract anywhere — your home folder, `C:\Tools`, a USB stick, all fine.
 3. Double-click `VibeSuperTonic.exe`. The Control Panel opens.
 4. The Status tab runs the integrity check on launch. Accept the UAC prompt if it asks (one-time — writes voice tokens to HKLM).
@@ -208,7 +208,7 @@ cd VibeSuperTonic
 dotnet publish src\VibeSuperTonic.Engine\VibeSuperTonic.Engine.csproj -c Release -r win-x64 --no-self-contained
 dotnet publish src\VibeSuperTonic.Engine\VibeSuperTonic.Engine.csproj -c Release -r win-x86 --no-self-contained
 dotnet publish src\VibeSuperTonic.Launcher\VibeSuperTonic.Launcher.csproj -c Release -r win-x64
-.\build\pack-zip.ps1                    # composes dist\VibeSuperTonic-<version>-win.zip
+.\build\pack-zip.ps1                    # composes dist\VibeSuperTonic-<version>-win-x64.zip and -win-x86.zip
 ```
 
 The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face into `models\onnx\` and `models\voice_styles\`. The Status tab also writes optimized graph copies under `models\onnx-optimized\` on first ORT load — subsequent cold starts skip the optimization pass entirely.
