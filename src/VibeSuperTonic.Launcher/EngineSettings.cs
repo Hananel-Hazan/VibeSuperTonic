@@ -19,6 +19,12 @@ internal sealed class EngineSettings
     public float EngineSpeed { get; set; } = 1.05f;
     public float DspRate { get; set; } = 1.0f;
     public string DefaultVoice { get; set; } = "M1";
+    /// <summary>
+    /// Supertonic language code spoken when the SAPI client doesn't tag the
+    /// text itself. Settable globally or per voice. A client that sends SSML
+    /// <c>xml:lang</c> overrides it for the tagged fragment.
+    /// </summary>
+    public string Language { get; set; } = Shared.SupertonicLanguages.Default;
     public float VolumeTrimDb { get; set; } = 0f;
 
     public int MaxChunkChars { get; set; } = 200;
@@ -75,7 +81,7 @@ internal static class EngineSettingsRegistry
     private const string LegacyRegRoot = @"SOFTWARE\VibeSuperTonic\Settings";
     private const string LegacyDefaultSub = "Default";
     private const string LegacyPerVoiceSub = "PerVoice";
-    private const int CurrentSchemaVersion = 5;
+    private const int CurrentSchemaVersion = 6;
     private static readonly object _writeGate = new();
 
     public static EngineSettings Load()
@@ -140,6 +146,7 @@ internal static class EngineSettingsRegistry
         && pv.EngineSpeed      == global.EngineSpeed
         && pv.DspRate          == global.DspRate
         && pv.DefaultVoice     == global.DefaultVoice
+        && pv.Language         == global.Language
         && pv.VolumeTrimDb     == global.VolumeTrimDb
         && pv.MaxChunkChars    == global.MaxChunkChars
         && pv.MinChunkChars    == global.MinChunkChars
@@ -170,6 +177,12 @@ internal static class EngineSettingsRegistry
     ///            on the next <see cref="Save"/>. Bumping the version triggers
     ///            one such Save here so the user's <c>settings.json</c> sheds
     ///            the stale field without waiting for a Tune-tab edit.
+    ///   v5 → v6: <c>Language</c> added. Per-voice snapshots written before this
+    ///            build deserialize with the field's default ("en"), which the
+    ///            engine can't tell apart from a deliberate choice — so a user
+    ///            who then sets the global language to German would find one
+    ///            voice stubbornly speaking English with no visible cause.
+    ///            Re-stamp every existing per-voice entry with the global value.
     /// Idempotent — re-running is a no-op once SchemaVersion == CurrentSchemaVersion.
     /// </summary>
     public static void EnsureMigrated()
@@ -191,6 +204,10 @@ internal static class EngineSettingsRegistry
         {
             s.EngineSpeed = 1.0f;
             foreach (var pv in s.PerVoice.Values) pv.EngineSpeed = 1.0f;
+        }
+        if (schema < 6)
+        {
+            foreach (var pv in s.PerVoice.Values) pv.Language = s.Language;
         }
         // schema < 4: just persist to disk so we own the data.
         // schema < 5: the VocoderMode field is gone — the Save() below drops it
@@ -235,6 +252,21 @@ internal static class EngineSettingsRegistry
                 case "enginespeed":    s.EngineSpeed = float.Parse(value, CultureInfo.InvariantCulture); s.Preset = QualityPreset.Custom; break;
                 case "dsprate":        s.DspRate = float.Parse(value, CultureInfo.InvariantCulture); break;
                 case "defaultvoice":   s.DefaultVoice = value; break;
+                case "language":
+                {
+                    // Reject rather than silently coerce: a CLI --set is an explicit
+                    // instruction, and "typo'd de-DE quietly became English" is a
+                    // worse outcome here than an error the caller can read.
+                    string want = value.Trim().ToLowerInvariant();
+                    if (want != "na" && !Shared.SupertonicLanguages.All.Any(l => l.Code == want))
+                    {
+                        error = $"Unknown language: {value}. Supported: " +
+                                string.Join(", ", Shared.SupertonicLanguages.All.Select(l => l.Code));
+                        return false;
+                    }
+                    s.Language = want;
+                    break;
+                }
                 case "volumetrimdb":   s.VolumeTrimDb = float.Parse(value, CultureInfo.InvariantCulture); break;
                 case "maxchunkchars":  s.MaxChunkChars = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "minchunkchars":  s.MinChunkChars = int.Parse(value, CultureInfo.InvariantCulture); break;

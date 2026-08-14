@@ -324,7 +324,8 @@ internal sealed class MonitorTab : UserControl
             : $"{match.ProcessName} (PID {_selectedPid})";
         var confirm = MessageBox.Show(this,
             $"Drop the engine session inside {who}?\n\n" +
-            "The next time the app speaks, the engine will rebuild its ONNX models. " +
+            "The next time the app speaks, the engine will rebuild its ONNX models " +
+            "and (if previously latched off after repeated GPU resets) retry DirectML. " +
             "If a phrase is currently playing it will play to the end first. " +
             "The host application does NOT need to restart.",
             "Reset engine session", MessageBoxButtons.OKCancel, MessageBoxIcon.Question,

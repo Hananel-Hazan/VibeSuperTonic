@@ -5,15 +5,19 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace Supertonic
 {
-    // Available languages for multilingual TTS
+    // Available languages for multilingual TTS. "na" is upstream's language-agnostic
+    // code (used when the input language is unknown; wrapped as <na>...</na> like any
+    // other tag). It must be whitelisted here or PreprocessText rejects lang="na" —
+    // matches supertone-inc/supertonic csharp/Helper.cs AVAILABLE_LANGS at v3.0.0 (32 entries).
     public static class Languages
     {
-        public static readonly string[] Available = { "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi" };
+        public static readonly string[] Available = { "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi", "na" };
     }
 
     // ============================================================================
@@ -267,6 +271,16 @@ namespace Supertonic
         private readonly InferenceSession _textEncOrt;
         private readonly InferenceSession _vectorEstOrt;
         private readonly InferenceSession _vocoderOrt;
+        // Cached output names per session. Needed for the RunOptions-aware
+        // Run overload, which requires IReadOnlyCollection<string> for output
+        // names (OutputMetadata.Keys is IEnumerable<string> via the interface
+        // declaration, even though the underlying Dictionary's KeyCollection
+        // implements IReadOnlyCollection). Cached once to avoid allocating
+        // a List on every Run.
+        private readonly IReadOnlyCollection<string> _dpOutputNames;
+        private readonly IReadOnlyCollection<string> _textEncOutputNames;
+        private readonly IReadOnlyCollection<string> _vectorEstOutputNames;
+        private readonly IReadOnlyCollection<string> _vocoderOutputNames;
         public readonly int SampleRate;
         private readonly int _baseChunkSize;
         private readonly int _chunkCompressFactor;
@@ -300,6 +314,10 @@ namespace Supertonic
             _textEncOrt = textEncOrt;
             _vectorEstOrt = vectorEstOrt;
             _vocoderOrt = vocoderOrt;
+            _dpOutputNames = dpOrt.OutputMetadata.Keys.ToList();
+            _textEncOutputNames = textEncOrt.OutputMetadata.Keys.ToList();
+            _vectorEstOutputNames = vectorEstOrt.OutputMetadata.Keys.ToList();
+            _vocoderOutputNames = vocoderOrt.OutputMetadata.Keys.ToList();
             SampleRate = cfgs.AE.SampleRate;
             _baseChunkSize = cfgs.AE.BaseChunkSize;
             _chunkCompressFactor = cfgs.TTL.ChunkCompressFactor;
@@ -351,8 +369,9 @@ namespace Supertonic
             return (noisyLatent, latentMask);
         }
 
-        private (float[] wav, float[] duration) _Infer(List<string> textList, List<string> langList, Style style, int totalStep, float speed = 1.05f)
+        private (float[] wav, float[] duration) _Infer(List<string> textList, List<string> langList, Style style, int totalStep, float speed = 1.05f, CancellationToken cancellationToken = default, RunOptions? runOptions = null)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int bsz = textList.Count;
             if (bsz != style.TtlShape[0])
             {
@@ -377,7 +396,14 @@ namespace Supertonic
                 NamedOnnxValue.CreateFromTensor("style_dp", styleDpTensor),
                 NamedOnnxValue.CreateFromTensor("text_mask", textMaskTensor)
             };
-            using var dpOutputs = _dpOrt.Run(dpInputs);
+            // RunOptions lets the adapter watchdog call Terminate() on a wedged
+            // Run from another thread. When runOptions is null we use the simple
+            // overload; when provided, the explicit-outputs overload that accepts
+            // RunOptions is used (ORT 1.20 doesn't expose a (inputs, RunOptions)
+            // shortcut — we have to pass outputNames too).
+            using var dpOutputs = runOptions is null
+                ? _dpOrt.Run(dpInputs)
+                : _dpOrt.Run(dpInputs, _dpOutputNames, runOptions);
             var durOnnx = dpOutputs.First(o => o.Name == "duration").AsTensor<float>().ToArray();
             
             // Apply speed factor to duration
@@ -393,7 +419,9 @@ namespace Supertonic
                 NamedOnnxValue.CreateFromTensor("style_ttl", styleTtlTensor),
                 NamedOnnxValue.CreateFromTensor("text_mask", textMaskTensor)
             };
-            using var textEncOutputs = _textEncOrt.Run(textEncInputs);
+            using var textEncOutputs = runOptions is null
+                ? _textEncOrt.Run(textEncInputs)
+                : _textEncOrt.Run(textEncInputs, _textEncOutputNames, runOptions);
             var textEmbTensor = textEncOutputs.First(o => o.Name == "text_emb").AsTensor<float>();
 
             // Sample noisy latent
@@ -403,9 +431,15 @@ namespace Supertonic
 
             var totalStepArray = Enumerable.Repeat((float)totalStep, bsz).ToArray();
 
-            // Iterative denoising
+            // Iterative denoising. The cancellation check sits at the loop top:
+            // ONNX Run itself isn't interruptible (no RunOptions.Terminate threaded
+            // through), but each iteration is short (~200 ms with totalStep=8) so
+            // a cancellation here makes a SAPI ABORT abandon the synth within one
+            // iteration — i.e. ~200 ms — instead of waiting the full synth (which
+            // could be 5-10 s for a long chunk).
             for (int step = 0; step < totalStep; step++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var currentStepArray = Enumerable.Repeat((float)step, bsz).ToArray();
 
                 var vectorEstInputs = new List<NamedOnnxValue>
@@ -419,7 +453,9 @@ namespace Supertonic
                     NamedOnnxValue.CreateFromTensor("current_step", new DenseTensor<float>(currentStepArray, new int[] { bsz }))
                 };
 
-                using var vectorEstOutputs = _vectorEstOrt.Run(vectorEstInputs);
+                using var vectorEstOutputs = runOptions is null
+                    ? _vectorEstOrt.Run(vectorEstInputs)
+                    : _vectorEstOrt.Run(vectorEstInputs, _vectorEstOutputNames, runOptions);
                 var denoisedLatent = vectorEstOutputs.First(o => o.Name == "denoised_latent").AsTensor<float>();
 
                 // Update xt
@@ -436,18 +472,21 @@ namespace Supertonic
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             // Run vocoder
             var vocoderInputs = new List<NamedOnnxValue>
             {
                 NamedOnnxValue.CreateFromTensor("latent", Helper.ArrayToTensor(xt, latentShape))
             };
-            using var vocoderOutputs = _vocoderOrt.Run(vocoderInputs);
+            using var vocoderOutputs = runOptions is null
+                ? _vocoderOrt.Run(vocoderInputs)
+                : _vocoderOrt.Run(vocoderInputs, _vocoderOutputNames, runOptions);
             var wavTensor = vocoderOutputs.First(o => o.Name == "wav_tts").AsTensor<float>();
 
             return (wavTensor.ToArray(), durOnnx);
         }
 
-        public (float[] wav, float[] duration) Call(string text, string lang, Style style, int totalStep, float speed = 1.05f, float silenceDuration = 0.3f)
+        public (float[] wav, float[] duration) Call(string text, string lang, Style style, int totalStep, float speed = 1.05f, float silenceDuration = 0.3f, CancellationToken cancellationToken = default, RunOptions? runOptions = null)
         {
             if (style.TtlShape[0] != 1)
             {
@@ -461,7 +500,8 @@ namespace Supertonic
 
             foreach (var chunk in textList)
             {
-                var (wav, duration) = _Infer(new List<string> { chunk }, new List<string> { lang }, style, totalStep, speed);
+                cancellationToken.ThrowIfCancellationRequested();
+                var (wav, duration) = _Infer(new List<string> { chunk }, new List<string> { lang }, style, totalStep, speed, cancellationToken, runOptions);
 
                 if (wavCat.Count == 0)
                 {
@@ -481,9 +521,9 @@ namespace Supertonic
             return (wavCat.ToArray(), new float[] { durCat });
         }
 
-        public (float[] wav, float[] duration) Batch(List<string> textList, List<string> langList, Style style, int totalStep, float speed = 1.05f)
+        public (float[] wav, float[] duration) Batch(List<string> textList, List<string> langList, Style style, int totalStep, float speed = 1.05f, CancellationToken cancellationToken = default)
         {
-            return _Infer(textList, langList, style, totalStep, speed);
+            return _Infer(textList, langList, style, totalStep, speed, cancellationToken);
         }
     }
 

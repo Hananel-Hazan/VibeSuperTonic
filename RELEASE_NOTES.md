@@ -1,4 +1,63 @@
-# VibeSuperTonic v0.2.1
+# VibeSuperTonic v0.2.2
+
+*Still cooking — more in the oven.*
+
+This release teaches the engine that "NOT" is not, in fact, an acronym; lets the Monitor tab count higher than one (yes, really); gives the GPU permission to fail gracefully instead of dragging your whole audio session down with it; and finally answers the question "how do I get this voice onto my phone?" with an **Export** tab that writes proper MP3 and AAC files.
+
+Drop-in replacement for v0.2.1. No schema migration, no re-registration, no apology required.
+
+---
+
+## Added
+
+- **Export tab.** A new tab between **Pronunciations** and **Benchmark** for converting text to a portable audio file you can send to a phone, tablet, or anything that plays MP3/AAC. Paste text, pick a voice, hit **Preview** to hear the first few seconds, then **Save…** to render the whole thing. Because this is an offline render, the defaults are pinned to *max quality*: TotalStep 16 (slider goes to 24), DirectML force-enabled regardless of the global GPU toggle, and the export's quality knobs don't touch your global Tune/SAPI defaults — they apply for the render and restore on completion. Pronunciation rules are honored automatically.
+  - **Formats:** MP3 (up to 320 kbps) and AAC/.m4a (up to 192 kbps, the Microsoft AAC encoder's ceiling). Both are universally playable. Encoding goes through Media Foundation — zero extra binaries shipped.
+  - **Chapter-length text supported.** Synthesis streams to a temp WAV and is transcoded on the fly; RAM stays bounded.
+  - **GPU first, every time.** The engine's normal CPU fallback still kicks in if DirectML init genuinely can't proceed, but the export never *chooses* CPU on its own.
+- **Pronunciations tab.** A new tab between **Tune** and **Benchmark** where you can tell the engine "say *this* instead of *that*" before the words ever reach the model. Per-rule **Whole word** and **Case** toggles, a master kill-switch, and a live **Test** pane so you can verify your fix before saving it. Rules persist to `<DataDir>\pronunciations.json` — share it, back it up, mail it to your friend with the same TTS quirks.
+  - Stops the engine from spelling all-caps words letter by letter ("NOT" → set the replacement to `not!` and breathe a sigh of relief).
+  - Handles glyphs the model has never heard of (`Bᵠ` → `B phi`).
+  - Hot-reloaded on every sentence — no restart of the engine, the Control Panel, or your screen reader.
+
+## Changed
+
+- **The Monitor tab now shows every running engine, not just whichever one spoke last.** Telemetry moved from a single shared-memory slot to per-PID JSON files under `<DataDir>\sessions\`. Lingoes, Balabolka, NVDA, Word — all visible at once with their own live state.
+- **The "Currently synthesizing" pane is no longer truncated at 4 KB.** A limit nobody asked for, finally retired alongside the shared-memory backend.
+- **Reset selected** (Monitor tab) now writes a small sentinel file the engine watches for, so it can drop and rebuild its ONNX session on demand. The host process (Lingoes, etc.) does **not** need to restart.
+
+## Fixed
+
+- **A GPU hiccup no longer means audio death until restart.** When DirectML loses the device — Windows TDR, sleep/resume, the usual GPU drama — the engine used to politely report the error and then produce silence forever after. Now it dusts itself off, rebuilds the ONNX session, and retries the sentence. You hear a one-time blip; everything keeps working.
+- **…unless the GPU is genuinely having a day.** A second device-loss inside 60 seconds flips a process-local latch that quietly rebuilds on CPU instead. Your saved settings stay GPU-on (a driver tantrum shouldn't downgrade your config); use **Reset selected** to give the GPU another shot once the driver has had its coffee. The Monitor tab's `LastError` column shows what happened.
+
+## Upgrading
+
+None of the work, all of the benefit:
+
+1. Drop the new ZIP over your existing install (or use the pre-staged folder under `dist\release\VibeSuperTonic\`).
+2. Run `VibeSuperTonic.exe` once if you want the registry's launcher path to refresh; otherwise, just keep going.
+
+That's it. No `--unregister`, no UAC prompt, no clicking through migration dialogs.
+
+---
+
+## Under the hood
+
+For the curious, and the people who scrolled this far on principle:
+
+- **Pronunciations.** Rules are read by `PronunciationsCache` once per `pronunciations.json` mtime change, regexes pre-compiled, applied inside `BuildSpeakPlan` *before* chunking — so a rule can never be split across two chunks. Whole-word matching wraps the escaped match in `\b…\b`; .NET's regex treats Unicode letters (including U+1D60 modifier-letter small Greek phi) as word characters, so boundaries land correctly around exotic glyphs.
+- **Export.** Two-stage pipeline. Stage 1 drives `SAPI.SpVoice` with its audio output bound to a `SAPI.SpFileStream` writing 44.1 kHz 16-bit mono WAV — the standard SAPI-to-file path, which means pronunciations, the engine's DirectML self-heal, and every other Speak-path behavior come along for free. Settings are mutated through `EngineSettingsRegistry` for the render and restored in a `finally` block (same pattern as Benchmark), so a crash mid-export never leaves your SAPI clients running at TotalStep 16. Stage 2 transcodes the WAV via Media Foundation's `SourceReader` → `SinkWriter` to MP3 (`MFAudioFormat_MP3`) or AAC (`MFAudioFormat_AAC`, raw payload type 0, AAC LC profile 0x29). Bitrates are clamped to the encoders' supported sets — the MS AAC encoder only accepts 96/128/160/192 kbps, so a request for 256 lands on 192. Zero NuGet adds: `MfApi.cs` declares the minimal COM interfaces (`IMFMediaType`, `IMFSourceReader`, `IMFSinkWriter`) with stub slots for the vtable methods we don't call.
+- **Telemetry.** Per-PID JSON files at `<DataDir>\sessions\<pid>.json`, atomic tmp+rename per write. Mtime doubles as a liveness signal (>5 s old = host probably crashed). Graceful process exits delete their own file via `AppDomain.ProcessExit`.
+- **DirectML self-heal.** Device-loss exceptions are caught in `SupertonicAdapter`, the shared session is disposed and rebuilt, and the failing synthesis retries once. A sliding window of loss timestamps drives the latch (threshold = 2 inside 60 s). Never persisted to disk.
+- **Reset signal.** The launcher writes `<pid>.reset` next to the session file; the engine polls for it on each telemetry tick and deletes the marker after acting on it.
+
+## Known quirk
+
+SAPI word-boundary events (used by some screen readers to underline the spoken word) report offsets in the *original* source text. If a pronunciation rule changes the substituted text's length, the underline may land a few characters off the spoken word. Audio is unaffected — only the visual cursor tells a small lie.
+
+---
+
+## VibeSuperTonic v0.2.1
 
 DSP-path overhaul. The phase vocoder shipped in v0.2.0 produced audible artifacts at higher DSP rates that no amount of parameter tuning could escape — five rounds of perceptual A/B converged on a configuration that was *the* best phase vocoder configuration for this material, and was still not good enough. This release swaps it out for **Sonic** (Bill Cook's BSD-licensed library, ported to pure C#), a pitch-synchronous overlap-add algorithm purpose-built for speech speedup. End result: the voice sounds dramatically closer to the original at 1.5×–2× DSP rate. Same SAPI surface, same install, same settings (minus the now-defunct `VocoderMode` knob).
 
@@ -6,7 +65,7 @@ This release is a drop-in replacement for `0.2.0`. **Everyone should re-run `Vib
 
 ---
 
-## Highlights
+### Highlights (v0.2.1)
 
 - **DSP path replaced: phase vocoder → Sonic (PSOLA)**. Each output pitch period is bit-perfect from the input, so the voice's spectral envelope (formants) is preserved sample-for-sample. No more "voice character changed" feeling at speed-up.
 - **SIMD inner loop**. Sonic's AMDF pitch-detection inner loop (the hot path — ~225K abs-diff operations per pitch-period decision) is vectorized via `System.Numerics.Vector<int>` + `Vector.Widen` + `Vector.Abs`. 4–8× speedup on AVX2, 8–16× on AVX-512.
@@ -14,9 +73,9 @@ This release is a drop-in replacement for `0.2.0`. **Everyone should re-run `Vib
 
 ---
 
-## DSP (time-stretch)
+### DSP (time-stretch)
 
-### Why the phase vocoder lost
+#### Why the phase vocoder lost
 
 Five rounds of user-driven perceptual A/B over the phase-vocoder configuration space:
 
@@ -28,7 +87,7 @@ Five rounds of user-driven perceptual A/B over the phase-vocoder configuration s
 
 The remaining "voice character changed" artifact was a fundamental phase-vocoder failure mode (formant smearing from bin-quantized FFT representation + harmonic-phase tracking). It is not fixable within the phase vocoder family.
 
-### Sonic — what changed
+#### Sonic — what changed
 
 Pitch-synchronous overlap-add. For each detected pitch period P (via AMDF over the 65–400 Hz range covering all human speech):
 
@@ -43,13 +102,13 @@ Why this beats phase vocoder for speech:
 - No phase-tracking math that drifts across frames.
 - No analysis frame size to smear transients across.
 
-### SIMD pitch detection
+#### SIMD pitch detection
 
 `Sonic.AmdfDiff` widens int16 samples to int32 (`Vector<short>` arithmetic wraps modulo 65536 — would corrupt diffs above ±32767), then does abs-difference and accumulation in `Vector<int>`. JIT picks the widest SIMD register available (SSE2: 4 lanes, AVX2: 8 lanes, AVX-512: 16 lanes). Period range is 110–678 samples at 44.1 kHz, so the inner loop dwarfs the tail handler.
 
 ---
 
-## Schema migration (v4 → v5)
+### Schema migration (v4 → v5)
 
 - Removes the `VocoderMode` property from `EngineSettings` (was used to select among phase-vocoder variants; meaningless now). Existing `settings.json` files with `VocoderMode` and `PerVoice[*].VocoderMode` deserialize harmlessly — the field is ignored on read and dropped on next write.
 - `EnsureMigrated` triggers one such write on first launch, so the user's `settings.json` sheds the stale field without waiting for a Tune-tab edit.
@@ -58,7 +117,7 @@ No other settings change. No re-registration needed. SAPI clients keep seeing th
 
 ---
 
-## Removed
+### Removed (v0.2.1)
 
 - `Synth/TimeStretch.cs`: phase vocoder family (28 modes, transient detection, peak locking, low-magnitude bypass). Replaced with a ~50-line wrapper around `Sonic`.
 - `Synth/Fft.cs`: in-house radix-2 Cooley-Tukey FFT. No longer used.
@@ -67,14 +126,14 @@ No other settings change. No re-registration needed. SAPI clients keep seeing th
 
 ---
 
-## Added
+### Added (v0.2.1)
 
 - `Synth/Sonic.cs`: ~200-line port of Bill Cook's Sonic, single-stream mono int16, both speedup and slowdown branches. BSD license preserved (Cook's original C source: [waywardgeek/sonic](https://github.com/waywardgeek/sonic)).
 - SIMD AMDF via `System.Numerics.Vector<int>`.
 
 ---
 
-## Bug fixes (carried forward from v0.2.0)
+### Bug fixes (carried forward from v0.2.0)
 
 See the v0.2.0 section below for the long-standing audio-buffer-cut hardening, telemetry timing, and Restart-Manager lock-probe fixes. v0.2.1 introduces no regressions in those areas.
 
@@ -148,7 +207,7 @@ This release replaces the `0.1.0-spike` build entirely. **Everyone should re-run
 - Per-voice override support: any knob can be overridden for a specific voice token. Auto-pruning when overrides match global defaults.
 - Schema-aware migrations: each launcher build runs forward-only migrations (v0→v1 prune, v1→v2 GPU default + clear stale per-voice, v2→v3 force `engineSpeed=1.0`).
 
-#### Telemetry
+#### Telemetry (v0.2.0)
 
 - Engine writes a snapshot to `Local\VibeSuperTonic.Telemetry` shared memory every chunk: voice, current text fragment, resolved knob values, first-byte latency, rolling RTF, pipeline depth, inter-chunk gap, CPU %, RSS, ONNX threads, underrun counter, last error.
 - Monitor tab reads this at 5 Hz when active; otherwise the timer pauses.

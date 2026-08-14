@@ -15,6 +15,7 @@ internal sealed class TuneTab : UserControl
     private readonly TrackBar _volumeTrim;
     private readonly Label _volumeTrimLabel;
     private readonly ComboBox _defaultVoice;
+    private readonly ComboBox _language;
     private readonly Button _save, _testVoice, _clearOverrides;
     private readonly Label _bannerLabel;
     private bool _suppress;
@@ -106,6 +107,20 @@ internal sealed class TuneTab : UserControl
         foreach (var v in Voices.All) _defaultVoice.Items.Add(v.DisplayName);
         _defaultVoice.SelectedIndexChanged += (_, _) => OnAnyChanged();
         body.Controls.Add(_defaultVoice, 1, 5);
+
+        var languageLabel = new Label { Text = "Language", AutoSize = true, Margin = new Padding(0, 8, 12, 0) };
+        var languageTip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400, ReshowDelay = 400 };
+        languageTip.SetToolTip(languageLabel,
+            "Which language the model speaks when the app sending the text doesn't say. " +
+            "All 10 voices speak all 31 languages — this is not a voice change, it's how " +
+            "the same voice pronounces the words. An app that sends SSML with xml:lang " +
+            "overrides this for the tagged passage.");
+        body.Controls.Add(languageLabel, 0, 6);
+        _language = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
+        foreach (var l in Shared.SupertonicLanguages.All) _language.Items.Add(l.DisplayName);
+        languageTip.SetToolTip(_language, "Applies to the scope selected above — globally, or to one voice.");
+        _language.SelectedIndexChanged += (_, _) => OnAnyChanged();
+        body.Controls.Add(_language, 1, 6);
 
         // Buttons
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, Padding = new Padding(8) };
@@ -225,6 +240,10 @@ internal sealed class TuneTab : UserControl
             int idx = Array.FindIndex(Voices.All, v => v.Id == target.DefaultVoice);
             _defaultVoice.SelectedIndex = idx < 0 ? 0 : idx;
 
+            string langCode = Shared.SupertonicLanguages.Normalize(target.Language);
+            int langIdx = Array.FindIndex(Shared.SupertonicLanguages.All, l => l.Code == langCode);
+            _language.SelectedIndex = langIdx < 0 ? 0 : langIdx;
+
             switch (target.Preset)
             {
                 case QualityPreset.Draft:    _rDraft.Checked    = true; break;
@@ -249,6 +268,7 @@ internal sealed class TuneTab : UserControl
             DspRate = _dspRate.Value / 100f,
             VolumeTrimDb = _volumeTrim.Value,
             DefaultVoice = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id,
+            Language = Shared.SupertonicLanguages.All[Math.Max(0, _language.SelectedIndex)].Code,
             Preset = CurrentPreset(),
             // Tier B knobs preserved from existing settings
             MaxChunkChars = s.MaxChunkChars,

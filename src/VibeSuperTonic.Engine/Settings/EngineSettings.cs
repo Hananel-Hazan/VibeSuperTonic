@@ -22,6 +22,12 @@ namespace VibeSuperTonic.Engine.Settings;
 internal sealed class EngineSettings
 {
     public int    TotalStep           { get; set; } = 8;
+    /// <summary>
+    /// Supertonic language code used when the SAPI client doesn't tag the text
+    /// with a language of its own. A fragment carrying an <c>xml:lang</c> (which
+    /// reaches us as <c>SPVSTATE.LangID</c>) overrides this per fragment.
+    /// </summary>
+    public string Language            { get; set; } = Shared.SupertonicLanguages.Default;
     public float  EngineSpeed         { get; set; } = 1.05f;
     public float  DspRate             { get; set; } = 1.0f;
     public string DefaultVoice        { get; set; } = "M1";
@@ -45,6 +51,7 @@ internal sealed class EngineSettings
         return new EngineSettings
         {
             TotalStep           = pv.TotalStep != 0 ? pv.TotalStep : TotalStep,
+            Language            = !string.IsNullOrWhiteSpace(pv.Language) ? pv.Language : Language,
             EngineSpeed         = pv.EngineSpeed > 0 ? pv.EngineSpeed : EngineSpeed,
             DspRate             = pv.DspRate > 0 ? pv.DspRate : DspRate,
             DefaultVoice        = pv.DefaultVoice ?? DefaultVoice,
@@ -156,6 +163,9 @@ internal static class EngineSettingsCache
 
     private static void ReadInto(EngineSettings s, RegistryKey k)
     {
+        // No Language here on purpose: this reader only serves pre-portable
+        // installs (settings.json missing), and the registry layout predates
+        // multilingual support — the value can never be present.
         if (k.GetValue("TotalStep")           is int    ts)  s.TotalStep = ts;
         if (k.GetValue("EngineSpeed")         is string es)  s.EngineSpeed = ParseFloat(es, s.EngineSpeed);
         if (k.GetValue("DspRate")             is string dr)  s.DspRate = ParseFloat(dr, s.DspRate);

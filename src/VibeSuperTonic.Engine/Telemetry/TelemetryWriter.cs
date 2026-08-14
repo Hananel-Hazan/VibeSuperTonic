@@ -103,6 +103,13 @@ internal static class TelemetryWriter
             // snapshot, so the snapshot reflects post-reset state on the next tick.
             CheckResetMarker(resetMarker);
 
+            // If the caller has no synthesis exception to report, surface the
+            // adapter's most recent DML event instead — that's how silent
+            // GPU→CPU fallbacks become visible to the user. A real synth error
+            // always wins because it's the more actionable signal.
+            string errToReport = lastError ?? "";
+            if (errToReport.Length == 0) errToReport = SupertonicAdapter.LastDeviceEvent;
+
             var snap = new SessionSnapshotDto
             {
                 SchemaVersion = SchemaVersion,
@@ -111,16 +118,22 @@ internal static class TelemetryWriter
                 IsActive = isActive,
                 VoiceId = voiceId ?? "",
                 CurrentText = textSnippet ?? "",
-                LastError = lastError ?? "",
+                LastError = errToReport,
                 TotalStep = totalStep,
                 EngineSpeed = engineSpeed,
                 DspRate = dspRate,
-                FirstByteLatencyMs = firstByteLatencyMs,
-                RollingRtf = rollingRtf,
+                // Sanitize: NaN/±Infinity are legitimate in-flight states
+                // (rollingRtf starts NaN; cpuPct can divide oddly), but
+                // System.Text.Json throws on them by default — which was
+                // failing EVERY telemetry tick and spamming engine.log. The
+                // launcher's reader treats 0 as "not yet measured", so collapse
+                // non-finite values to 0 here rather than change the wire format.
+                FirstByteLatencyMs = Finite(firstByteLatencyMs),
+                RollingRtf = Finite(rollingRtf),
                 PipelineDepth = pipelineDepth,
-                InterChunkGapMs = interChunkGapMs,
-                EngineCpuPct = cpuPct,
-                EngineRssMb = rssMb,
+                InterChunkGapMs = Finite(interChunkGapMs),
+                EngineCpuPct = Finite(cpuPct),
+                EngineRssMb = Finite(rssMb),
                 OnnxThreads = onnxThreads,
                 UnderrunCount = underrunCount,
                 DeviceLossCount = SupertonicAdapter.DeviceLossCount,
@@ -215,6 +228,9 @@ internal static class TelemetryWriter
         }
         catch { /* never let a marker check break telemetry */ }
     }
+
+    /// <summary>Collapse NaN/±Infinity to 0 so JSON serialization can't throw.</summary>
+    private static double Finite(double d) => double.IsFinite(d) ? d : 0.0;
 
     private static void WriteAtomic(string filePath, SessionSnapshotDto snap)
     {

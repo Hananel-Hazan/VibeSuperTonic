@@ -29,9 +29,11 @@ internal sealed class ModelDownloader
                 continue;
             }
 
-            // Skip entries with no URL: the manifest is a template until release time.
-            // Tell the user what's missing and how to get it instead of throwing.
-            if (string.IsNullOrWhiteSpace(f.Url) || !Uri.TryCreate(f.Url, UriKind.Absolute, out _))
+            // Skip entries with no usable source: the manifest is a template
+            // until release time. Tell the user what's missing and how to get it
+            // instead of throwing.
+            var sources = f.AllSources().ToList();
+            if (sources.Count == 0)
             {
                 log?.Report($"SKIP {f.Path} — no download URL in manifest. " +
                             "Either copy this file in manually, or fill in a URL in models-manifest.json.");
@@ -53,17 +55,29 @@ internal sealed class ModelDownloader
             }
 
             log?.Report($"DL   {f.Path}  ({f.Bytes / (1024 * 1024)} MB)…");
-            if (!await DownloadAsync(fullPath, f, log, ct))
+
+            // Try every source in turn, and re-verify after EACH one. A mirror
+            // that serves a truncated or stale file must fall through to the
+            // next source rather than leaving a corrupt model on disk — which
+            // is also why the hash check lives inside the loop instead of after
+            // it. A source that downloads fine but hashes wrong is a bad source.
+            bool got = false;
+            for (int i = 0; i < sources.Count && !got; i++)
             {
-                allOk = false;
-                continue;
+                string src = sources[i];
+                if (i > 0) log?.Report($"     primary failed — trying mirror {i}: {Shorten(src)}");
+                if (!await DownloadAsync(fullPath, src, f, log, ct)) continue;
+                if (await VerifyAsync(fullPath, f, ct)) { got = true; break; }
+                log?.Report($"FAIL hash mismatch on {f.Path} from {Shorten(src)}");
             }
-            if (!await VerifyAsync(fullPath, f, ct))
+
+            if (got) log?.Report($"OK   {f.Path}");
+            else
             {
-                log?.Report($"FAIL hash mismatch on {f.Path}");
+                log?.Report($"FAIL {f.Path} — no source produced a verified file " +
+                            $"({sources.Count} tried)");
                 allOk = false;
             }
-            else log?.Report($"OK   {f.Path}");
         }
         if (anyEmptyUrl)
         {
@@ -75,13 +89,17 @@ internal sealed class ModelDownloader
         return allOk;
     }
 
-    private async Task<bool> DownloadAsync(string fullPath, ManifestEntry f, IProgress<string>? log, CancellationToken ct)
+    /// <summary>Host + last path segment — enough to tell sources apart in the log.</summary>
+    private static string Shorten(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) ? $"{u.Host}/…/{u.Segments[^1]}" : url;
+
+    private async Task<bool> DownloadAsync(string fullPath, string url, ManifestEntry f, IProgress<string>? log, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         string tmp = fullPath + ".part";
         try
         {
-            using var resp = await _http.GetAsync(f.Url, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
             resp.EnsureSuccessStatusCode();
             await using var src = await resp.Content.ReadAsStreamAsync(ct);
             await using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))

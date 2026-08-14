@@ -232,9 +232,9 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 - [x] Phase 4: live multi-client Monitor tab with per-session reset (no need to kill Lingoes/Balabolka/etc. when the engine wedges)
 - [x] Phase 4: GPU device-loss recovery — auto-rebuild ONNX session on TDR / driver reset, with CPU latch after repeated failures
 - [ ] Phase 4: parallel ONNX sessions (x64 only, doubles RAM, eliminates inter-chunk gaps on CPU)
-- [ ] Phase 4: more languages (31 supported by model)
+- [x] Phase 4: more languages — all 31 the model speaks, as a global or per-voice setting in the Tune tab; SSML `xml:lang` overrides it per passage, and voice tokens advertise every language so clients can find the voice for non-English text
 - [ ] Phase 4: pitch shifting (separate from time-stretch)
-- [ ] **Phase 5: pronunciation dictionary** — user-editable rewrite table (regex / whole-word) applied before chunking, so abbreviations, symbols, and proper nouns the model mispronounces ("etc." → "et cetera", "kg" → "kilograms", "Tcl" → "tickle", "—" → " — ", "i.e." → "that is", domain jargon, names) come out right. Per-voice and per-language scopes; lives in `data\dictionary.json` so it's portable. Control Panel tab to edit + test entries against a live sample. Probably backs onto the same chunker-pre-pass that already does emoji stripping in `UnicodeProcessor.PreprocessText`.
+- [x] **Phase 5: pronunciation dictionary** *(shipped in 0.2.2 as the Pronunciations tab)* — user-editable rewrite table (regex / whole-word) applied before chunking, so abbreviations, symbols, and proper nouns the model mispronounces ("etc." → "et cetera", "kg" → "kilograms", "Tcl" → "tickle", "—" → " — ", "i.e." → "that is", domain jargon, names) come out right. Per-voice and per-language scopes; lives in `data\dictionary.json` so it's portable. Control Panel tab to edit + test entries against a live sample. Probably backs onto the same chunker-pre-pass that already does emoji stripping in `UnicodeProcessor.PreprocessText`.
 - [ ] Phase 5: signed binaries (avoids SmartScreen prompt on first run)
 
 ## Contributing

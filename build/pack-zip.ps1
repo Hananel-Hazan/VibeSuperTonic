@@ -43,6 +43,15 @@ Step "Publishing Launcher (x64) single-file self-contained…"
     --nologo --verbosity minimal | Out-Null
 if ($LASTEXITCODE) { throw "Launcher publish failed" }
 
+# RenderHost is the out-of-process SAPI render helper the Export tab spawns.
+# Framework-dependent ON PURPOSE — see its csproj: a self-contained single-file
+# host crashes ONNX Runtime, so this must mirror the ordinary SAPI-host shape.
+Step "Publishing RenderHost (x64) framework-dependent…"
+& dotnet publish "$root\src\VibeSuperTonic.RenderHost\VibeSuperTonic.RenderHost.csproj" `
+    -c Release -r win-x64 --no-self-contained `
+    --nologo --verbosity minimal | Out-Null
+if ($LASTEXITCODE) { throw "RenderHost publish failed" }
+
 # ----------------------------------------------------------------- compose
 Step "Composing portable folder at $staging…"
 if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
@@ -51,6 +60,7 @@ New-Item -ItemType Directory -Path "$staging\engine\x64" | Out-Null
 New-Item -ItemType Directory -Path "$staging\engine\x86" | Out-Null
 New-Item -ItemType Directory -Path "$staging\models\onnx" | Out-Null
 New-Item -ItemType Directory -Path "$staging\models\voice_styles" | Out-Null
+New-Item -ItemType Directory -Path "$staging\render" | Out-Null
 
 Copy-Item "$root\src\VibeSuperTonic.Launcher\bin\Release\net10.0-windows\win-x64\publish\VibeSuperTonic.exe" `
     "$staging\VibeSuperTonic.exe"
@@ -58,8 +68,12 @@ Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x64\p
     "$staging\engine\x64\" -Recurse
 Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x86\publish\*" `
     "$staging\engine\x86\" -Recurse
+# Out-of-process render helper (Export tab spawns render\VibeSuperTonic.RenderHost.exe)
+Copy-Item "$root\src\VibeSuperTonic.RenderHost\bin\Release\net10.0-windows\win-x64\publish\*" `
+    "$staging\render\" -Recurse
 # strip .pdb to keep ZIP small
 Get-ChildItem "$staging\engine" -Filter *.pdb -Recurse | Remove-Item -Force
+Get-ChildItem "$staging\render" -Filter *.pdb -Recurse | Remove-Item -Force
 Copy-Item "$root\README.md" "$staging\README.md"
 Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
 

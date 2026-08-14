@@ -23,6 +23,16 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     private const int BytesPerSecond = SampleRate * BlockAlign;
     private const int ChunkBytes = 4096;
 
+    // Per-chunk synth wait budget. On CPU with totalStep=8 a 200-char chunk is
+    // 3-10 s; observed worst case on slow hardware ~15-20 s. 45 s is "the driver
+    // is wedged, not slow." Past this we force a session rebuild and surface
+    // E_FAIL instead of holding the COM thread.
+    private const int SynthHardTimeoutMs = 45_000;
+    // Grace window after we cancel speakCts so cancellation can propagate
+    // through the totalStep loop in _Infer. One iteration is ~200 ms at
+    // totalStep=8; give it ~3× that before we give up on graceful unwind.
+    private const int SynthCancelGraceMs = 750;
+
     // Ultimate-fallback voice id when neither the SAPI token nor the Control Panel
     // setting provides one. SetObjectToken normally beats this; the Control Panel's
     // Default\DefaultVoice setting is the second-tier fallback.
@@ -207,8 +217,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             float volumeScale = Math.Clamp(siteVolumePct / 100f * volTrimLinear, 0f, 4f);
             uint interChunkSilenceMs = (uint)Math.Max(0, resolved.InterChunkSilenceMs);
 
-            var planItems = BuildSpeakPlan(pTextFragList);
-            Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
+            string defaultLang = Shared.SupertonicLanguages.Normalize(resolved.Language);
+            var planItems = BuildSpeakPlan(pTextFragList, defaultLang);
+            Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
 
             // Telemetry: announce we're starting work.
             try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, resolved.OnnxThreads, 0, ""); }
@@ -234,7 +245,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                     {
                         int idx = speakItem.Text.IndexOf(chunkText, offsetWithin, StringComparison.Ordinal);
                         if (idx < 0) idx = offsetWithin;
-                        execPlan.Add(new SpeakChunkExec(chunkText, speakItem.SourceCharOffset + (uint)idx, speakItem.RateAdj));
+                        execPlan.Add(new SpeakChunkExec(chunkText, speakItem.SourceCharOffset + (uint)idx, speakItem.RateAdj, speakItem.Lang));
                         offsetWithin = idx + chunkText.Length;
                     }
                 }
@@ -268,6 +279,29 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             var getSkipInfo = (delegate* unmanaged[Stdcall]<IntPtr, int*, int*, int>)vtbl[9];
             var completeSkip = (delegate* unmanaged[Stdcall]<IntPtr, int, int>)vtbl[10];
 
+            // Pre-flight abort check: a SAPI client that calls SpeakAsync and then
+            // SpeakAsyncCancelAll before the engine has spun up will have already
+            // signaled ABORT. Launching the first synth task in that window creates
+            // an orphan — its result is discarded but it still holds the adapter's
+            // _ttsGate for the full synth duration, blocking the next Speak the
+            // client is presumably about to start. That's a major contributor to
+            // "engine doesn't respond after I clicked play twice in a row."
+            if ((getActions(sitePtr) & SapiConstants.SPVES_ABORT) != 0)
+            {
+                Trace("Speak", "abort before first synth launch");
+                return SapiConstants.S_OK;
+            }
+
+            // Per-Speak CancellationTokenSource. Cancelled when we detect SAPI
+            // ABORT (or when Speak unwinds via exception). Plumbed into every
+            // adapter.Synthesize call, which propagates it through tts.Call and
+            // into the totalStep loop inside _Infer — so a SAPI Stop cuts the
+            // in-flight synth within ~200 ms (one totalStep iteration) instead
+            // of letting it run to completion and stall the next Speak behind
+            // _ttsGate.
+            using var speakCts = new CancellationTokenSource();
+            var speakToken = speakCts.Token;
+
             // Kick off synthesis of the first chunk on a background thread.
             // Synthesis + DSP time-stretch run together on the worker thread so both
             // fall under the same pipeline cover, hiding the stretch cost behind the
@@ -278,9 +312,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             int totalStepResolved = resolved.TotalStep;
             Task<short[]> currentSynth = Task.Run(() =>
             {
-                var raw = adapter.Synthesize(firstChunkExec.Text, totalStep: totalStepResolved, speed: firstSynth);
+                var raw = adapter.Synthesize(firstChunkExec.Text, totalStep: totalStepResolved, speed: firstSynth, cancellationToken: speakToken, lang: firstChunkExec.Lang);
                 return TimeStretch.Stretch(raw, firstStretch);
-            });
+            }, speakToken);
             var firstSynthStartMs = Environment.TickCount64;
             double rollingRtf = double.NaN;
 
@@ -292,6 +326,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 if ((actions & SapiConstants.SPVES_ABORT) != 0)
                 {
                     Trace("Speak", $"abort before exec item {i}/{execPlan.Count}");
+                    // Cancel any in-flight prefetch so it unwinds within one
+                    // totalStep iteration (~200 ms) instead of holding _ttsGate
+                    // for the rest of the synth and stalling the next Speak.
+                    try { speakCts.Cancel(); } catch { }
                     break;
                 }
                 if ((actions & SapiConstants.SPVES_SKIP) != 0)
@@ -300,7 +338,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                     if (getSkipInfo(sitePtr, &skipType, &skipCount) >= 0 && skipCount != 0)
                     {
                         int skipped = ApplySkip(execPlan, ref i, skipCount, ref nextSynthIdx, synthIndices,
-                            adapter, siteRate, ref currentSynth, resolved);
+                            adapter, siteRate, ref currentSynth, resolved, speakToken);
                         Trace("Speak", $"skip {skipCount} requested, {skipped} applied (i={i})");
                         completeSkip(sitePtr, skipped);
                         continue; // re-evaluate from new i
@@ -316,7 +354,64 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         try
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
-                            pcm = currentSynth.Result;
+
+                            // Polling wait on the prefetched synth. We CANNOT use
+                            // .Result here: ONNX Run() under a sick DirectML driver
+                            // can hang indefinitely, and .Result would wedge this COM
+                            // thread — SAPI's Stop signal would be ignored, and the
+                            // client's next Speak would block on the marshaller. Poll
+                            // SPVES_ABORT every 50 ms (matches StreamPcm/drain pattern)
+                            // and bail to a hard ceiling at SynthHardTimeoutMs.
+                            int waitedMs = 0;
+                            bool completed = false;
+                            bool aborted = false;
+                            while (waitedMs < SynthHardTimeoutMs)
+                            {
+                                if (currentSynth.Wait(50)) { completed = true; break; }
+                                waitedMs += 50;
+                                if ((getActions(sitePtr) & SapiConstants.SPVES_ABORT) != 0)
+                                {
+                                    Trace("Speak", $"abort observed during synth wait ({waitedMs}ms)");
+                                    try { speakCts.Cancel(); } catch { }
+                                    try { currentSynth.Wait(SynthCancelGraceMs); } catch { /* expected */ }
+                                    aborted = true;
+                                    break;
+                                }
+                            }
+
+                            if (aborted) goto AfterSpeakLoop;
+
+                            if (!completed)
+                            {
+                                // Hard timeout: ONNX is wedged. Cancel the token
+                                // (best-effort), queue a session reset so the next
+                                // Speak gets a fresh load, log, return E_FAIL so the
+                                // COM thread is released. The orphan Task is left to
+                                // unwind on its own — the adapter watchdog should
+                                // already have fired and disposed the session.
+                                try { speakCts.Cancel(); } catch { }
+                                string hangPreview = chunk.Text.Length > 60
+                                    ? chunk.Text.Substring(0, 60) + "…" : chunk.Text;
+                                string hangCodePoints = string.Concat(chunk.Text.Take(60).Select(c =>
+                                    c < 0x20 || c == 0x7F || (c >= 0x80 && c <= 0x9F)
+                                        ? $"\\u{(int)c:X4}"
+                                        : c.ToString()));
+                                Log("Speak.SynthHang", new TimeoutException(
+                                    $"Synth wait exceeded {SynthHardTimeoutMs} ms for '{hangPreview}' " +
+                                    $"(first 60 with escapes: [{hangCodePoints}]). Forcing session rebuild."));
+                                try { SupertonicAdapter.RequestReset(); } catch { }
+                                try
+                                {
+                                    TelemetryWriter.Update(false, _voiceId, "",
+                                        resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
+                                        0, double.NaN, 0, 0, resolved.OnnxThreads, 0,
+                                        $"Synth hang > {SynthHardTimeoutMs / 1000}s — session reset queued");
+                                }
+                                catch { }
+                                return SapiConstants.E_FAIL;
+                            }
+
+                            pcm = currentSynth.Result; // safe: completed == true
                             synthEndMs = Environment.TickCount64;
                             chunksDone++;
                             var (s, st) = ComputeSpeed(siteRate, chunk.RateAdj, resolved);
@@ -340,19 +435,52 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             }
                             catch { /* swallow */ }
                         }
-                        catch (Exception ex) { Log("Speak.Synthesize", ex); try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, resolved.OnnxThreads, 0, ex.Message); } catch { } return SapiConstants.E_FAIL; }
+                        catch (Exception ex)
+                        {
+                            // Cancellation is a graceful abort — the SAPI client
+                            // already signaled SPVES_ABORT (which is what cancelled
+                            // the token). Don't return E_FAIL or log this as a
+                            // synth failure; just break to the post-loop drain.
+                            if (IsCancellation(ex, speakCts))
+                            {
+                                Trace("Speak", "synth cancelled by abort — breaking to drain");
+                                goto AfterSpeakLoop;
+                            }
+                            // Log the offending chunk text — invisible characters
+                            // (control chars, zero-width marks) appear as escape
+                            // sequences so the user can identify the trigger when
+                            // the bug recurs. Sanitization in BuildSpeakPlan should
+                            // already strip the known classes, but field reports of
+                            // non-deterministic stalls justify keeping the forensic.
+                            string failPreview = chunk.Text.Length > 200
+                                ? chunk.Text.Substring(0, 200) + "…" : chunk.Text;
+                            string codePoints = string.Concat(chunk.Text.Take(60).Select(c =>
+                                c < 0x20 || c == 0x7F || (c >= 0x80 && c <= 0x9F)
+                                    ? $"\\u{(int)c:X4}"
+                                    : c.ToString()));
+                            Log("Speak.Synthesize",
+                                new Exception($"Failed chunk text (first 60 with escapes): [{codePoints}] " +
+                                              $"| preview: \"{failPreview}\"", ex));
+                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, resolved.OnnxThreads, 0, ex.Message); } catch { }
+                            return SapiConstants.E_FAIL;
+                        }
 
                         // Prefetch next synth chunk with ITS own per-fragment rate.
-                        if (nextSynthIdx < synthIndices.Count)
+                        // Skip the prefetch if the client has already signaled ABORT —
+                        // the result would be discarded, but the task would hold the
+                        // adapter's _ttsGate for several seconds and stall the next
+                        // Speak that the client is presumably about to start.
+                        if (nextSynthIdx < synthIndices.Count
+                            && (getActions(sitePtr) & SapiConstants.SPVES_ABORT) == 0)
                         {
                             var nextChunkExec = (SpeakChunkExec)execPlan[synthIndices[nextSynthIdx]];
                             var (nSynth, nStretch) = ComputeSpeed(siteRate, nextChunkExec.RateAdj, resolved);
                             int nextTotalStep = resolved.TotalStep;
                             currentSynth = Task.Run(() =>
                             {
-                                var raw = adapter.Synthesize(nextChunkExec.Text, totalStep: nextTotalStep, speed: nSynth);
+                                var raw = adapter.Synthesize(nextChunkExec.Text, totalStep: nextTotalStep, speed: nSynth, cancellationToken: speakToken, lang: nextChunkExec.Lang);
                                 return TimeStretch.Stretch(raw, nStretch);
-                            });
+                            }, speakToken);
                             nextSynthIdx++;
                         }
 
@@ -376,6 +504,14 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         break;
                 }
             }
+            AfterSpeakLoop:
+            // Cancel the token unconditionally on loop exit — completed prefetches
+            // are unaffected (cancelling a finished token is a no-op); in-flight
+            // prefetches that we won't consume unwind fast. This is the orphan
+            // safety net for any code path that reaches here without going
+            // through the abort branch (eg. normal completion where the very
+            // last prefetch was launched then unused due to skip-arithmetic).
+            try { speakCts.Cancel(); } catch { }
 
             // Tail flush silence: pad the end of the audio with silence so that any
             // hardware-buffer cut lands in silence, not in the last word. SAPI may
@@ -415,7 +551,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             // negative when our pacing is exactly aligned, but the device's own
             // hardware buffer (100-300 ms) hasn't drained yet.
             if (drainMs < 500) drainMs = 500;
-            if (drainMs > 0 && drainMs < 60000)
+            // Cap, don't skip: a pathological drainMs >= 60000 used to skip the drain
+            // entirely, letting SAPI cut trailing audio. Clamp to the ceiling instead.
+            if (drainMs > 60000) drainMs = 60000;
+            if (drainMs > 0)
             {
                 int sleptMs = 0;
                 int totalSleepMs = (int)drainMs;
@@ -430,18 +569,43 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             }
 
             Trace("Speak", $"complete: {chunksDone} chunk(s), {totalStreamBytes} bytes total");
-            try { TelemetryWriter.MarkIdle(); } catch { /* swallow */ }
             return SapiConstants.S_OK;
         }
         catch (Exception ex) { Log("Speak", ex); try { TelemetryWriter.Update(false, _voiceId, "", 0, 0, 0, 0, double.NaN, 0, 0, 0, 0, ex.Message); } catch { } return SapiConstants.E_FAIL; }
         finally
         {
+            // Always mark the engine idle. Every early return (no plan items,
+            // bookmarks-only, abort-before-launch, synth E_FAIL, hang timeout)
+            // must clear the Monitor's "CurrentText" so it doesn't strand on
+            // the last chunk forever.
+            try { TelemetryWriter.MarkIdle(); } catch { /* swallow */ }
             if (sitePtr != IntPtr.Zero) Marshal.Release(sitePtr);
             if (unkPtr != IntPtr.Zero) Marshal.Release(unkPtr);
         }
     }
 
-    private sealed record SpeakChunkExec(string Text, uint SourceCharOffset, int RateAdj);
+    private sealed record SpeakChunkExec(string Text, uint SourceCharOffset, int RateAdj, string Lang);
+
+    /// <summary>
+    /// Returns true if <paramref name="ex"/> is (or wraps) an
+    /// <see cref="OperationCanceledException"/> tied to a cancelled token —
+    /// the shape Task.Result throws when the underlying lambda observed
+    /// the cancellation. Used by Speak's synth-result catch so a SAPI ABORT
+    /// is treated as a graceful exit, not a synth failure → E_FAIL.
+    /// </summary>
+    private static bool IsCancellation(Exception ex, CancellationTokenSource cts)
+    {
+        if (!cts.IsCancellationRequested) return false;
+        if (ex is OperationCanceledException) return true;
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.Flatten().InnerExceptions)
+                if (inner is OperationCanceledException) return true;
+        }
+        for (var e = ex.InnerException; e != null; e = e.InnerException)
+            if (e is OperationCanceledException) return true;
+        return false;
+    }
 
     /// <summary>
     /// Skip <paramref name="skipCount"/> sentences forward (positive) or backward (negative)
@@ -451,7 +615,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// </summary>
     private static int ApplySkip(List<object> execPlan, ref int i, int skipCount,
         ref int nextSynthIdx, List<int> synthIndices, SupertonicAdapter adapter, int siteRate,
-        ref Task<short[]> currentSynth, EngineSettings resolved)
+        ref Task<short[]> currentSynth, EngineSettings resolved, CancellationToken speakToken)
     {
         int actuallySkipped = 0;
         int direction = Math.Sign(skipCount);
@@ -482,9 +646,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             int totalStepLocal = resolved.TotalStep;
             currentSynth = Task.Run(() =>
             {
-                var raw = adapter.Synthesize(nextExec.Text, totalStep: totalStepLocal, speed: nSynth);
+                var raw = adapter.Synthesize(nextExec.Text, totalStep: totalStepLocal, speed: nSynth, cancellationToken: speakToken, lang: nextExec.Lang);
                 return TimeStretch.Stretch(raw, nStretch);
-            });
+            }, speakToken);
             nextSynthIdx = currentSynthIdx + 1;
             i = synthIndices[currentSynthIdx] - 1;
         }
@@ -747,14 +911,24 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// &lt;prosody rate="..."&gt; tags affect only their own enclosed text.
     /// </summary>
     private abstract record SpeakItem;
-    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj) : SpeakItem;
+    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang) : SpeakItem;
     private sealed record SpeakSilenceItem(uint Milliseconds) : SpeakItem;
     private sealed record SpeakBookmarkItem(string Name, uint SourceCharOffset) : SpeakItem;
 
-    private static List<SpeakItem> BuildSpeakPlan(IntPtr pTextFragList)
+    /// <summary>
+    /// Flatten SAPI's fragment list into our plan. <paramref name="defaultLang"/>
+    /// is the configured language (global, or the per-voice override); a fragment
+    /// that carries its own <c>LangID</c> — which is how SSML <c>xml:lang</c>
+    /// reaches an engine — wins for that fragment only, so a German paragraph
+    /// inside an English document is spoken by the German model without the user
+    /// touching a setting.
+    /// </summary>
+    private static List<SpeakItem> BuildSpeakPlan(IntPtr pTextFragList, string defaultLang)
     {
         var items = new List<SpeakItem>();
         if (pTextFragList == IntPtr.Zero) return items;
+
+        var (pron, pronCompiled) = PronunciationsCache.Resolve();
 
         IntPtr cur = pTextFragList;
         int safety = 0;
@@ -771,7 +945,27 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 case SPVACTIONS.SPVA_SpellOut:
                 case SPVACTIONS.SPVA_Pronounce:
                     if (!string.IsNullOrEmpty(text))
-                        items.Add(new SpeakTextItem(text, frag.ulTextSrcOffset, frag.State.RateAdj));
+                    {
+                        // SpellOut/Pronounce are SAPI-level overrides; rules still
+                        // apply since the user wrote the rule expecting it to fire
+                        // regardless of how the fragment was tagged.
+                        // Strip invisible characters (control chars, zero-width
+                        // marks, private-use) that have non-deterministically
+                        // wedged the synth in the field. Done before chunking so
+                        // the chunker sees clean text and the engine's downstream
+                        // IndexOf on the same string still finds chunks.
+                        string spoken = SupertonicAdapter.SanitizeForSynth(pron.Apply(text, pronCompiled));
+                        if (!string.IsNullOrEmpty(spoken))
+                        {
+                            // FromLcid returns null both for "fragment carries no
+                            // language" (LangID 0, the common case) and for "a
+                            // language Supertonic doesn't speak" — both fall back
+                            // to the user's configured language.
+                            string fragLang = Shared.SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
+                            Trace("BuildSpeakPlan", $"frag LangID=0x{frag.State.LangID:X4} → lang={fragLang}");
+                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang));
+                        }
+                    }
                     break;
                 case SPVACTIONS.SPVA_Silence:
                     if (frag.State.SilenceMSecs > 0)
@@ -828,7 +1022,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         try
         {
             lock (_logLock)
+            {
+                Shared.LogRotation.RollIfNeeded(LogPath);
                 File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {where}: {msg}\n");
+            }
         }
         catch { }
     }
@@ -837,9 +1034,21 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     {
         try
         {
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"[{DateTime.Now:HH:mm:ss.fff}] {where} EXCEPTION: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n");
+            // Walk the inner-exception chain. The synth failure path wraps the
+            // real ONNX/preprocessing error as InnerException of a forensic
+            // wrapper (see Speak.Synthesize), so without this the actual cause —
+            // the only actionable line — never reaches the log.
+            int depth = 0;
+            for (var inner = ex.InnerException; inner is not null && depth < 8; inner = inner.InnerException, depth++)
+                sb.Append($"  ---> Inner [{depth}] {inner.GetType().FullName}: {inner.Message}\n{inner.StackTrace}\n");
+            sb.Append('\n');
             lock (_logLock)
-                File.AppendAllText(LogPath,
-                    $"[{DateTime.Now:HH:mm:ss.fff}] {where} EXCEPTION: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n\n");
+            {
+                Shared.LogRotation.RollIfNeeded(LogPath);
+                File.AppendAllText(LogPath, sb.ToString());
+            }
         }
         catch { }
     }

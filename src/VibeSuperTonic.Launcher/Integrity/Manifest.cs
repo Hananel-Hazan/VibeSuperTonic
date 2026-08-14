@@ -7,8 +7,27 @@ internal sealed class ManifestEntry
 {
     [JsonPropertyName("path")]    public string Path { get; set; } = "";
     [JsonPropertyName("url")]     public string Url  { get; set; } = "";
+    /// <summary>
+    /// Fallback download locations, tried in order after <see cref="Url"/>.
+    /// Upstream is archived, so the primary host is no longer maintained by
+    /// anyone; a mirror is what keeps a fresh install working the day that
+    /// repository moves or disappears. Integrity does not depend on trusting
+    /// the mirror — every source is checked against the same size and SHA-256.
+    /// </summary>
+    [JsonPropertyName("mirrors")] public List<string> Mirrors { get; set; } = new();
     [JsonPropertyName("sha256")]  public string Sha256 { get; set; } = "";
     [JsonPropertyName("bytes")]   public long   Bytes { get; set; }
+
+    /// <summary>Primary first, then mirrors — skipping anything unusable.</summary>
+    public IEnumerable<string> AllSources()
+    {
+        if (IsUsable(Url)) yield return Url;
+        foreach (var m in Mirrors)
+            if (IsUsable(m)) yield return m;
+
+        static bool IsUsable(string u) =>
+            !string.IsNullOrWhiteSpace(u) && Uri.TryCreate(u, UriKind.Absolute, out _);
+    }
 }
 
 internal sealed class Manifest

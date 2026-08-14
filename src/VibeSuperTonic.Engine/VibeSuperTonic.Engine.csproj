@@ -19,8 +19,33 @@
       to CPU; users opt in to GPU via the "Use DirectML" toggle in the Control
       Panel's Advanced tab. Adds ~30 MB of native DLLs to the engine folder.
     -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" />
-    <PackageReference Include="System.Text.Json" Version="9.0.1" />
+    <!--
+      PINNED AT 1.22.1 — DO NOT BUMP WITHOUT CHECKING win-x86.
+      ORT dropped the win-x86 native runtime from the NuGet package in 1.23.0
+      (the .props still references runtimes\win-x86\native\onnxruntime.dll, so
+      newer versions either fail the copy or, as here, publish an x86 folder
+      with DirectML.dll but NO onnxruntime.dll — the 32-bit engine then dies
+      with DllNotFoundException on first Speak). 1.22.1 is the last version
+      shipping win-x86; 32-bit SAPI hosts (Balabolka, some Narrator paths) need
+      it. Verify `runtimes\win-x86\native\onnxruntime.dll` exists in the package
+      before raising this number. Upstream: microsoft/onnxruntime#26985.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.1" />
+    <!--
+      System.Text.Json is in the net10.0 shared framework. An explicit 9.0.1
+      PackageReference is not pruned (NU1510) — it deploys an OLDER copy of the
+      assembly next to the engine and wins over the framework's. Removed.
+    -->
+
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Exposes internal test hooks (e.g. SupertonicAdapter._testInjectDeviceLossOnNextCall)
+      to the harness so it can deterministically drive the device-loss recovery path
+      without needing to artificially kill the GPU.
+    -->
+    <InternalsVisibleTo Include="VibeSuperTonic.TestHarness" />
   </ItemGroup>
 
 </Project>

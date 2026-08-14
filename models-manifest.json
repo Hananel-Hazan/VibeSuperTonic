@@ -1,42 +1,150 @@
 {
   "version": "1",
-  "_comment": "Each entry: path is relative to BaseDir; url is where to download; sha256 is hex; bytes is exact size. Files with empty url are skipped by the Repair flow with a 'manifest is a template' note. Fill in real URLs and SHA-256 hashes during a release build to enable fully automatic install. The current file list mirrors the actual Supertonic-3 model layout (verified against dist/spike).",
+  "_comment": "Wired to Supertone's Supertonic-3 release on Hugging Face (OpenRAIL-M). URLs are PINNED to commit 3cadd1ee6394adea1bd021217a0e650ede09a323 so the byte sizes and SHA-256 hashes below stay valid even if upstream pushes new commits to main. The four .onnx files are git-LFS objects whose sha256 is their LFS content hash, fully verified by the Repair flow. The small .json files are plain git blobs with no LFS hash, so they are verified by exact byte size only. Source repo: https://huggingface.co/Supertone/supertonic-3 -- paths here are relative to BaseDir. MIRRORS: upstream announced on 2026-07-23 that the project is archived with no further development or support, so the primary host is unmaintained. Each entry carries a 'mirrors' list tried in order after 'url'. Mirror URLs point at main, not a pinned commit, because a duplicated HF repo has its own commit history -- integrity does not depend on the mirror being trustworthy, since every source is checked against the same sha256/bytes below. To populate the mirror: duplicate https://huggingface.co/Supertone/supertonic-3 to your own HF account (Settings -> Duplicate this repository), or push the 16 files to any host that serves raw bytes over HTTPS and rewrite the mirror URLs accordingly.",
   "files": [
     {
       "path": "models/onnx/text_encoder.onnx",
-      "url": "",
-      "sha256": "",
-      "bytes": 36388790
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/text_encoder.onnx",
+      "sha256": "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff",
+      "bytes": 36416150,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/text_encoder.onnx"
+      ]
     },
     {
       "path": "models/onnx/duration_predictor.onnx",
-      "url": "",
-      "sha256": "",
-      "bytes": 3700866
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/duration_predictor.onnx",
+      "sha256": "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db",
+      "bytes": 3700147,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/duration_predictor.onnx"
+      ]
     },
     {
       "path": "models/onnx/vector_estimator.onnx",
-      "url": "",
-      "sha256": "",
-      "bytes": 256580158
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/vector_estimator.onnx",
+      "sha256": "883ac868ea0275ef0e991524dc64f16b3c0376efd7c320af6b53f5b780d7c61c",
+      "bytes": 256534781,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/vector_estimator.onnx"
+      ]
     },
     {
       "path": "models/onnx/vocoder.onnx",
-      "url": "",
-      "sha256": "",
-      "bytes": 101428778
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/vocoder.onnx",
+      "sha256": "085de76dd8e8d5836d6ca66826601f615939218f90e519f70ee8a36ed2a4c4ba",
+      "bytes": 101424195,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/vocoder.onnx"
+      ]
     },
     {
       "path": "models/onnx/tts.json",
-      "url": "",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/tts.json",
       "sha256": "",
-      "bytes": 0
+      "bytes": 8253,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/tts.json"
+      ]
     },
     {
       "path": "models/onnx/unicode_indexer.json",
-      "url": "",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/unicode_indexer.json",
       "sha256": "",
-      "bytes": 0
+      "bytes": 277676,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/onnx/unicode_indexer.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/M1.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M1.json",
+      "sha256": "",
+      "bytes": 291748,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/M1.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/M2.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M2.json",
+      "sha256": "",
+      "bytes": 292055,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/M2.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/M3.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M3.json",
+      "sha256": "",
+      "bytes": 290198,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/M3.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/M4.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M4.json",
+      "sha256": "",
+      "bytes": 291522,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/M4.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/M5.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M5.json",
+      "sha256": "",
+      "bytes": 291469,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/M5.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/F1.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/F1.json",
+      "sha256": "",
+      "bytes": 292046,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/F1.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/F2.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/F2.json",
+      "sha256": "",
+      "bytes": 292423,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/F2.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/F3.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/F3.json",
+      "sha256": "",
+      "bytes": 290794,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/F3.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/F4.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/F4.json",
+      "sha256": "",
+      "bytes": 291808,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/F4.json"
+      ]
+    },
+    {
+      "path": "models/voice_styles/F5.json",
+      "url": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/F5.json",
+      "sha256": "",
+      "bytes": 291479,
+      "mirrors": [
+        "https://huggingface.co/Hananel-Hazan/supertonic-3/resolve/main/voice_styles/F5.json"
+      ]
     }
   ]
 }

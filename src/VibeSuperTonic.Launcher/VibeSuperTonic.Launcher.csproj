@@ -15,4 +15,16 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!--
+    The language table is shared with the engine rather than copied: the
+    Control Panel's dropdown, the voice-token Language attribute the registrar
+    writes, and the code the engine passes to the model all have to name the
+    same 31 languages. Linked, not duplicated — a copy would drift the first
+    time one side gained a language.
+  -->
+  <ItemGroup>
+    <Compile Include="..\VibeSuperTonic.Engine\Synth\SupertonicLanguages.cs" Link="Shared\SupertonicLanguages.cs" />
+    <Compile Include="..\VibeSuperTonic.Engine\Settings\LogRotation.cs" Link="Shared\LogRotation.cs" />
+  </ItemGroup>
+
 </Project>
