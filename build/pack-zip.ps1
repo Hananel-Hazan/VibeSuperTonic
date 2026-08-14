@@ -44,11 +44,58 @@ Step "Publishing Launcher (x64) single-file self-contained…"
     --nologo --verbosity minimal | Out-Null
 if ($LASTEXITCODE) { throw "Launcher publish failed" }
 
+<<<<<<< HEAD
 Step "Publishing Launcher (x86) single-file self-contained…"
 & dotnet publish "$root\src\VibeSuperTonic.Launcher\VibeSuperTonic.Launcher.csproj" `
     -c Release -r win-x86 `
     --nologo --verbosity minimal | Out-Null
 if ($LASTEXITCODE) { throw "Launcher x86 publish failed" }
+=======
+# RenderHost is the out-of-process SAPI render helper the Export tab spawns.
+# Framework-dependent ON PURPOSE — see its csproj: a self-contained single-file
+# host crashes ONNX Runtime, so this must mirror the ordinary SAPI-host shape.
+Step "Publishing RenderHost (x64) framework-dependent…"
+& dotnet publish "$root\src\VibeSuperTonic.RenderHost\VibeSuperTonic.RenderHost.csproj" `
+    -c Release -r win-x64 --no-self-contained `
+    --nologo --verbosity minimal | Out-Null
+if ($LASTEXITCODE) { throw "RenderHost publish failed" }
+
+# ----------------------------------------------------------------- compose
+Step "Composing portable folder at $staging…"
+if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
+New-Item -ItemType Directory -Path $staging | Out-Null
+New-Item -ItemType Directory -Path "$staging\engine\x64" | Out-Null
+New-Item -ItemType Directory -Path "$staging\engine\x86" | Out-Null
+New-Item -ItemType Directory -Path "$staging\models\onnx" | Out-Null
+New-Item -ItemType Directory -Path "$staging\models\voice_styles" | Out-Null
+New-Item -ItemType Directory -Path "$staging\render" | Out-Null
+
+Copy-Item "$root\src\VibeSuperTonic.Launcher\bin\Release\net10.0-windows\win-x64\publish\VibeSuperTonic.exe" `
+    "$staging\VibeSuperTonic.exe"
+Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x64\publish\*" `
+    "$staging\engine\x64\" -Recurse
+Copy-Item "$root\src\VibeSuperTonic.Engine\bin\Release\net10.0-windows\win-x86\publish\*" `
+    "$staging\engine\x86\" -Recurse
+# Out-of-process render helper (Export tab spawns render\VibeSuperTonic.RenderHost.exe)
+Copy-Item "$root\src\VibeSuperTonic.RenderHost\bin\Release\net10.0-windows\win-x64\publish\*" `
+    "$staging\render\" -Recurse
+# strip .pdb to keep ZIP small
+Get-ChildItem "$staging\engine" -Filter *.pdb -Recurse | Remove-Item -Force
+Get-ChildItem "$staging\render" -Filter *.pdb -Recurse | Remove-Item -Force
+Copy-Item "$root\README.md" "$staging\README.md"
+Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
+
+# Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs against)
+if (Test-Path "$root\models-manifest.json") {
+    Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
+}
+
+# Benchmark sample text (Twenty Thousand Leagues excerpt — replaceable by user)
+if (Test-Path "$root\samples") {
+    New-Item -ItemType Directory -Path "$staging\samples" -Force | Out-Null
+    Copy-Item "$root\samples\*" "$staging\samples\" -Recurse
+}
+>>>>>>> Dev
 
 # A pointer for users on what they're agreeing to when models download
 $modelsLicense = @"

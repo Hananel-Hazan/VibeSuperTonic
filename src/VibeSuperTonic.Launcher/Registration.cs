@@ -221,7 +221,12 @@ internal static class Registration
         using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
         using var tokenKey = baseKey.CreateSubKey($@"{root}\{tokenName}", writable: true);
         tokenKey.SetValue(null, localized, RegistryValueKind.String);
-        tokenKey.SetValue(Voices.LanguageHexLcid, localized, RegistryValueKind.String);
+        // A SAPI token names itself once per language it claims: the value NAME is
+        // the hex LCID, the value DATA is what a client shows for that language.
+        // Without a per-LCID entry a client filtering on, say, 407 finds the voice
+        // in the Language attribute but has no display string for it.
+        foreach (var l in Shared.SupertonicLanguages.All)
+            tokenKey.SetValue(l.HexLcid, $"{v.DisplayName} - {l.DisplayName}", RegistryValueKind.String);
         tokenKey.SetValue("CLSID", Voices.EngineClsid, RegistryValueKind.String);
         tokenKey.SetValue("LangDataPath", langDataPath, RegistryValueKind.ExpandString);
         tokenKey.SetValue("VoicePath", voicePath, RegistryValueKind.ExpandString);
@@ -229,7 +234,12 @@ internal static class Registration
         using var attrs = tokenKey.CreateSubKey("Attributes", writable: true);
         attrs.SetValue("Age", "Adult", RegistryValueKind.String);
         attrs.SetValue("Gender", v.Gender, RegistryValueKind.String);
-        attrs.SetValue("Language", Voices.LanguageHexLcid, RegistryValueKind.String);
+        // Semicolon-separated LCID list — the standard way a SAPI engine says
+        // "I speak all of these." Clients that filter the voice list by language
+        // (NVDA's picker, SpVoice.GetVoices("Language=40C")) only offer this
+        // voice for a language listed here, so advertising just 409 hid the
+        // other 30 languages the model has always been able to speak.
+        attrs.SetValue("Language", Shared.SupertonicLanguages.AllHexLcidsSemicolonSeparated, RegistryValueKind.String);
         attrs.SetValue("Name", v.DisplayName, RegistryValueKind.String);
         attrs.SetValue("SharedPronunciation", "", RegistryValueKind.String);
         attrs.SetValue("Vendor", "VibeSuperTonic", RegistryValueKind.String);

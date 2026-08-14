@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Out-of-process render+encode helper for the Export tab. Published
+    FRAMEWORK-DEPENDENT and multi-file ON PURPOSE: the Control Panel
+    (VibeSuperTonic.exe) is a self-contained single-file app, and running EITHER
+    the neural COM engine (ONNX Runtime) OR the Media Foundation encoder
+    in-process there fails — ONNX access-violates (0xc0000005), MF returns
+    MF_E_INVALIDMEDIATYPE (0xC00D36B4). Ordinary SAPI hosts (Balabolka, NVDA,
+    Lingoes) are framework-dependent processes and both paths work fine, so this
+    helper deliberately mirrors that host shape. Do NOT make it self-contained or
+    single-file; that reintroduces both failures.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>VibeSuperTonic.RenderHost</AssemblyName>
+    <RootNamespace>VibeSuperTonic.RenderHost</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <!--
+    Share the Media Foundation encoder source with the Launcher rather than
+    duplicating it. These files are linked, not copied — one implementation,
+    compiled into both assemblies.
+  -->
+  <ItemGroup>
+    <Compile Include="..\VibeSuperTonic.Launcher\Export\MfApi.cs" Link="Shared\MfApi.cs" />
+    <Compile Include="..\VibeSuperTonic.Launcher\Export\MfAudioEncoder.cs" Link="Shared\MfAudioEncoder.cs" />
+    <Compile Include="..\VibeSuperTonic.Launcher\Export\ExportRequest.cs" Link="Shared\ExportRequest.cs" />
+  </ItemGroup>
+
+</Project>

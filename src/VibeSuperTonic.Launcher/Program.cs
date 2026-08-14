@@ -19,6 +19,26 @@ internal static class Program
         bool isCli = args.Length > 0;
         if (isCli) AttachConsole(ATTACH_PARENT_PROCESS); // best-effort; works only if launched from a console
 
+        // Last-chance crash capture. These catch MANAGED exceptions that escape
+        // the UI message loop or background threads and write a stack trace to
+        // launcher.log. Note: native/COM access violations (the prime suspect
+        // for the SAPI export crash) are corrupted-state exceptions that the
+        // CLR will not deliver here on modern .NET — for those, the per-step
+        // DiagLog breadcrumbs in the export path are what pinpoint the failure.
+        DiagLog.Write($"=== Launcher start (pid {Environment.ProcessId}, args=[{string.Join(' ', args)}]) ===");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex) DiagLog.WriteException("AppDomain.UnhandledException", ex);
+            else DiagLog.Write($"AppDomain.UnhandledException (non-CLR): {e.ExceptionObject}");
+        };
+        if (!isCli)
+        {
+            // Route UI-thread exceptions to our handler instead of the default
+            // WinForms dialog, so they're logged before anything else.
+            Application.ThreadException += (_, e) => DiagLog.WriteException("Application.ThreadException", e.Exception);
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        }
+
         // One-shot schema migration — prunes stale per-voice overrides + flips GPU on
         // for installs from before that became the default. Safe to call every launch
         // (it no-ops once SchemaVersion is current).

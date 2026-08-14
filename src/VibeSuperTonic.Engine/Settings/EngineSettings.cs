@@ -1,17 +1,33 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 
 namespace VibeSuperTonic.Engine.Settings;
 
 /// <summary>
-/// Engine-side snapshot of the per-process knobs the Control Panel writes to
-/// HKCU\SOFTWARE\VibeSuperTonic\Settings. Cached by Settings\Version DWORD —
-/// every call to <see cref="Resolve"/> reads only Version (microseconds);
-/// the heavy reload runs only when the counter has moved.
+/// Engine-side snapshot of the per-process knobs. Persisted by the Control
+/// Panel into <see cref="DataPaths.SettingsFilePath"/> (a JSON file under the
+/// portable data root). The launcher writes; the engine reads. Cached by file
+/// mtime — every <see cref="EngineSettingsCache.Resolve"/> call does one
+/// <c>FileInfo.LastWriteTimeUtc</c> stat (microseconds), and reparses only
+/// when the timestamp moves.
+///
+/// Pre-data-folder installs kept these values in
+/// <c>HKCU\SOFTWARE\VibeSuperTonic\Settings</c> with a <c>Version</c> DWORD as
+/// the cache key. The reload path falls back to that registry layout when
+/// <c>settings.json</c> is missing — covers the window after an upgrade but
+/// before the launcher has run its migration.
 /// </summary>
 internal sealed class EngineSettings
 {
-    public int    TotalStep           { get; set; } = 8;        // legacy default until UI writes settings
+    public int    TotalStep           { get; set; } = 8;
+    /// <summary>
+    /// Supertonic language code used when the SAPI client doesn't tag the text
+    /// with a language of its own. A fragment carrying an <c>xml:lang</c> (which
+    /// reaches us as <c>SPVSTATE.LangID</c>) overrides this per fragment.
+    /// </summary>
+    public string Language            { get; set; } = Shared.SupertonicLanguages.Default;
     public float  EngineSpeed         { get; set; } = 1.05f;
     public float  DspRate             { get; set; } = 1.0f;
     public string DefaultVoice        { get; set; } = "M1";
@@ -21,11 +37,10 @@ internal sealed class EngineSettings
     public int    InterChunkSilenceMs { get; set; } = 200;
     public float  SynthesisSilenceSec { get; set; } = 0.3f;
     public float  RateClampCeiling    { get; set; } = 1.3f;
-    public int    OnnxThreads         { get; set; } = 0; // intra-op threads (per ORT op)
-    public int    OnnxInterOpThreads  { get; set; } = 1; // inter-op threads (across ORT ops)
-    public bool   UseDirectML         { get; set; } = true;  // GPU default; engine falls back to CPU if DML init fails
+    public int    OnnxThreads         { get; set; } = 0;
+    public int    OnnxInterOpThreads  { get; set; } = 1;
+    public bool   UseDirectML         { get; set; } = true;
     public int    DirectMLDeviceId    { get; set; } = 0;
-    public int    VocoderMode         { get; set; } = 3;     // peak radius 3 — chosen after A/B testing
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
 
     /// <summary>Per-voice resolution: <c>PerVoice[id].Knob</c> if set, else <c>this.Knob</c>.</summary>
@@ -36,6 +51,7 @@ internal sealed class EngineSettings
         return new EngineSettings
         {
             TotalStep           = pv.TotalStep != 0 ? pv.TotalStep : TotalStep,
+            Language            = !string.IsNullOrWhiteSpace(pv.Language) ? pv.Language : Language,
             EngineSpeed         = pv.EngineSpeed > 0 ? pv.EngineSpeed : EngineSpeed,
             DspRate             = pv.DspRate > 0 ? pv.DspRate : DspRate,
             DefaultVoice        = pv.DefaultVoice ?? DefaultVoice,
@@ -51,48 +67,80 @@ internal sealed class EngineSettings
     }
 }
 
+[JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(EngineSettings))]
+internal partial class EngineSettingsJsonContext : JsonSerializerContext { }
+
 internal static class EngineSettingsCache
 {
-    private const string Root        = @"SOFTWARE\VibeSuperTonic\Settings";
-    private const string DefaultSub  = "Default";
-    private const string PerVoiceSub = "PerVoice";
+    private const string LegacyRegRoot = @"SOFTWARE\VibeSuperTonic\Settings";
+    private const string DefaultSub    = "Default";
+    private const string PerVoiceSub   = "PerVoice";
 
     private static readonly object _gate = new();
-    private static int _cachedVersion = -1;
+    // Stored as Ticks (long, 8 bytes) instead of DateTime to avoid torn reads
+    // on x86 — DateTime is a struct of two 4-byte fields and isn't atomic on
+    // 32-bit hosts. Engine x86 build runs inside 32-bit SAPI clients (Lingoes,
+    // Balabolka 32-bit, …); a torn read would compare bogus halves and produce
+    // either spurious reloads or stale cache. <c>Volatile.Read</c> + 64-bit
+    // value gives us atomic semantics on both bitnesses.
+    private static long _cachedMtimeTicks = DateTime.MinValue.Ticks;
     private static EngineSettings _cached = new();
+    private static bool _everLoaded;
 
-    /// <summary>Get the latest settings, reloading only when Version DWORD has bumped.</summary>
+    /// <summary>
+    /// Returns the latest settings, reloading only when <c>settings.json</c>'s
+    /// mtime has moved (or on first call).
+    /// </summary>
     public static EngineSettings Resolve()
     {
-        int version = ReadVersion();
-        if (version == _cachedVersion) return _cached;
+        string path = DataPaths.SettingsFilePath;
+        long mtimeTicks;
+        try { mtimeTicks = File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : DateTime.MinValue.Ticks; }
+        catch { mtimeTicks = DateTime.MinValue.Ticks; }
+
+        // Volatile.Read so the JIT can't hoist the comparison above a concurrent
+        // write inside the lock. Once everLoaded flips to true under lock, every
+        // subsequent reader sees a coherent (mtime, cached) pair.
+        if (Volatile.Read(ref _everLoaded) && Volatile.Read(ref _cachedMtimeTicks) == mtimeTicks)
+            return _cached;
         lock (_gate)
         {
-            if (version == _cachedVersion) return _cached;
-            _cached = Reload();
-            _cachedVersion = version;
+            if (_everLoaded && _cachedMtimeTicks == mtimeTicks) return _cached;
+            _cached = LoadFromFileOrLegacyRegistry(path);
+            _cachedMtimeTicks = mtimeTicks;
+            _everLoaded = true;
             return _cached;
         }
     }
 
-    public static int CurrentVersion() => ReadVersion();
-
-    private static int ReadVersion()
+    private static EngineSettings LoadFromFileOrLegacyRegistry(string path)
     {
-        try
+        if (File.Exists(path))
         {
-            using var k = Registry.CurrentUser.OpenSubKey(Root);
-            return k?.GetValue("Version") is int v ? v : 0;
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                var parsed = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
+                if (parsed is not null) return parsed;
+            }
+            catch { /* fall through to registry fallback */ }
         }
-        catch { return 0; }
+        return ReadFromLegacyRegistry();
     }
 
-    private static EngineSettings Reload()
+    /// <summary>
+    /// Read the pre-portable layout from <c>HKCU\SOFTWARE\VibeSuperTonic\Settings</c>.
+    /// Engaged only when the JSON file is missing — used during the upgrade
+    /// window before the launcher has run its registry → file migration.
+    /// </summary>
+    private static EngineSettings ReadFromLegacyRegistry()
     {
         var s = new EngineSettings();
         try
         {
-            using var settings = Registry.CurrentUser.OpenSubKey(Root);
+            using var settings = Registry.CurrentUser.OpenSubKey(LegacyRegRoot);
             if (settings is null) return s;
             using (var def = settings.OpenSubKey(DefaultSub))
                 if (def is not null) ReadInto(s, def);
@@ -115,6 +163,9 @@ internal static class EngineSettingsCache
 
     private static void ReadInto(EngineSettings s, RegistryKey k)
     {
+        // No Language here on purpose: this reader only serves pre-portable
+        // installs (settings.json missing), and the registry layout predates
+        // multilingual support — the value can never be present.
         if (k.GetValue("TotalStep")           is int    ts)  s.TotalStep = ts;
         if (k.GetValue("EngineSpeed")         is string es)  s.EngineSpeed = ParseFloat(es, s.EngineSpeed);
         if (k.GetValue("DspRate")             is string dr)  s.DspRate = ParseFloat(dr, s.DspRate);
@@ -129,7 +180,6 @@ internal static class EngineSettingsCache
         if (k.GetValue("OnnxInterOpThreads")  is int    iot) s.OnnxInterOpThreads = iot;
         if (k.GetValue("UseDirectML")         is int    udm) s.UseDirectML = udm != 0;
         if (k.GetValue("DirectMLDeviceId")    is int    did) s.DirectMLDeviceId = did;
-        if (k.GetValue("VocoderMode")         is int    vm)  s.VocoderMode = vm;
     }
 
     private static float ParseFloat(string s, float fallback) =>

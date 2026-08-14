@@ -7,19 +7,25 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "VibeSuperTonic Control Panel";
-        Width = 980;
-        Height = 740;
+        // Sized for the Monitor tab's worst-case layout: sessions grid (180) +
+        // detail-metric grid (~170) + Currently-synthesizing pane (140) + Last
+        // error pane (220) + tabs/chrome ≈ 880 px tall. Wider than before so the
+        // 8-column sessions grid has room for the Process column to breathe.
+        Width = 1240;
+        Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(820, 620);
+        MinimumSize = new Size(1040, 780);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(MakeTabPage("Status",    new StatusTab()));
-        tabs.TabPages.Add(MakeTabPage("Tune",      new TuneTab()));
-        tabs.TabPages.Add(MakeTabPage("Benchmark", new BenchmarkTab()));
-        tabs.TabPages.Add(MakeTabPage("Monitor",   new MonitorTab()));
-        tabs.TabPages.Add(MakeTabPage("Advanced",  new AdvancedTab()));
-        tabs.TabPages.Add(MakeTabPage("About",     new AboutTab()));
+        tabs.TabPages.Add(MakeTabPage("Status",         new StatusTab()));
+        tabs.TabPages.Add(MakeTabPage("Tune",           new TuneTab()));
+        tabs.TabPages.Add(MakeTabPage("Pronunciations", new PronunciationsTab()));
+        tabs.TabPages.Add(MakeTabPage("Export",         new ExportTab()));
+        tabs.TabPages.Add(MakeTabPage("Benchmark",      new BenchmarkTab()));
+        tabs.TabPages.Add(MakeTabPage("Monitor",        new MonitorTab()));
+        tabs.TabPages.Add(MakeTabPage("Advanced",       new AdvancedTab()));
+        tabs.TabPages.Add(MakeTabPage("About",          new AboutTab()));
         Controls.Add(tabs);
     }
 

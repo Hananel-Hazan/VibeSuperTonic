@@ -5,8 +5,12 @@ internal sealed record Voice(string Id, string DisplayName, string Gender);
 internal static class Voices
 {
     public const string EngineClsid = "{F2A8C7B1-1234-5678-9ABC-DEF012345678}";
-    public const string LanguageHexLcid = "409"; // en-US
-    public const string TokenSchemaVersion = "4";
+    public const string LanguageHexLcid = "409"; // en-US — the token's primary/display language
+    // Bumped to 5 when voice tokens started advertising all 31 Supertonic
+    // languages instead of en-US alone. Registration.IsRegistered compares this
+    // against the value stamped on each token, so existing installs show as
+    // "needs repair" in the Status tab and pick up the new Language attribute.
+    public const string TokenSchemaVersion = "5";
 
     public static readonly Voice[] All =
     {
