@@ -1042,14 +1042,19 @@ worse.
 *Contingency:* a `.deb` later if people ask for one. Not v1 — it fights the
 portable-folder model that already works.
 
-**Update [CLAUDE.md](../CLAUDE.md) when `pack-tar.sh` exists.** It currently
-names `build/pack-zip.ps1` as *the* canonical packaging script and says in as
-many words not to hand-roll `dotnet publish` for a shippable artifact — a rule
-written when Windows was the only target. Until the Linux packer is named there
-too, the instruction reads as "there is no supported way to build a Linux
-release", and the next agent asked for a tarball will do exactly the ad-hoc
-thing the rule exists to prevent. Same treatment: the script is canonical, the
-version comes from `<VstVersion>`, and the user is asked before it is bumped.
+**[CLAUDE.md](../CLAUDE.md) was updated ahead of this phase, 2026-08-16.** It
+named `build/pack-zip.ps1` as *the* canonical packaging script and forbade
+hand-rolled `dotnet publish` for a shippable artifact — a rule written when
+Windows was the only target, which left the instruction reading as "there is no
+supported way to build a Linux release". The next agent asked for a tarball
+would have done exactly the ad-hoc thing the rule exists to prevent.
+
+It now carries a two-row table, the requirements this phase's packer must meet
+(three binaries in one run with matching versions, the native-ELF assertion, the
+portable layout, no models in the archive), and the sentence that closes the
+loop: *"there is no Linux packer" is a reason to write one, never a reason to
+hand-roll a tarball once.* **When `pack-tar.sh` lands, move it into that table
+and delete the placeholder section** — the file says so itself.
 
 #### Two gaps found by a user double-clicking the daemon, 2026-08-15
 
