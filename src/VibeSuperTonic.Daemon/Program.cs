@@ -108,7 +108,15 @@ string version = Assembly.GetEntryAssembly()
 
 var options = new DaemonOptions(voice, language, Version: version);
 
-using ISynthesizer synth = new CpuSynthesizer(modelsRoot);
+// Capped rather than left to ORT, which sizes its pool to every core and makes
+// the desktop stutter for the length of each read. Startup-only: ORT builds the
+// thread pool with the session, so `reload` cannot move it.
+int intraOp = CpuBudget.IntraOpThreads(config.Settings.MaxCpuPercent, Environment.ProcessorCount);
+Console.Error.WriteLine(
+    $"[vibesupertonicd] inference threads {(intraOp == CpuBudget.Auto ? "auto" : intraOp.ToString())} " +
+    $"of {Environment.ProcessorCount} ({config.Settings.MaxCpuPercent}% budget)");
+
+using ISynthesizer synth = new CpuSynthesizer(modelsRoot, intraOpThreads: intraOp);
 
 // Opened on the first request that needs to play, not here. Opening here meant a
 // machine whose audio server was unreachable got an unhandled exception and a

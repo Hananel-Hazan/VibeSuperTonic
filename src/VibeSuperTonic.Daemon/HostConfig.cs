@@ -24,7 +24,9 @@ namespace VibeSuperTonic.Daemon;
 /// <c>OnnxThreads</c> and <c>OnnxInterOpThreads</c> are not read and are never
 /// written — there is no DirectML on Linux, and Phase 0 measured any manual
 /// <c>OnnxThreads</c> value at roughly 2x worse than letting ORT choose,
-/// including the setting that was harmless on Windows.</para>
+/// including the setting that was harmless on Windows. <c>MaxCpuPercent</c>
+/// below overrides that measurement deliberately, for a cost Phase 0 was not
+/// measuring — see its own documentation.</para>
 ///
 /// <para><b>DSP.</b> <c>DspRate</c>, <c>VolumeTrimDb</c> and
 /// <c>RateClampCeiling</c> are read and applied — <see cref="SpeechRate"/>
@@ -73,6 +75,25 @@ public sealed class LinuxSettings
     /// The explanatory notice is emitted either way.</para>
     /// </summary>
     public bool ClipboardFallback { get; set; }
+
+    /// <summary>
+    /// Percentage of logical processors inference may use. Default 20.
+    ///
+    /// <para>ORT's own choice is every core, which is why the desktop stutters
+    /// during a read — reported from daily use on a 20-thread machine, where
+    /// speed was never the constraint. The request that prompted this was "no
+    /// more than 80%"; the measurement said 20% is both lighter and slightly
+    /// faster, so the default satisfies the request with room to spare rather
+    /// than sitting on it. 100 restores ORT's pick. See
+    /// <see cref="VibeSuperTonic.Core.Synthesis.CpuBudget"/> for the numbers,
+    /// which are worth reading before raising this: 40% measured as the slowest
+    /// setting of all.</para>
+    ///
+    /// <para>Read at startup, not per utterance: ORT sizes its thread pool when
+    /// the session is created, so changing this needs a daemon restart. The
+    /// <c>reload</c> verb will not move it.</para>
+    /// </summary>
+    public int MaxCpuPercent { get; set; } = 20;
 }
 
 [JsonSourceGenerationOptions(ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
