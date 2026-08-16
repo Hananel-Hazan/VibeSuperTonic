@@ -10,6 +10,12 @@ dist/
 *.onnx
 models/
 
+# ...but src/VibeSuperTonic.Core/Models/ is SOURCE (Manifest.cs,
+# ModelDownloader.cs), and core.ignorecase is true on this repo, so the rule
+# above matches it too. Re-included explicitly — without this the files are
+# silently untracked and any host that consumes Core fails to build.
+!src/**/Models/
+
 # IDE
 .vs/
 .idea/
