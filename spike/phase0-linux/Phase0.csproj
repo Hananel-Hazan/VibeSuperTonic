@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 0 spike from docs/LINUX-PORT-PLAN.md — measures whether ONNX Runtime's
+    CPU provider renders Supertonic fast enough on linux-x64 to build the port on.
+    Throwaway: it exists to produce one RTF number, not to ship.
+
+    Deliberately references the CPU-only ORT package, NOT the DirectML one, because
+    that is what a Linux build must use. Compiling SupertonicSdk.cs without the
+    ORT_DIRECTML symbol is itself part of the test.
+
+    NOT self-contained here — pass the RID and SelfContained flags on the publish
+    command so the same project produces both a linux-x64 drop and a local win-x64
+    sanity build.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-phase0</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Phase0</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifiers>linux-x64;win-x64</RuntimeIdentifiers>
+    <!--
+      Multi-file on purpose. Single-file + native ONNX is the exact combination
+      that produced the 0xc0000005 crash behind RenderHost on Windows; the plan
+      calls for multi-file as the default, so the spike proves that shape.
+    -->
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The real engine SDK file, unmodified and unforked. Measuring a copy would
+         measure the copy. -->
+    <Compile Include="..\..\src\VibeSuperTonic.Engine\Synth\SupertonicSdk.cs" Link="SupertonicSdk.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\models-manifest.json" Link="models-manifest.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

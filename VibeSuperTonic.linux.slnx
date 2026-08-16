@@ -1,0 +1,29 @@
+<Solution>
+  <!--
+    Linux half of the tree. Companion to VibeSuperTonic.slnx (Windows).
+
+    Two solution files rather than one with everything: the Windows solution
+    contains a COM-hosting engine and a WinForms launcher, so opening or
+    building it on the Mint development box produces a wall of failures that
+    have nothing to do with whatever you were working on. Each platform builds
+    its own solution and sees only its own errors.
+
+    Populated by the port plan as projects land:
+      Phase 3 → vibesupertonicd, vst-ctl
+      Phase 6 → the Avalonia app
+  -->
+  <Folder Name="/src/">
+    <Project Path="src/VibeSuperTonic.Core/VibeSuperTonic.Core.csproj" />
+    <Project Path="src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj" />
+    <Project Path="src/VibeSuperTonic.Onnx.Cpu/VibeSuperTonic.Onnx.Cpu.csproj" />
+    <Project Path="src/VibeSuperTonic.Linux.Audio/VibeSuperTonic.Linux.Audio.csproj" />
+    <Project Path="src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />
+    <Project Path="src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj" />
+  </Folder>
+  <Folder Name="/spike/">
+    <Project Path="spike/phase0-linux/Phase0.csproj" />
+    <Project Path="spike/linux-render/LinuxRender.csproj" />
+    <Project Path="spike/linux-play/LinuxPlay.csproj" />
+    <Project Path="spike/x11-select/X11Own.csproj" />
+  </Folder>
+</Solution>

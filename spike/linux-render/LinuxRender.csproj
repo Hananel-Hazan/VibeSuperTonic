@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Proof that Core + VibeSuperTonic.Onnx.Cpu renders speech on Linux without any
+    part of the Windows engine.
+
+    Phase 0 proved ONNX Runtime is fast enough on linux-x64, but it did so by
+    calling the vendored SDK directly. This calls the real seam instead: Core's
+    chunker, Core's PCM/WAV helpers, and ISynthesizer. If this renders, the
+    backend split works and the daemon in Phase 3 has something to stand on.
+
+    Throwaway, like phase0-linux. The daemon replaces it.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-linux-render</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.LinuxRender</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Onnx.Cpu\VibeSuperTonic.Onnx.Cpu.csproj" />
+  </ItemGroup>
+
+</Project>

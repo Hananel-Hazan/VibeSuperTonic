@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A synthetic PRIMARY selection owner, so Phase 4's capture path can be tested
+    without a human highlighting text in Firefox.
+
+    It exists because stock Mint has no xclip and no xsel — the port plan says so
+    explicitly and refuses to depend on them at runtime, which leaves nothing on
+    the machine that can put text on PRIMARY on demand. Serving the selection
+    ourselves is about eighty lines and turns "select something and press the
+    key" into a scripted check.
+
+    Not shipped. The real exit criteria are still Firefox, a GTK editor, the
+    terminal and a PDF viewer, which no synthetic owner can stand in for: this
+    covers the protocol, they cover the applications.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>x11-own</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.X11Own</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+</Project>

@@ -791,6 +791,7 @@ namespace Supertonic
 
             if (useGpu)
             {
+#if ORT_DIRECTML
                 // AppendExecutionProvider_DML takes priority — ops it can't run fall back to CPU.
                 // Throws if the DirectML provider can't initialize (e.g. no DX12 GPU). We let
                 // that bubble up so the caller can fall back to CPU + log the failure.
@@ -804,6 +805,13 @@ namespace Supertonic
                     Console.WriteLine($"DirectML init failed, falling back to CPU: {ex.Message}");
                     // Continue without DML; opts has only the default CPU provider.
                 }
+#else
+                // Built against the CPU-only ORT package (Linux, or any host without
+                // DirectML). AppendExecutionProvider_DML does not exist in that package,
+                // so the call above cannot even compile — this is a build-time split, not
+                // a runtime one. Callers still pass useGpu; we just have nowhere to put it.
+                Console.WriteLine("DirectML not available in this build — using CPU provider.");
+#endif
             }
             else if (!cacheHit)
             {

@@ -1,0 +1,56 @@
+<Project>
+
+  <!--
+    Repo-wide build settings.
+
+    Two platforms share this tree — the Windows SAPI engine and the Linux daemon
+    (docs/LINUX-PORT-PLAN.md) — so anything that must NOT drift between them
+    belongs here rather than in an individual csproj.
+
+    Deliberately does NOT set BaseOutputPath / BaseIntermediateOutputPath.
+    build/pack-zip.ps1 copies from literal
+    bin\Release\net10.0-windows\win-x64\publish paths; relocating the output tree
+    breaks the packer's copy step silently and the ZIP gets composed from
+    whatever was left in the staging folder. Tidier bin\ layout is not worth that
+    failure mode.
+  -->
+
+  <PropertyGroup>
+    <!--
+      SINGLE SOURCE OF TRUTH FOR THE SHIPPED VERSION.
+
+      build/pack-zip.ps1 (Windows) and build/pack-tar.sh (Linux, Phase 7) both
+      read this value, so one number produces both artifacts. A per-script
+      default is exactly how the two platforms end up shipping "the same"
+      release under two different numbers — pack-zip.ps1 carried a hardcoded
+      0.2.0 default for three releases past 0.2.0.
+
+      This is the LAST SHIPPED version. Per CLAUDE.md the bump is a decision the
+      user makes, never something the build infers, so a release run passes
+      -Version explicitly and this value is updated to match afterwards.
+    -->
+    <VstVersion>0.2.7.5</VstVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      Lets a non-Windows box restore and build net10.0-windows projects. The
+      targeting packs download on any OS; only COM hosting and the actual run are
+      Windows-only. Without this, `dotnet build` of the Engine on the Mint
+      development box dies at restore with NETSDK1100 before producing any
+      diagnostic worth reading.
+    -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!--
+    Opt-in strictness for platform-neutral projects (<VstPortable>true</VstPortable>)
+    lives in Directory.Build.targets, NOT here.
+
+    This file is imported at the TOP of every csproj, before the project sets its
+    own properties, so a condition on VstPortable evaluates against an empty
+    value and does nothing — quietly, with the build still green and the rule
+    apparently in place. Do not move it back.
+  -->
+
+</Project>

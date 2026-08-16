@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    vst-ctl. Connect, write one line, exit.
+
+    This is what a hotkey binding actually runs, so its startup time is added to
+    every press the user makes. The plan budgets 150 ms from key to first audible
+    feedback with the model warm, and process start is the only part of that
+    budget spent before any work begins.
+
+    NativeAOT, and the measurement says it is not optional: the same client
+    starts in 107 ms on the runtime and 6 ms compiled. 107 ms is most of the
+    150 ms the plan budgets from key press to feedback, spent before any work
+    begins, and it is comparable to the 150 ms debounce window — so a hotkey
+    would have been mostly waiting for a process to exist.
+
+    PublishAot only affects `dotnet publish`, so `dotnet build` and the tests are
+    unaffected and need no C toolchain. If a build machine lacks one, the
+    contingency in the plan still stands: publish without it and accept the
+    ~100 ms.
+
+    AOT disables reflection-based serialization, which is why the protocol has a
+    source-generated JsonSerializerContext (Core/Ipc/Protocol.cs). Without it
+    this builds cleanly and aborts on its first message.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-ctl</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Ctl</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

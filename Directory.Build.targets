@@ -1,0 +1,33 @@
+<Project>
+
+  <!--
+    Repo-wide settings that depend on properties the PROJECT sets.
+
+    This file exists because of an ordering rule that is easy to get wrong:
+    Directory.Build.props is imported at the TOP of every csproj, before the
+    project's own <PropertyGroup> runs, so a condition there on a project-defined
+    property like VstPortable is always evaluated against an empty value and
+    silently does nothing. Directory.Build.targets is imported at the BOTTOM,
+    after the project has set its properties, which is where this belongs.
+
+    The failure mode was not a build error — it was CA1416 quietly staying a
+    warning while the props file appeared to promote it. Verified by adding a
+    Registry call to Core and confirming the build now fails.
+  -->
+
+  <!--
+    Strictness for the platform-neutral half of the tree. A project opts in with
+    <VstPortable>true</VstPortable> to declare "I must compile and run on both
+    Windows and Linux", which turns CA1416 (platform compatibility) into a build
+    error. A stray `using Microsoft.Win32;` then fails on the machine that wrote
+    it rather than on the other platform's CI job days later.
+
+    This is the mechanical form of R-12 in docs/LINUX-PORT-PLAN.md: Windows-only
+    machinery cannot follow us into shared code, because shared code that touches
+    it does not compile.
+  -->
+  <PropertyGroup Condition="'$(VstPortable)' == 'true'">
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

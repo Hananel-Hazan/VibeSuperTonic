@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cross-platform coverage for Core (R-3 in the port plan). Runs on Windows and
+    on Linux, in CI on both, and needs no native libraries or model files —
+    which is exactly why Core is package-free and ONNX lives in the per-platform
+    backends. A test project that needed ONNX Runtime could not run on both.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <VstPortable>true</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The committed reference envelope for RenderSanityTests. An envelope rather
+      than a WAV: 6 KB instead of 1.1 MB, diffable in review, and it is the only
+      part the checks read.
+    -->
+    <None Update="Resources\reference-envelope.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

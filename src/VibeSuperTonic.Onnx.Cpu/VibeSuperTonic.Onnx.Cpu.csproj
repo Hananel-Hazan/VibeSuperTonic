@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CPU synthesis backend — the ISynthesizer implementation built against the
+    CPU-only ONNX Runtime package.
+
+    Named for the execution provider, not the operating system, because that is
+    what actually distinguishes it: this assembly runs perfectly well on Windows,
+    it just has no DirectML. Its sibling (Phase 1, remaining) is
+    VibeSuperTonic.Onnx.DirectML, which carries the DML provider plus the
+    device-loss recovery machinery that has no meaning here. The port plan called
+    these Onnx.Linux / Onnx.Windows; the provider is the honest axis.
+
+    SupertonicSdk.cs is COMPILED IN, not referenced. It is the one file both
+    backends genuinely share, and it cannot live in Core because it is full of
+    ONNX Runtime types — the DirectML and CPU packages publish the same managed
+    assembly name with different managed API surfaces, so no shared assembly can
+    reference either (R-13). Linking the source and compiling it twice, once per
+    provider, is the whole point of the split.
+
+    Linked from its current location rather than a src/shared/ directory: moving a
+    990-line vendored file buys nothing until the Windows adapter is split too,
+    and this is already the pattern used by the launcher and the Phase 0 spike.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>VibeSuperTonic.Onnx.Cpu</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Onnx.Cpu</RootNamespace>
+    <!-- No Windows types here either: the backend is provider-specific, not OS-specific. -->
+    <VstPortable>true</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      CPU package, NOT Microsoft.ML.OnnxRuntime.DirectML. Pinned to match the
+      engine's version so both providers track the same upstream; see the pin
+      warning in VibeSuperTonic.Engine.csproj before changing it.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\VibeSuperTonic.Engine\Synth\SupertonicSdk.cs" Link="Shared\SupertonicSdk.cs" />
+  </ItemGroup>
+
+</Project>

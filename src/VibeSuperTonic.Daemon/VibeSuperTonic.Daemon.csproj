@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The daemon. One process, holding the warm model for the life of the login
+    session, so that a key press is a socket write rather than a 2-5 second
+    model load.
+
+    Self-contained, unlike the Windows engine. That is not a stylistic choice:
+    the engine is an in-process COM server and a self-contained publish with
+    EnableComHosting fails outright (NETSDK1128), which is why Windows needs four
+    separately-installed prerequisites. Nothing here is loaded into someone
+    else's process, so it can carry its own runtime and the Linux install is a
+    tarball.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vibesupertonicd</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Daemon</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+
+    <!--
+      From <VstVersion> in Directory.Build.props, the single source of truth the
+      packers read. `status` reports this so a stale client is diagnosable, which
+      a hand-maintained copy defeats the moment it drifts — and it had already
+      been written out twice as a literal.
+
+      Scoped to this project rather than set repo-wide: Directory.Build.props is
+      shared with the Windows engine and launcher, and changing assembly versions
+      on the shipping platform is not a side effect this deserves to have.
+    -->
+    <Version>$(VstVersion)</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <ProjectReference Include="..\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
+    <ProjectReference Include="..\VibeSuperTonic.Onnx.Cpu\VibeSuperTonic.Onnx.Cpu.csproj" />
+  </ItemGroup>
+
+</Project>

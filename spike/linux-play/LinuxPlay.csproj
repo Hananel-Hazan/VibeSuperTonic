@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 2 end to end: Core's chunker and boundary planner, the CPU backend, and
+    the PulseAudio sink, with the playback clock driving a live word readout.
+
+    Two modes, and the first one is the point:
+
+      calibrate     plays a click track and reports how far the playback clock
+                    drifts from real time. No model needed, so it runs anywhere
+                    and answers the question the port plan actually asks —
+                    whether pa_simple_get_latency is good enough under
+                    pipewire-pulse, or whether Phase 2 has to move to the async
+                    pa_stream API.
+
+      default       renders real text and prints each word as it is heard, which
+                    is the only way to judge the thing a unit test cannot: does
+                    the readout track the voice, by ear.
+
+    Throwaway like the other spikes. Phase 3's daemon replaces it, and the
+    composition here is the sketch of that daemon's playback loop.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-linux-play</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.LinuxPlay</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Onnx.Cpu\VibeSuperTonic.Onnx.Cpu.csproj" />
+  </ItemGroup>
+
+</Project>
