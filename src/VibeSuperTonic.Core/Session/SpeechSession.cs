@@ -32,6 +32,22 @@ namespace VibeSuperTonic.Core.Session;
 /// happily glue three short opening sentences into one. 64 characters is about
 /// one sentence of prose. See <see cref="SentenceChunker.Chunk"/>.
 /// </param>
+/// <param name="InterChunkSilenceMs">
+/// Silence written between one chunk and the next, so a run of sentences is
+/// heard as speech rather than as one unbroken stream. Windows parity: the SAPI
+/// engine writes exactly this gap through its site, from the same
+/// <c>settings.json</c> key, and Linux ignored it until now.
+///
+/// <para><b>Zero here, 200 in the product.</b> This record's defaults are the
+/// neutral values — <c>StretchFactor</c> 1.0 and <c>VolumeScale</c> 1.0 disable
+/// their stages the same way — and the shipped number comes from settings, which
+/// is what makes a direct <c>new SpeechSessionOptions()</c> mean "no processing"
+/// rather than "whatever the product happens to default to this month".</para>
+///
+/// <para>It is not cosmetic: the gap is real audio in the stream, so it moves
+/// every boundary after it. See <see cref="SpeechSession.Run"/> for why it is
+/// counted into the stream position before the next chunk is planned.</para>
+/// </param>
 public sealed record SpeechSessionOptions(
     PronunciationsConfig? Pronunciations = null,
     IReadOnlyList<Regex?>? CompiledPronunciations = null,
@@ -41,7 +57,8 @@ public sealed record SpeechSessionOptions(
     int PrimeMs = PlaybackClock.DefaultPrimeMs,
     double StretchFactor = 1.0,
     float VolumeScale = 1.0f,
-    int LeadChunkChars = 64);
+    int LeadChunkChars = 64,
+    int InterChunkSilenceMs = 0);
 
 /// <summary>
 /// One utterance at a time, from text to speakers, with a running answer to
@@ -170,13 +187,20 @@ public sealed class SpeechSession : IDisposable
     /// <see cref="Run"/>. Use <see cref="BoundaryPlanner.SnapToWordStart"/> to
     /// turn a click into one of these.
     /// </param>
+    /// <param name="notice">
+    /// Something the user should know about this utterance — a truncated
+    /// selection, a selection that never changed. Carried out on the
+    /// <see cref="SpeechState.Preparing"/> event so subscribers see it; see
+    /// <see cref="SessionEvent.Notice"/>. Null when there is nothing to say.
+    /// </param>
     /// <returns>
     /// False if the session was not idle. The caller decides what that means —
     /// <see cref="ToggleGate"/> turns a press during speech into a stop, so this
     /// returning false is a race (two clients, or a press that beat a state
     /// update), not a normal path.
     /// </returns>
-    public bool Speak(string text, SynthesisOptions synthesisOptions, int startOffset = 0)
+    public bool Speak(string text, SynthesisOptions synthesisOptions, int startOffset = 0,
+        string? notice = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(synthesisOptions);
@@ -204,7 +228,7 @@ public sealed class SpeechSession : IDisposable
         LastText = text;
         LastBoundary = null;
 
-        Emit(SessionEvent.Preparing(text, startOffset));
+        Emit(SessionEvent.Preparing(text, startOffset, notice));
 
         _unpaused.Set();
         _worker = Task.Run(() => Run(text, startOffset, synthesisOptions, cts));
@@ -263,7 +287,7 @@ public sealed class SpeechSession : IDisposable
     /// </summary>
     /// <returns>False if the previous utterance did not release in time.</returns>
     public bool Restart(string text, SynthesisOptions synthesisOptions, int timeoutMs = 3000,
-        int startOffset = 0)
+        int startOffset = 0, string? notice = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(synthesisOptions);
@@ -278,7 +302,7 @@ public sealed class SpeechSession : IDisposable
         Stop();                                   // returns immediately if already Idle
         try { worker.Wait(timeoutMs); } catch { /* faulted or cancelled: either way it is done */ }
 
-        return Speak(text, synthesisOptions, startOffset);
+        return Speak(text, synthesisOptions, startOffset, notice);
     }
 
     /// <summary>Wait for the current utterance to finish or stop. For tests and shutdown.</summary>
@@ -404,24 +428,29 @@ public sealed class SpeechSession : IDisposable
             int blockFrames = Math.Max(1, _sink.SampleRate * options.WriteBlockMs / 1000);
             var planned = new List<BoundaryEvent>();
 
-            foreach (var (index, pcm) in rendered.GetConsumingEnumerable(token))
-            {
-                planned.Clear();
-                BoundaryPlanner.PlanChunk(
-                    planned, chunks[index].Text,
-                    TextOffsetMap.Chain(chunks[index].Map, pipelineMap),
-                    sourceBase: startOffset, chunkFrames: pcm.Length, streamStartFrame: streamFrame);
-                scheduler.AddRange(planned);
-                streamFrame += pcm.Length;
+            // Allocated once and never written to. Reused for every gap: it is
+            // read-only to the sink, and a fresh array per chunk boundary would
+            // be ~18 KB of garbage per sentence at the shipped 200 ms for no
+            // reason at all.
+            short[]? gap = options.InterChunkSilenceMs > 0
+                ? new short[Math.Max(1, _sink.SampleRate * options.InterChunkSilenceMs / 1000)]
+                : null;
 
-                for (int offset = 0; offset < pcm.Length; offset += blockFrames)
+            // Chunk audio and inter-chunk silence both go through here, which is
+            // the point: the gap is then paced by the device, interrupted by a
+            // stop, held by a pause and counted by the playback clock exactly as
+            // speech is. Silence written any other way would be audio the clock
+            // never saw, and every boundary after it would fire early.
+            void WriteFrames(short[] buffer)
+            {
+                for (int offset = 0; offset < buffer.Length; offset += blockFrames)
                 {
                     token.ThrowIfCancellationRequested();
                     _unpaused.Wait(token);
 
-                    int count = Math.Min(blockFrames, pcm.Length - offset);
+                    int count = Math.Min(blockFrames, buffer.Length - offset);
                     long before = _sink.WrittenFrames;
-                    _sink.Write(pcm.AsSpan(offset, count));
+                    _sink.Write(buffer.AsSpan(offset, count));
                     clock.AddWritten(_sink.WrittenFrames - before);
 
                     if (!started)
@@ -437,6 +466,39 @@ public sealed class SpeechSession : IDisposable
 
                     if (clock.Update(_sink.LatencyUsec))
                         Release(scheduler, clock);
+                }
+            }
+
+            foreach (var (index, pcm) in rendered.GetConsumingEnumerable(token))
+            {
+                planned.Clear();
+                BoundaryPlanner.PlanChunk(
+                    planned, chunks[index].Text,
+                    TextOffsetMap.Chain(chunks[index].Map, pipelineMap),
+                    sourceBase: startOffset, chunkFrames: pcm.Length, streamStartFrame: streamFrame);
+                scheduler.AddRange(planned);
+                streamFrame += pcm.Length;
+
+                WriteFrames(pcm);
+
+                // The gap the Windows engine writes between chunks, from the same
+                // settings key, so one settings.json paces both platforms alike.
+                //
+                // Counted into streamFrame as well as written, and that is the
+                // half that is easy to omit: the NEXT chunk is planned against
+                // streamFrame, so a gap the planner did not know about would
+                // schedule every subsequent boundary early — by 200 ms after the
+                // first sentence and by a growing multiple of that after the
+                // rest. It would sound perfect and highlight the wrong word,
+                // which is trap 12 exactly.
+                //
+                // Not after the last chunk: that is trailing silence before the
+                // drain, which delays Finished to no end. Windows guards the same
+                // way — it writes the gap only when another chunk follows.
+                if (gap is not null && index + 1 < chunks.Count)
+                {
+                    streamFrame += gap.Length;
+                    WriteFrames(gap);
                 }
             }
 

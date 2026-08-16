@@ -216,6 +216,12 @@ public sealed record StatusPayload(
 /// <param name="PronunciationsFound">False when the file is absent.</param>
 /// <param name="RuleCount">Rules loaded, including disabled ones.</param>
 /// <param name="RulesEnabled">The config-level on/off switch.</param>
+/// <param name="InterChunkSilenceMs">
+/// The gap written between chunks. Reported for the same reason the chunk sizes
+/// are: it is a setting whose effect is audible and whose value is not, so
+/// "is the daemon actually reading my settings.json" needs an answer that is not
+/// "speak something and listen" — which for a timing knob is no answer at all.
+/// </param>
 /// <param name="Notes">Non-fatal problems — an unreadable file, a rule that did not compile.</param>
 public sealed record ConfigPayload(
     string BaseDir,
@@ -231,6 +237,7 @@ public sealed record ConfigPayload(
     int TotalStep,
     int MaxChunkChars,
     int MinChunkChars,
+    int InterChunkSilenceMs,
     IReadOnlyList<string> Notes);
 
 /// <summary>

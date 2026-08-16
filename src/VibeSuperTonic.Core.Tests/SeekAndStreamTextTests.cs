@@ -21,6 +21,14 @@ namespace VibeSuperTonic.Core.Tests;
 /// walks a COM exec plan. What made this cheap instead was
 /// <see cref="BoundaryPlanner.PlanChunk"/> already taking a <c>sourceBase</c>
 /// that nothing had ever passed anything but zero to.</para>
+///
+/// <para><b>The notice on the stream</b> — the third of the same kind, and the
+/// same mistake caught a second time. <c>Notice</c> was built for "Phase 6's tray
+/// tooltip" and then declared on <c>Response</c>, which goes to the client that
+/// sent the request: in the hotkey path that is <c>vst-ctl</c>, printing to a
+/// stderr nobody reads. The tray is a subscriber, not a caller. Fixed the way the
+/// text was: carried on the Preparing transition, where it is already true of the
+/// utterance being started.</para>
 /// </summary>
 public class SeekAndStreamTextTests
 {
@@ -286,4 +294,74 @@ public class SeekAndStreamTextTests
     [Fact]
     public void Snapping_past_the_end_clamps_to_the_length() =>
         Assert.Equal(11, BoundaryPlanner.SnapToWordStart("Alpha beta.", 99));
+
+    // ----------------------------------------- the notice arrives on the stream
+
+    [Fact]
+    public async Task Preparing_carries_the_notice_for_this_utterance()
+    {
+        // The R-9 case: 100 KB of selection came in, some of it was dropped, and
+        // the reading that started is not the whole of what was highlighted.
+        // Speech succeeded, so this is not an error — and a subscriber is the
+        // only reader positioned to say so.
+        const string Notice = "selection truncated at 100 KB (2,338 characters dropped).";
+        var (session, _, log) = Build();
+        using var _s = session;
+
+        session.Speak("The sea is everything.", Voice, notice: Notice);
+        await session.Completion;
+
+        var preparing = Assert.Single(log.Events.Where(e =>
+            e.Kind == SessionEventKind.StateChanged && e.State == SpeechState.Preparing));
+        Assert.Equal(Notice, preparing.Notice);
+    }
+
+    [Fact]
+    public async Task The_notice_rides_on_Preparing_and_on_nothing_else()
+    {
+        // Same discipline as Text, for the same reason: a field repeated on every
+        // event is one a subscriber has to diff to know whether anything changed,
+        // and it says nothing new after the transition it belongs to.
+        var (session, _, log) = Build();
+        using var _s = session;
+
+        session.Speak("First one. Second one.", Voice, notice: "something to say");
+        await session.Completion;
+
+        var carrying = log.Events.Where(e => e.Notice is not null).ToList();
+        var one = Assert.Single(carrying);
+        Assert.Equal(SpeechState.Preparing, one.State);
+    }
+
+    [Fact]
+    public async Task An_utterance_with_nothing_to_report_carries_no_notice()
+    {
+        // The ordinary path, and it must stay clean: a notice that is present but
+        // empty would give a tooltip something to show for every press.
+        var (session, _, log) = Build();
+        using var _s = session;
+
+        session.Speak("The sea is everything.", Voice);
+        await session.Completion;
+
+        Assert.All(log.Events, e => Assert.Null(e.Notice));
+    }
+
+    [Fact]
+    public async Task A_notice_survives_a_seek_restart()
+    {
+        // Restart is what the read verb uses, so the notice has to survive the
+        // hop through it — a parameter added to Speak and forgotten in Restart
+        // would work for `speak` and silently drop it for every hotkey press,
+        // which is the only path that produces a notice in the first place.
+        var (session, _, log) = Build();
+        using var _s = session;
+
+        Assert.True(session.Restart("The sea is everything.", Voice, notice: "captured stale"));
+        await session.Completion;
+
+        var preparing = Assert.Single(log.Events.Where(e =>
+            e.Kind == SessionEventKind.StateChanged && e.State == SpeechState.Preparing));
+        Assert.Equal("captured stale", preparing.Notice);
+    }
 }

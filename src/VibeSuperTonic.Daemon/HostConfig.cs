@@ -36,15 +36,17 @@ namespace VibeSuperTonic.Daemon;
 /// a theoretical one: the portable install on the development machine carries
 /// <c>DspRate: 1.35</c>, and Linux was ignoring it.</para>
 ///
-/// <para><b>Still unread:</b> <c>InterChunkSilenceMs</c>. The Windows engine
-/// writes explicit silence between chunks through the SAPI site; the Linux
-/// session has no equivalent step and inserting one would change chunk timing
-/// and therefore boundary scheduling. Small, audible only as slightly tighter
-/// gaps, and worth doing deliberately rather than as part of this.</para>
+/// <para><b><c>InterChunkSilenceMs</c> is read as of this change</b>, and was
+/// the last Windows key the daemon ignored. The Windows engine writes explicit
+/// silence between chunks through the SAPI site; the Linux session now writes
+/// the same gap through its own sink. It was left out originally because it
+/// changes chunk timing and therefore boundary scheduling — which is exactly why
+/// it landed before Phase 6 rather than during it, so the highlight is verified
+/// once against final timing instead of twice.</para>
 ///
-/// <para>Unknown keys are ignored on read. The daemon never writes this file —
-/// see <see cref="HostConfig"/> — so the round-trip problem that
-/// <c>[JsonExtensionData]</c> solves on the Windows side cannot arise here.</para>
+/// <para><b>Unknown keys survive a read/write cycle</b> — see
+/// <see cref="Extra"/>. The daemon still never writes this file, but Phase 6's
+/// Tune tab does, and the discipline has to exist before the writer does.</para>
 /// </summary>
 public sealed class LinuxSettings
 {
@@ -58,6 +60,17 @@ public sealed class LinuxSettings
     public float SynthesisSilenceSec { get; set; } = 0.3f;
     public int MaxChunkChars { get; set; } = 200;
     public int MinChunkChars { get; set; } = 100;
+
+    /// <summary>
+    /// Silence between one chunk and the next, milliseconds. Default 200,
+    /// matching the Windows engine, so the same file paces both platforms alike.
+    ///
+    /// <para>Real audio in the stream rather than a scheduling hint, so it moves
+    /// every boundary after it — <see cref="SpeechSession"/> counts it into the
+    /// stream position before planning the next chunk. Zero removes the gap
+    /// entirely and runs sentences together.</para>
+    /// </summary>
+    public int InterChunkSilenceMs { get; set; } = 200;
 
     /// <summary>
     /// Read CLIPBOARD when the selection is provably stale. Off by default.
@@ -94,6 +107,30 @@ public sealed class LinuxSettings
     /// <c>reload</c> verb will not move it.</para>
     /// </summary>
     public int MaxCpuPercent { get; set; } = 20;
+
+    /// <summary>
+    /// Every key this type does not declare, carried through unchanged.
+    ///
+    /// <para><b>Landed before the writer, deliberately.</b> The daemon only
+    /// reads, so today this changes nothing — but Phase 6's Tune tab makes the
+    /// UI the second writer of a file that crosses platforms, on the one medium
+    /// where that matters: a portable folder on a USB stick, a dual-boot mount,
+    /// a synced directory. Without this, the first Linux save erases
+    /// <c>UseDirectML</c>, <c>DirectMLDeviceId</c>, <c>OnnxThreads</c>,
+    /// <c>PerVoice</c> and anything a later Windows release adds — silently, with
+    /// every declared property saving perfectly.</para>
+    ///
+    /// <para>This is mechanic 4 of the port plan, which the Windows side already
+    /// carries on <c>EngineSettings</c> in both the engine and the launcher. The
+    /// mechanism it depends on can break invisibly under an SDK bump —
+    /// <c>[JsonExtensionData]</c> is not supported by the source generator's
+    /// fast-serialization path, so the generator must fall back to metadata mode
+    /// for any type declaring it — which is why
+    /// <c>LinuxSettingsRoundTripTests</c> pins it rather than a comment
+    /// mentioning it.</para>
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
 }
 
 [JsonSourceGenerationOptions(ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
@@ -219,7 +256,8 @@ public sealed class HostConfig
                 MaxChunkChars: Settings.MaxChunkChars,
                 MinChunkChars: Settings.MinChunkChars,
                 StretchFactor: stretch,
-                VolumeScale: SpeechRate.VolumeScale(Settings.VolumeTrimDb));
+                VolumeScale: SpeechRate.VolumeScale(Settings.VolumeTrimDb),
+                InterChunkSilenceMs: Math.Max(0, Settings.InterChunkSilenceMs));
 
             Notes = notes;
             _settingsMtime = s;

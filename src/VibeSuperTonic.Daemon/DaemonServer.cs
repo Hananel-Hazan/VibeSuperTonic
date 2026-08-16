@@ -90,6 +90,22 @@ public sealed class DaemonServer : IDisposable
             // ClearStaleSocket and Bind.
             throw new IOException($"could not bind {path}: {ex.Message}", ex);
         }
+        catch (ArgumentException ex)
+        {
+            // A unix socket path is capped at 108 bytes by the kernel, and
+            // $XDG_RUNTIME_DIR is somebody else's variable — a container, a
+            // deeply nested scratch directory, or an su'd session can all make
+            // one long enough to break the cap. Constructing the endpoint throws
+            // ArgumentOutOfRangeException, which is NOT a SocketException, so it
+            // escaped as an unhandled exception: no log line, exit 134 and a core
+            // file, which is what journald and a systemd restart policy would
+            // read as a crash. Same class of failure as the audio device and the
+            // missing models, and the same fix — say what is wrong, in the place
+            // that is read.
+            throw new IOException(
+                $"cannot use {path} as a control socket: {ex.Message} " +
+                "Set $XDG_RUNTIME_DIR to a shorter directory.", ex);
+        }
 
         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
@@ -337,6 +353,7 @@ public sealed class DaemonServer : IDisposable
         _config.Settings.TotalStep,
         _config.Settings.MaxChunkChars,
         _config.Settings.MinChunkChars,
+        _config.Settings.InterChunkSilenceMs,
         _config.Notes);
 
     private StatusPayload Snapshot()
@@ -402,7 +419,12 @@ public sealed class DaemonServer : IDisposable
             request.Voice ?? _options.VoiceOverride,
             request.Language ?? _options.LanguageOverride);
 
-        if (!_session.Restart(text!, options))
+        // The notice goes out on BOTH paths, and they are not redundant. The
+        // response answers this caller — vst-ctl, which prints to a stderr that
+        // in the hotkey path nobody is looking at. The Preparing event reaches
+        // every subscriber, which is where the tray and the Reader tab are, and
+        // is therefore the only one of the two a user actually sees.
+        if (!_session.Restart(text!, options, notice: notice))
             return Refuse($"busy ({_session.State})");
 
         _modelLoaded = true;
@@ -496,7 +518,8 @@ public sealed class DaemonServer : IDisposable
                 // that it was cut is something to say afterwards, not instead.
                 // It is dropped if the speak itself failed, where it would only
                 // dilute the reason.
-                var started = StartSpeaking(selection.Text, request) with { Action = action };
+                var started = StartSpeaking(selection.Text, request, selection.Notice)
+                    with { Action = action };
                 return started.Ok ? started with { Notice = selection.Notice } : started;
 
             case ToggleAction.Stop:
@@ -558,7 +581,12 @@ public sealed class DaemonServer : IDisposable
         return Response.Fail(message);
     }
 
-    private Response StartSpeaking(string text, Request request)
+    /// <param name="notice">
+    /// Carried out on the Preparing event so subscribers see it — see
+    /// <see cref="SessionEvent.Notice"/>. Null for a plain <c>speak</c>, where
+    /// the caller named the text and there is nothing to report about it.
+    /// </param>
+    private Response StartSpeaking(string text, Request request, string? notice = null)
     {
         if (NotReadyToSpeak() is { } refusal) return refusal;
 
@@ -566,7 +594,7 @@ public sealed class DaemonServer : IDisposable
             request.Voice ?? _options.VoiceOverride,
             request.Language ?? _options.LanguageOverride);
 
-        if (!_session.Speak(text, options))
+        if (!_session.Speak(text, options, notice: notice))
         {
             lock (_gateLock) _gate.NoteState(_session.State);
             return Response.Fail($"busy ({_session.State})");
@@ -626,8 +654,10 @@ public sealed class DaemonServer : IDisposable
         }
     }
 
-    private static void Log(string message) =>
-        Console.Error.WriteLine($"[vibesupertonicd] {message}");
+    // Stderr AND data/logs/daemon.log. A daemon started by a hotkey or a
+    // double-click has no terminal, and those are the runs a field report is
+    // written about — see DaemonLog.
+    private static void Log(string message) => DaemonLog.Write(message);
 
     public void Dispose()
     {

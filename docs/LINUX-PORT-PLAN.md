@@ -1,8 +1,9 @@
 # VibeSuperTonic on Mint — port plan
 
-Status: **Phases 0–5 done, committed, and green in CI on both runners. Phases
-6–8 are what is left.** 818 Core tests. Next is [Phase 6](#phase-6), behind a
-short list of seam fixes — see [What to do next](#next).
+Status: **Phases 0–5 done, and the five seam fixes that stood before Phase 6 are
+done too — 2026-08-16.** Phases 6–8 are what is left. 832 Core tests. Next is
+**[8a, the benchmark verb](#phase-8)**, then [Phase 6](#phase-6) — see
+[What to do next](#next).
 
 The completed record — build notes, every measurement, the defect accounts, the
 full review write-ups — is in
@@ -43,7 +44,7 @@ before changing it.
 | **One version for all three binaries** — 2026-08-16 | `vibesupertonicd`, `vibesupertonic-ui` and `vst-ctl` share `<VstVersion>`. The packer **publishes all of them from source in one run and asserts the versions match** — the guard is against a stale binary surviving in an output folder, which is the same hazard the win-x86 and native-ELF assertions already cover |
 | **Configuration is a file, not a verb** | There is deliberately no `config set`: the UI writes `settings.json`, the daemon only reads it, so there is exactly one writer and no concurrency story. The CLI equivalent is editing the file — the daemon picks it up on mtime with nothing sent. Parity above is about *actions*, and this is the one stated exception |
 | **First Linux release is 0.3.0** — 2026-08-16 | `<VstVersion>` is shared so one number produces both artifacts, so the next Windows ZIP is 0.3.0 too — a deliberate jump from 0.2.7.5. Bumped *after* the release ships, per [CLAUDE.md](../CLAUDE.md) |
-| **`InterChunkSilenceMs` is implemented, not dropped** — 2026-08-16 | Windows parity. It changes chunk timing and therefore boundary scheduling, so it lands *before* Phase 6 and the highlight is verified once, not twice |
+| **`InterChunkSilenceMs` is implemented, not dropped** — 2026-08-16 | Windows parity. It changes chunk timing and therefore boundary scheduling, so it landed *before* Phase 6 and the highlight is verified once, not twice. **Built the same day**; the gap is written through the same paced, cancellable, clocked path as speech, and counted into the stream position before the next chunk is planned — which is the half that would otherwise have made every boundary early |
 | **The benchmark is a verb first, a button later** — 2026-08-16 | `vst-ctl benchmark` lands before Phase 6 so it works headless. The Tune tab ships the control disabled with a note, and wiring it is a [Phase 8](#phase-8) exit criterion — the parity rule does not allow a dead button to ship in v1 |
 | **Core takes zero `PackageReference`s** | The DirectML and CPU builds of ORT ship the same managed assembly name with different managed API surfaces. A hard constraint, not a preference — [R-13](#constraints) |
 | **Way 2 is the shipping shape** | Its [gate](#the-gate) opened 2026-08-16 and is deliberately not taken until after v1 |
@@ -67,7 +68,8 @@ before changing it.
 | 4 · Selection capture | **Done 2026-08-16.** PRIMARY capture works, including from a daemon with no `$DISPLAY`; R-9 cap measured; the four-application sweep passes, plus Brave. One documented limit: an in-frame viewer that never claims PRIMARY — `Ctrl+C` then the hotkey. [Record](LINUX-PORT-ARCHIVE.md#phase-4-apps) |
 | 4b · Linux host config | **Done 2026-08-15.** Portable data layout, pronunciation rules applied at last, `reload` + `config`, the DSP stage. One gap left and now scheduled: `InterChunkSilenceMs`. [Record](LINUX-PORT-ARCHIVE.md#phase-4b-built) |
 | 5 · Hotkeys | **Done 2026-08-15, in daily use.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9. [Record](LINUX-PORT-ARCHIVE.md#phase-5-built) |
-| 6 · App + tray | **Next.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes, one topology decision (now taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
+| — · Seam fixes before 6 | **Done 2026-08-16.** All five: notice on the stream, `[JsonExtensionData]`, the daemon log, the PRIMARY measurement (**R-6 does not fire**), `InterChunkSilenceMs`. Plus one crash found while verifying. [The record](#seam-fixes) |
+| 6 · App + tray | **Next after 8a.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
 | 7 · Packaging | Not started. Ships as 0.3.0, and carries a hole worth knowing now: **nothing on Linux can download the models** |
 | 8 · Fit the machine | Not started. Its `benchmark` verb comes *before* Phase 6 — see the decisions table |
 
@@ -75,22 +77,34 @@ before changing it.
 
 ### What to do next, in order
 
-**1 · Five small things, before Phase 6 rather than during it.** The two seams
-that already went in this way — `SessionEvent.Text` and `seek` — are why Phase 6
-has a chance of coming in on estimate. Each of these is an hour or less except
-the last:
+<a name="seam-fixes"></a>
 
-| Fix | Why now |
+**1 · ~~Five small things, before Phase 6 rather than during it.~~ Done
+2026-08-16.** The two seams that went in this way earlier — `SessionEvent.Text`
+and `seek` — are why Phase 6 has a chance of coming in on estimate, and these
+five went in for the same reason. What each turned out to be:
+
+| Fix | Outcome |
 | --- | --- |
-| Put `Notice` on the **event stream**, not only on `Response` | The tray is a subscriber and currently cannot see the two things a notice says about speaking. [Phase 6, fix 1](#phase-6-pass2) |
-| `[JsonExtensionData]` on the Linux settings type | Phase 6 makes the UI the second writer of a file that crosses platforms. Land it before a writer exists, not after. [Phase 6, fix 3](#phase-6-pass2) |
-| Wire the daemon's log to `LinuxDataPaths.LogsDir` | It exists and nothing writes to it. A window is what makes people file reports |
-| Measure whether an Avalonia window claims PRIMARY | Half an hour, and it decides whether [R-6](#constraints) is code or a footnote |
-| `InterChunkSilenceMs` | Decided. It moves boundary timing, so it belongs before the highlight is verified |
+| `Notice` on the **event stream** | Done. Carried on the Preparing transition beside `Text`, where both notices are already true of the utterance being started. `Response.Notice` kept — a scripted caller and a tooltip are different readers. Verified end to end: a 150,000-character PRIMARY selection produces *"reading the first 102,338 and dropping 47,662"* on the stream, which previously reached nobody |
+| `[JsonExtensionData]` on the Linux settings type | Done, before any writer exists. `LinuxSettingsRoundTripTests` pins the mechanism against the daemon's own generator options — which differ from the Windows context's, and the generator decides per context |
+| The daemon's log | Done. `data/logs/daemon.log`, rotated at 4 MB through Core's `LogRotation`, tee'd to stderr. Falls back to `/tmp` on a read-only install and never throws |
+| Does an Avalonia window claim PRIMARY? | **Measured: no.** See [R-6 below](#r-6-measured) — it is now a footnote rather than code, and the topology decision gets cheaper rather than harder |
+| `InterChunkSilenceMs` | Done, and it does move boundary timing — which is why it went first. Measured through the real daemon: sentence boundaries shift by exactly one gap per chunk, source offsets unchanged, no trailing gap |
 
-**2 · `vst-ctl benchmark`** — [Phase 8](#phase-8)'s core, ~1 day, ahead of
-Phase 6 by decision. Headless, works on a server, and Phase 6's Tune tab then
-has something real to be disabled *against*.
+**One crash found while verifying, and fixed.** A `$XDG_RUNTIME_DIR` long enough
+to push the control socket past the kernel's 108-byte cap threw
+`ArgumentOutOfRangeException` out of `Bind` — which is not a `SocketException`,
+so it escaped every handler as an unhandled exception: no log line, exit 134 and
+a core file, which is what journald and a restart policy read as a crash. It now
+takes the same path as every other startup refusal — one sentence naming the
+cause and the fix, logged, exit 1. Same shape as the missing models and the
+unreachable audio server, and the same lesson: the daemon has one honest way to
+fail and everything should use it.
+
+**2 · `vst-ctl benchmark` — this is now next.** [Phase 8](#phase-8)'s core,
+~1 day, ahead of Phase 6 by decision. Headless, works on a server, and Phase 6's
+Tune tab then has something real to be disabled *against*.
 
 **3 · [Phase 6](#phase-6) — app and tray.** The only remaining phase with a
 contingency ladder and the only one whose output a person uses directly — the two
@@ -137,7 +151,7 @@ resolves directly to the folder with no walk-up.
 
 ```bash
 dotnet build VibeSuperTonic.linux.slnx -c Release       # Linux half
-dotnet test  VibeSuperTonic.linux.slnx -c Release       # 818 tests, ~0.7 s
+dotnet test  VibeSuperTonic.linux.slnx -c Release       # 832 tests, ~0.7 s
 
 # Windows half — builds from Linux, but the RID is NOT optional (see trap 2)
 dotnet build src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj  -c Release -r win-x64
@@ -615,7 +629,7 @@ to argue with one.
 | --- | --- | --- |
 | **R-1** | Anything watching the pipeline is a subscriber and never an insider: it consumes `subscribe` and sends the same verbs any external client would | Phase 6. **Structural for the window** — it is a separate process and has no reference to reach for. **Discipline for the tray**, which is inside the daemon and must subscribe anyway |
 | **R-5** | A hotkey with a dead daemon must never be silence — `vst-ctl` auto-starts one and retries inside a 5 s budget. Generalised: **anything the daemon refuses to start for is a hotkey that silently does nothing**, and that set should stay at "the socket is already held" | Phase 6, Phase 7 |
-| **R-6** | The Reader must not steal its own PRIMARY selection and re-read our own window | Phase 6 — measure whether Avalonia claims PRIMARY at all before building anything |
+| **R-6** | ~~The Reader must not steal its own PRIMARY selection and re-read our own window~~ **Measured 2026-08-16: Avalonia never claims PRIMARY, so this cannot happen.** [The measurement](#r-6-measured) | Nothing. The daemon's existing pid check stays as a guard against a future toolkit, and Phase 6 owes it no design |
 | **R-9** | 100 KB selection cap, truncated at a sentence boundary, reporting what was dropped. Built and measured; the tray tooltip that shows it is not | Phase 6 |
 | **R-10** | The estimate has no slack — plan against the top of each range | [Effort](#effort) |
 | **R-11** | X11 grabs (screen lockers, some fullscreen games, open menus) swallow the hotkey. Not fixable, not a bug, and it is documented rather than chased | Done |
@@ -724,7 +738,11 @@ document. Three are seam fixes of about an hour each, one is a decision that
 shapes the whole phase, and two are criteria that cannot currently be met
 because nothing can measure them.
 
-**1 · `Notice` cannot reach the tray, which is the reader it was built for.**
+**1 · ~~`Notice` cannot reach the tray, which is the reader it was built for.~~
+Fixed 2026-08-16** — `SessionEvent.Notice`, on the Preparing transition, in
+`ProtocolJson`, with `ProtocolTests` extended and the end-to-end truncation
+verified through a real daemon. The account below is kept because the *pattern*
+is what matters and it has now happened twice.
 [Protocol.cs](../src/VibeSuperTonic.Core/Ipc/Protocol.cs) says so in as many
 words — *"Phase 6's tray tooltip is the intended reader"* — and then declares it
 a property of `Response`. A response goes to the client that sent the request,
@@ -787,19 +805,23 @@ Three things depended on the answer, and none was a matter of taste:
   hazard does not exist. Inside one it is an ordering problem whose failure mode
   is the daemon vanishing mid-utterance, which is exactly what the handler was
   installed to stop.
-- **[R-6](LINUX-PORT-ARCHIVE.md#r-6) is the argument in the other direction**, and it is the only
+- ~~**[R-6](LINUX-PORT-ARCHIVE.md#r-6) is the argument in the other direction**, and it is the only
   one. Its mechanism compares the selection owner's `_NET_WM_PID` against *our
   own pid*, which works when the window is in this process and silently does
-  nothing when it is not.
+  nothing when it is not.~~ **Void as of the 2026-08-16 measurement**: Avalonia
+  never claims PRIMARY, so there is nothing for the mechanism to detect and
+  nothing the split costs. [The measurement](#r-6-measured).
 
-**What the decision buys.** Two of the three constraints are satisfied for
-free, [R-1](LINUX-PORT-ARCHIVE.md#r-1) is enforced by a process boundary instead
-of by discipline, the 830 MB resident daemon does not also carry a UI toolkit,
-and the exit criterion becomes something you can actually run.
+**What the decision buys.** All three constraints are now satisfied for free,
+[R-1](LINUX-PORT-ARCHIVE.md#r-1) is enforced by a process boundary instead of by
+discipline, the 830 MB resident daemon does not also carry a UI toolkit, and the
+exit criterion becomes something you can actually run.
 
 **What it costs, stated plainly.** One more binary to publish, install and
-version. R-6 needs the UI's pid — one field on a request, or a `hello` verb —
-see conflict 3 below, which needs the same mechanism.
+version. That is the whole list — the R-6 cost that used to sit here was
+measured away. `hello` is still wanted, but for
+[conflict 3](#phase-6-pass2) alone: the daemon cannot currently tell a UI from
+any other subscriber.
 
 <a name="startup"></a>
 
@@ -850,27 +872,54 @@ later:
 3. **The daemon cannot currently tell a UI from any other subscriber.**
    `_subscribers` is keyed by `Guid` and holds only a writer — so "change the
    icon while a UI is attached" is unimplementable, and `vst-ctl subscribe | jq`
-   would look identical to the window. This needs the same client-identity
-   mechanism R-6 wants for the pid, so **build one `hello` and let it serve
-   both**: kind and pid, sent on connect.
+   would look identical to the window. **A `hello` on connect** — kind and pid —
+   is what fixes it. This used to be shared with R-6, which wanted the same pid;
+   R-6 has since [measured away](#r-6-measured), so `hello` now has exactly one
+   customer and should be built no larger than that customer needs.
 
-**3 · Measure whether an Avalonia window claims PRIMARY *before* building
-anything for R-6.** Nobody has checked, on either side of the argument above.
-[Phase 4](LINUX-PORT-ARCHIVE.md#phase-4-built) already records that R-6 has no real test, and that
-Chromium's PRIMARY owner carries neither `WM_CLASS` nor `_NET_WM_PID` — so the
-pid mechanism has a demonstrated blind spot before it has a single user.
-Claiming PRIMARY on selection is a toolkit decision, not an X11 requirement.
-Half an hour with a scratch Avalonia window, a `SelectableTextBlock` and
-`spike/x11-select`'s reader answers it, and the answer is worth having first:
+<a name="r-6-measured"></a>
 
-- **It never claims PRIMARY** → R-6 becomes a note in this document and the
-  phase saves the work.
-- **It claims PRIMARY** → the cheapest fix is probably to stop the Reader
-  claiming it, not to detect it afterwards. Detection is the fallback, and only
-  then does it need the topology decision.
+**3 · ~~Measure whether an Avalonia window claims PRIMARY.~~ Measured
+2026-08-16: it does not. R-6 cannot fire.** The rig is
+[spike/avalonia-primary](../spike/avalonia-primary/Program.cs) — a themeless
+window holding a `SelectableTextBlock`, and a second X connection asking the
+server who owns PRIMARY after each way of selecting.
 
-**4 · The Tune tab makes the UI a second writer of `settings.json`, and none of
-[mechanic 4](#mechanics)'s discipline exists on the Linux side.**
+The owner never moved: not when the window opened, not after `SelectAll()`, not
+after a range selection, not over an eight-second poll. Two independent checks
+agree, which matters because the first one alone would only have covered
+*programmatic* selection:
+
+- **Empirically**, PRIMARY stayed with the window that already held it
+  throughout. (Incidentally that window carried `_NET_WM_PID` and **no**
+  `WM_CLASS` — the blind spot Phase 4 recorded, sitting on the desktop right
+  now.)
+- **In the toolkit**, `Avalonia.X11.dll` interns exactly one selection atom,
+  `CLIPBOARD`, and only the clipboard implementation calls
+  `XSetSelectionOwner`. `XA_PRIMARY` appears solely as one of 69 auto-generated
+  predefined-atom field names, beside `XA_CUT_BUFFER0`–`7`. There is no code
+  path to claim it, so no input path can reach one.
+
+**What this changes.** R-6 becomes a footnote rather than a design constraint,
+and Phase 6 saves the work. The daemon's `OwnerIsThisProcess` stays as it is —
+it costs one property read per capture and is the right guard if a future
+Avalonia starts publishing selections — but nothing depends on it being correct.
+
+**And it removes the one argument against the topology decision.** R-6 was
+listed below as "the argument in the other direction" for keeping the window
+inside the daemon, because its pid mechanism only works in-process. That
+argument is now void: there is nothing to detect. The split was already decided
+on stronger grounds; it now costs nothing at all.
+
+**4 · ~~The Tune tab makes the UI a second writer of `settings.json`, and none of
+[mechanic 4](#mechanics)'s discipline exists on the Linux side.~~ Fixed
+2026-08-16** — `[JsonExtensionData]` on `LinuxSettings`, plus
+`LinuxSettingsRoundTripTests`, which pins the daemon's own generator options
+rather than reusing the Windows test: the generator's fast-path decision is made
+per context, so a context that round-trips unknown keys is no evidence about
+another one. Verified against a real `settings.json` carrying `UseDirectML`,
+`OnnxThreads` and `PerVoice` through a daemon read. The reasoning below still
+stands as the reason it was done first.
 [HostConfig.cs](../src/VibeSuperTonic.Daemon/HostConfig.cs) is explicit: *"The
 daemon never writes this file … so the round-trip problem that
 `[JsonExtensionData]` solves on the Windows side cannot arise here."* True today,
@@ -1084,13 +1133,19 @@ from a terminal, which is not how a user starts it. The Windows side has
 `DiagLog` and Core already carries `LogRotation`, so this is wiring rather than
 new code, and it is what a field report will need. Not done here.
 
-**Move this one earlier — 2026-08-16.** `LinuxDataPaths.LogsDir` exists and
-still nothing writes to it. It is listed here because packaging is when a
-product meets strangers, but the *first* stranger arrives with Phase 6: a window
-is what makes people try things, and a GUI-launched daemon is exactly the run
-that leaves no trace. It is an hour of wiring against code Core already has, and
-it should land with [the next three things](#next) rather than two phases
-later.
+**~~Move this one earlier — 2026-08-16.~~ Done 2026-08-16.**
+[DaemonLog](../src/VibeSuperTonic.Daemon/DaemonLog.cs) writes
+`data/logs/daemon.log` — same directory the Windows side uses, so a portable
+folder used on both has one place to look — rotated at 4 MB through Core's
+`LogRotation`, tee'd to stderr so a terminal-launched daemon is unchanged, and
+falling back to `/tmp` when the install is read-only (a case Phase 4b measured).
+It never throws: a logging failure must not become the user's failure.
+
+It earned its keep the same day. Two of the failures it now records — "another
+vibesupertonicd is already listening", which is the double-click case above, and
+the socket-path crash found while verifying — were produced during that
+verification, and both had previously gone to a stderr nobody would have
+kept.
 
 #### Three more, found 2026-08-16
 
@@ -1384,15 +1439,22 @@ phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
 | 1 · Extract Core | 2–3 | **done, verified on Windows** | R-2 fix, R-14 fix (×2), R-3 tests, R-12 |
 | 2 · Audio + playback clock | 1 | **done, verified on Windows** | R-7 |
 | 3 · Daemon + IPC | 1–2 | **done** | R-1, R-5, R-8, toggle state machine |
-| 4 · Selection capture | 0.5 | **done** | R-6 (untestable until Phase 6), R-9 |
+| 4 · Selection capture | 0.5 | **done** | R-6 (since measured away), R-9 |
 | 4b · Linux host config | 0.5–1 | **done** | pronunciation parity, the settings verb, portable data layout |
 | 5 · Hotkeys | 0.25 | **done** | R-4 (toggle), R-11 |
-| — · Seam fixes, before 6 | 0.5 | **next** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the list](#next) |
-| 8a · `vst-ctl benchmark`, before 6 | 1 | not started | the sweep, the profile format, the verb. Split out by decision |
-| 6 · App + tray | 3–4 | not started | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip, the settings writer's round-trip discipline |
+| — · Seam fixes, before 6 | 0.5 | **done, on estimate** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the record](#seam-fixes) |
+| 8a · `vst-ctl benchmark`, before 6 | 1 | **next** | the sweep, the profile format, the verb. Split out by decision |
+| 6 · App + tray | 3–4 | not started | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip. **Less R-6**, which measured away |
 | 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, three binaries |
 | 8b · Fit the machine, the rest | 0.5 + spike | not started | battery rule, wiring the Tune control; GPU is a gated spike, not in the estimate |
-| **Remaining** | **6.5–8** | | |
+| **Remaining** | **6–7.5** | | |
+
+**The seam fixes came in on their half day**, and the reason is the one Phases 2
+and 3 already demonstrated: new code against interfaces that already existed,
+with nothing to discover about someone else's machine. The one surprise was not
+in the fixes but in verifying them — a crash reachable through
+`$XDG_RUNTIME_DIR`, found because a scratch directory happened to have a long
+path, which is the shape of thing no amount of reading the code produces.
 
 **Phase 1 ran well past the top of its range**, and it is worth knowing where the
 time went: not the extraction, which was mostly mechanical, but four Windows

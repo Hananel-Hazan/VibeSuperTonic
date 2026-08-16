@@ -108,6 +108,35 @@ public sealed record SessionEvent
     /// <summary>Set on <see cref="SessionEventKind.Error"/>.</summary>
     public string? Message { get; init; }
 
+    /// <summary>
+    /// Something the user should know about this utterance, which nonetheless
+    /// started normally. Rides on the <see cref="SpeechState.Preparing"/>
+    /// transition beside <see cref="Text"/>, and is null the rest of the time.
+    ///
+    /// <para><b>Why it is here and not only on <c>Response.Notice</c>.</b> A
+    /// response goes to the client that sent the request, and in the hotkey path
+    /// that client is <c>vst-ctl</c> — which prints to a stderr nobody is
+    /// looking at and exits. So the two things a notice says about
+    /// <em>speaking</em> — an R-9 truncation, and a selection that never changed
+    /// — reached nobody who could show them to the user. The tray is not a
+    /// caller, it is a subscriber, and a subscriber had no way to see them at
+    /// all.</para>
+    ///
+    /// <para>Preparing for the same reason <see cref="Text"/> is: both notices
+    /// are properties of the utterance being started, it is the one transition
+    /// where they change, and it arrives with the ~28 ms acknowledgement rather
+    /// than the ~750 ms first audio — so a tooltip can carry it before the first
+    /// word is heard.</para>
+    ///
+    /// <para><c>Response.Notice</c> stays as well rather than being replaced. A
+    /// scripted caller wants the answer to its own request; the tray wants
+    /// whatever is true of the utterance now. They are genuinely different
+    /// readers, and the config notices — a malformed <c>settings.json</c>, an
+    /// unwritable data directory — ride on the <c>config</c> response only,
+    /// because they are not about an utterance at all.</para>
+    /// </summary>
+    public string? Notice { get; init; }
+
     public static SessionEvent Of(SessionEventKind kind) => new() { Kind = kind };
 
     public static SessionEvent Of(SpeechState state) =>
@@ -115,14 +144,16 @@ public sealed record SessionEvent
 
     /// <summary>
     /// The one state change that carries what is about to be spoken. See
-    /// <see cref="Text"/> for why it is this transition and only this one.
+    /// <see cref="Text"/> for why it is this transition and only this one, and
+    /// <see cref="Notice"/> for why the notice rides here too.
     /// </summary>
-    public static SessionEvent Preparing(string text, int startOffset) => new()
+    public static SessionEvent Preparing(string text, int startOffset, string? notice = null) => new()
     {
         Kind = SessionEventKind.StateChanged,
         State = SpeechState.Preparing,
         Text = text,
         SourceOffset = startOffset,
+        Notice = notice,
     };
 
     public static SessionEvent Error(string message) =>

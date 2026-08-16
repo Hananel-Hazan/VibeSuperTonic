@@ -26,5 +26,6 @@
     <Project Path="spike/linux-play/LinuxPlay.csproj" />
     <Project Path="spike/x11-select/X11Own.csproj" />
     <Project Path="spike/x11-freshness/SelCheck.csproj" />
+    <Project Path="spike/avalonia-primary/AvaPrimary.csproj" />
   </Folder>
 </Solution>

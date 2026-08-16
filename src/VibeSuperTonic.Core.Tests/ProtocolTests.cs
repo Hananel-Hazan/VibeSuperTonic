@@ -213,11 +213,29 @@ public class ProtocolTests
                 DataDirWritable: true, SettingsFound: true, PronunciationsFound: false,
                 RuleCount: 2, RulesEnabled: true, Voice: "M1", Language: "en",
                 TotalStep: 8, MaxChunkChars: 200, MinChunkChars: 100,
+                InterChunkSilenceMs: 200,
                 Notes: new[] { "a note" }),
         });
         Assert.Contains("DataDir", config, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("/opt/vst/models", config, StringComparison.Ordinal);
         Assert.Contains("a note", config, StringComparison.Ordinal);
+
+        // SessionEvent.Notice — a new property on a type the context already
+        // knows, which is the quieter half of the same trap. It cannot throw the
+        // way an unknown type does; it simply does not appear on the wire, so the
+        // tray shows nothing and there is no error anywhere to explain it.
+        string prepared = Protocol.Encode(
+            SessionEvent.Preparing("The sea is everything.", 0, "selection truncated at 100 KB."));
+        Assert.Contains("Notice", prepared, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("truncated", prepared, StringComparison.Ordinal);
+
+        var back = Protocol.TryDecode<SessionEvent>(prepared);
+        Assert.Equal("selection truncated at 100 KB.", back!.Notice);
+
+        // And absent when there is nothing to say — WhenWritingNull is what keeps
+        // the stream readable with jq.
+        Assert.DoesNotContain("Notice",
+            Protocol.Encode(SessionEvent.Preparing("Hello.", 0)), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

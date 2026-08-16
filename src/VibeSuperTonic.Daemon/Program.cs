@@ -76,6 +76,13 @@ string modelsRoot = string.IsNullOrWhiteSpace(modelsArg)
     ? LinuxDataPaths.DefaultModelsDir
     : Path.GetFullPath(modelsArg);
 
+// Before anything worth logging happens, and after the data directory is known
+// — which is the earliest either can be true. Everything below goes to
+// data/logs/daemon.log as well as stderr, because a daemon started by a hotkey
+// or a double-click has no terminal to print to and those are precisely the runs
+// a user files a report about.
+DaemonLog.Initialize(dataDir);
+
 // Load whatever the last usage left in the folder, before anything can speak.
 // This is the "first run picks up where it left off" half of being portable:
 // with no config read, a portable install spoke with built-in defaults and
@@ -83,14 +90,14 @@ string modelsRoot = string.IsNullOrWhiteSpace(modelsArg)
 var config = new HostConfig(dataDir, modelsRoot);
 config.Reload(force: true);
 
-Console.Error.WriteLine($"[vibesupertonicd] data {dataDir}{(config.Writable ? "" : " (read-only)")}");
+DaemonLog.Write($"data {dataDir}{(config.Writable ? "" : " (read-only)")}");
 foreach (string note in config.Notes)
-    Console.Error.WriteLine($"[vibesupertonicd] {note}");
+    DaemonLog.Write(note);
 
 if (!Directory.Exists(Path.Combine(modelsRoot, "onnx")))
 {
-    Console.Error.WriteLine(
-        $"[vibesupertonicd] no onnx/ under {modelsRoot} — starting anyway; " +
+    DaemonLog.Write(
+        $"no onnx/ under {modelsRoot} — starting anyway; " +
         "speech will fail until the models are downloaded. " +
         "Pass --models <dir> or set VST_MODELS if they are elsewhere.");
 }
@@ -112,8 +119,8 @@ var options = new DaemonOptions(voice, language, Version: version);
 // the desktop stutter for the length of each read. Startup-only: ORT builds the
 // thread pool with the session, so `reload` cannot move it.
 int intraOp = CpuBudget.IntraOpThreads(config.Settings.MaxCpuPercent, Environment.ProcessorCount);
-Console.Error.WriteLine(
-    $"[vibesupertonicd] inference threads {(intraOp == CpuBudget.Auto ? "auto" : intraOp.ToString())} " +
+DaemonLog.Write(
+    $"version {version}, inference threads {(intraOp == CpuBudget.Auto ? "auto" : intraOp.ToString())} " +
     $"of {Environment.ProcessorCount} ({config.Settings.MaxCpuPercent}% budget)");
 
 using ISynthesizer synth = new CpuSynthesizer(modelsRoot, intraOpThreads: intraOp);
@@ -167,7 +174,7 @@ try
 }
 catch (IOException ex)
 {
-    Console.Error.WriteLine($"[vibesupertonicd] {ex.Message}");
+    DaemonLog.Write(ex.Message);
     return 1;
 }
 
@@ -176,5 +183,5 @@ try { await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* 
 
 foreach (var registration in signals) registration.Dispose();
 
-Console.Error.WriteLine("[vibesupertonicd] stopped");
+DaemonLog.Write("stopped");
 return 0;
