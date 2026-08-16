@@ -76,4 +76,20 @@ public interface IAudioSink : IDisposable
     /// <see cref="PlaybackClock.Drained"/>.
     /// </summary>
     void Drain();
+
+    /// <summary>
+    /// False once the device has gone away underneath us. Cheap enough to ask
+    /// before every utterance, and meant to be asked exactly there.
+    ///
+    /// <para><b>Why a probe and not just a failed write.</b> Catching the write
+    /// failure is enough to <em>recover</em>, but only on the press after the one
+    /// that broke — the user presses, hears nothing, presses again, and it works.
+    /// That is a hotkey people describe as unreliable. Asking first is what makes
+    /// the first press after an audio-server restart work like any other.</para>
+    ///
+    /// <para>Defaulted to <c>true</c> so a sink that genuinely cannot go away —
+    /// a fake, a file writer — implements nothing. Only a sink with a live
+    /// connection to something else has an answer worth giving.</para>
+    /// </summary>
+    bool IsAlive => true;
 }

@@ -1,7 +1,8 @@
 # VibeSuperTonic on Mint — port plan
 
-Status: **Phases 0–5 done, and the five seam fixes that stood before Phase 6 are
-done too — 2026-08-16.** Phases 6–8 are what is left. 832 Core tests. Next is
+Status: **Phases 0–5 done, the five seam fixes that stood before Phase 6 are
+done, and a field defect that made the daemon go permanently silent is fixed —
+2026-08-16.** Phases 6–8 are what is left. 844 Core tests. Next is
 **[8a, the benchmark verb](#phase-8)**, then [Phase 6](#phase-6) — see
 [What to do next](#next).
 
@@ -68,6 +69,7 @@ before changing it.
 | 4 · Selection capture | **Done 2026-08-16.** PRIMARY capture works, including from a daemon with no `$DISPLAY`; R-9 cap measured; the four-application sweep passes, plus Brave. One documented limit: an in-frame viewer that never claims PRIMARY — `Ctrl+C` then the hotkey. [Record](LINUX-PORT-ARCHIVE.md#phase-4-apps) |
 | 4b · Linux host config | **Done 2026-08-15.** Portable data layout, pronunciation rules applied at last, `reload` + `config`, the DSP stage. One gap left and now scheduled: `InterChunkSilenceMs`. [Record](LINUX-PORT-ARCHIVE.md#phase-4b-built) |
 | 5 · Hotkeys | **Done 2026-08-15, in daily use.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9. [Record](LINUX-PORT-ARCHIVE.md#phase-5-built) |
+| — · Audio-device loss | **Fixed 2026-08-16.** A daemon whose audio server restarted stayed silent forever, invisibly. Detected, recovered and logged. [The record](#audio-loss) |
 | — · Seam fixes before 6 | **Done 2026-08-16.** All five: notice on the stream, `[JsonExtensionData]`, the daemon log, the PRIMARY measurement (**R-6 does not fire**), `InterChunkSilenceMs`. Plus one crash found while verifying. [The record](#seam-fixes) |
 | 6 · App + tray | **Next after 8a.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
 | 7 · Packaging | Not started. Ships as 0.3.0, and carries a hole worth knowing now: **nothing on Linux can download the models** |
@@ -76,6 +78,65 @@ before changing it.
 <a name="next"></a>
 
 ### What to do next, in order
+
+<a name="audio-loss"></a>
+
+**0 · A daemon that lost its audio device stayed lost — fixed 2026-08-16.**
+Found in daily use, not in a test, and it is the most consequential defect the
+Linux side has had.
+
+The daemon opened its PulseAudio stream once and assumed it would live as long
+as the process. PipeWire restarted forty minutes after it started, and **every
+press for the next five hours did nothing at all.** Everything looked healthy:
+`status` answered, `config` answered, `speak` was accepted and acknowledged with
+`read: speak`. The write then failed on a worker thread with *"pa_simple_write
+failed: Connection terminated"*, reported as an `Error` on the event stream —
+which nothing subscribes to yet — and logged nowhere.
+
+**Where the assumption came from.** It is inherited from the Windows engine,
+where it is true and harmless: a SAPI engine lives as long as its host, which is
+one utterance to a few minutes. `LazyAudioSink`'s own documentation carried it
+forward in as many words — *"once the device opens it stays open for the life of
+the process"* — into a process designed to run for a week. **This is the general
+hazard of the port**: Core is shared, so a Windows lifetime assumption travels to
+Linux silently and expires there.
+
+It is also [R-5](LINUX-PORT-ARCHIVE.md#r-5) arriving through an unwatched door.
+That rule reads *anything the daemon refuses to start for is a hotkey that
+silently does nothing*; this daemon did not refuse anything. It started,
+accepted, acknowledged, and could not speak. **The rule should be read as:
+anything that makes a press produce no sound must be visible somewhere a person
+will look.**
+
+| Part | Fix |
+| --- | --- |
+| Distinguish loss from other failures | `AudioDeviceLostException`. Only device loss reconnects — treating every write failure as loss would turn a permanently-rejecting sink into an unbounded reconnect loop |
+| Detect it *before* an utterance | `IAudioSink.IsAlive`, defaulted to true, implemented by `PulseAudioSink` via `pa_simple_get_latency`. `TryOpen` verifies a cached device instead of trusting it — this is what makes the **first** press after a restart work rather than the second |
+| Recover | `LazyAudioSink` drops the dead sink and reopens on the next request. **Between utterances, never inside one**: a fresh stream has written nothing while the clock and every scheduled boundary are counted against the old one, so resuming mid-utterance would desynchronise the highlight permanently — [trap 12](#where-to-pick-up) |
+| Make it visible | The daemon logs both the reconnect and — new, and the reason this hid for five hours — **every `Error` event**, which previously went only to an empty room |
+| Survive shutdown | `LazyAudioSink.Dispose` guards the inner dispose. Logout tears down PipeWire and its clients together, so closing a stream whose server has already gone is the *ordinary* exit path. Found by a test, not by reasoning |
+
+**Verified by A/B against a real stream loss**, destroying only the daemon's own
+PipeWire node so nothing else on the desktop is disturbed:
+
+```
+                        pre-fix        fixed
+baseline                SPOKE          SPOKE
+first press after loss  FAILED         SPOKE
+second press            FAILED         SPOKE
+first press after loss  FAILED         SPOKE
+logged                  nothing        "audio device was lost — reopened"
+```
+
+**Two lessons about the harness, both paid for during this fix.** The first
+version of the stress test restarted `pipewire`/`pipewire-pulse`/`wireplumber`,
+which takes down *every* application's audio, not just ours — destroying the one
+node is both surgical and a better reproduction. The second used `pkill -f`
+patterns that matched neither the relatively-launched daemon nor anything else,
+so a previous daemon kept the socket and answered on behalf of the build under
+test: **both builds reported identical results and the fix nearly passed as
+verified against a daemon that did not contain it.** Launch by absolute path,
+kill by `/proc/<pid>/exe`, and distrust an A/B whose two halves agree.
 
 <a name="seam-fixes"></a>
 
@@ -151,7 +212,7 @@ resolves directly to the folder with no walk-up.
 
 ```bash
 dotnet build VibeSuperTonic.linux.slnx -c Release       # Linux half
-dotnet test  VibeSuperTonic.linux.slnx -c Release       # 832 tests, ~0.7 s
+dotnet test  VibeSuperTonic.linux.slnx -c Release       # 844 tests, ~0.7 s
 
 # Windows half — builds from Linux, but the RID is NOT optional (see trap 2)
 dotnet build src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj  -c Release -r win-x64

@@ -50,6 +50,7 @@ public sealed class PulseAudioSink : IAudioSink
     private IntPtr _handle;
     private long _written;
     private volatile bool _flushRequested;
+    private volatile bool _lost;
 
     /// <param name="sampleRate">Frames per second; 44100 for this model.</param>
     /// <param name="streamName">What shows up in a volume mixer next to the level slider.</param>
@@ -120,6 +121,43 @@ public sealed class PulseAudioSink : IAudioSink
     public long WrittenFrames => _written;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para>Two sources, and the cheap one first. Once a native call has failed
+    /// the answer is remembered, because a stream whose server has gone does not
+    /// come back — <c>pa_simple</c> has no reconnect and the handle is only good
+    /// for <c>pa_simple_free</c> afterwards.</para>
+    ///
+    /// <para>Otherwise it asks, with <c>pa_simple_get_latency</c>. That is the
+    /// least invasive call in the API — it writes nothing, blocks on nothing,
+    /// and is already made several times a second by the playback clock — and on
+    /// a terminated connection it fails, which is exactly the signal wanted.
+    /// <see cref="LatencyUsec"/> deliberately swallows that failure because a
+    /// missed clock sample must not end an utterance; this asks the same question
+    /// and keeps the answer.</para>
+    /// </remarks>
+    public unsafe bool IsAlive
+    {
+        get
+        {
+            if (_lost || _handle == IntPtr.Zero) return false;
+
+            int error = 0;
+            ulong usec = PulseNative.pa_simple_get_latency(_handle, &error);
+            if (error == 0 && usec != ulong.MaxValue) return true;
+
+            _lost = true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Why the device is considered gone, or null while it is fine. Set when a
+    /// native call first fails, so the reason survives to be logged rather than
+    /// being re-derived from a second, less informative failure.
+    /// </summary>
+    public string? LostReason { get; private set; }
+
+    /// <inheritdoc/>
     public unsafe long LatencyUsec
     {
         get
@@ -174,9 +212,7 @@ public sealed class PulseAudioSink : IAudioSink
                 rc = PulseNative.pa_simple_write(_handle, p, (nuint)(count * sizeof(short)), &error);
             }
 
-            if (rc < 0)
-                throw new InvalidOperationException(
-                    $"pa_simple_write failed: {PulseNative.Describe(error)}");
+            if (rc < 0) throw Lost("pa_simple_write", error);
 
             // Counted only after the write is accepted. A partial or failed
             // write that still advanced this would make the clock believe the
@@ -217,9 +253,27 @@ public sealed class PulseAudioSink : IAudioSink
         if (_handle == IntPtr.Zero) return;
 
         int error = 0;
-        if (PulseNative.pa_simple_drain(_handle, &error) < 0)
-            throw new InvalidOperationException(
-                $"pa_simple_drain failed: {PulseNative.Describe(error)}");
+        if (PulseNative.pa_simple_drain(_handle, &error) < 0) throw Lost("pa_simple_drain", error);
+    }
+
+    /// <summary>
+    /// Record the device as gone and produce the exception that says so.
+    ///
+    /// <para><b>Every <c>pa_simple</c> write/drain failure is treated as loss</b>,
+    /// which is broader than it strictly has to be and is the right trade.
+    /// <c>pa_simple</c> is a blocking convenience wrapper with no reconnect and
+    /// no way to resynchronise a stream it has given up on, so there is no
+    /// failure it reports here that leaves the handle usable. The cost of being
+    /// wrong is one reconnect that was not needed; the cost of the other
+    /// direction is the bug this replaces — a stream that is dead forever and
+    /// says nothing.</para>
+    /// </summary>
+    private AudioDeviceLostException Lost(string call, int error)
+    {
+        string reason = PulseNative.Describe(error);
+        _lost = true;
+        LostReason = reason;
+        return new AudioDeviceLostException($"{call} failed: {reason}");
     }
 
     public void Dispose()

@@ -51,11 +51,32 @@ public sealed class FakeSink : IAudioSink
     public int WriteCount { get; private set; }
     public bool Disposed { get; private set; }
 
+    /// <summary>
+    /// Pull the device out from under the writer, the way an audio-server restart
+    /// does. Every subsequent <see cref="Write"/> and <see cref="Drain"/> throws
+    /// <see cref="AudioDeviceLostException"/> and <see cref="IsAlive"/> goes
+    /// false — which is precisely what pa_simple does once its connection is
+    /// terminated.
+    /// </summary>
+    public void LoseDevice() => IsAlive = false;
+
+    /// <inheritdoc/>
+    public bool IsAlive { get; private set; } = true;
+
+    /// <summary>
+    /// Fail the next <see cref="Write"/> with something that is NOT device loss,
+    /// so tests can check that ordinary failures do not trigger a reconnect.
+    /// </summary>
+    public Exception? ThrowOnWrite { get; set; }
+
     public long LatencyUsec =>
         _written == 0 ? 0 : Math.Min(_written, BufferFrames) * 1_000_000L / SampleRate;
 
     public void Write(ReadOnlySpan<short> pcm)
     {
+        if (!IsAlive) throw new AudioDeviceLostException("fake write failed: Connection terminated");
+        if (ThrowOnWrite is { } boom) throw boom;
+
         if (_flushRequested) { Flush(); throw new OperationCanceledException("flushed"); }
 
         if (BlockAfterFrames is long n && _written >= n)
@@ -81,7 +102,11 @@ public sealed class FakeSink : IAudioSink
         FlushCount++;
     }
 
-    public void Drain() => DrainCount++;
+    public void Drain()
+    {
+        if (!IsAlive) throw new AudioDeviceLostException("fake drain failed: Connection terminated");
+        DrainCount++;
+    }
 
     public void Dispose()
     {

@@ -564,8 +564,21 @@ public sealed class DaemonServer : IDisposable
         // The message carries libpulse's own reason rather than a generic one:
         // "Connection refused" and "No such entity" send the reader somewhere
         // different, and this is the first thing a field report needs.
-        if (_sink is not null && !_sink.TryOpen(out string? audioError))
-            return Refuse($"no audio device available: {audioError}");
+        if (_sink is not null)
+        {
+            int before = _sink.Reconnects;
+            if (!_sink.TryOpen(out string? audioError))
+                return Refuse($"no audio device available: {audioError}");
+
+            // TryOpen verifies a cached device rather than trusting it, so this
+            // is where an audio-server restart is noticed — before the utterance
+            // that would otherwise have died on it. Logged because a daemon that
+            // silently healed is indistinguishable from one that never broke, and
+            // the difference is the whole content of a field report.
+            if (_sink.Reconnects != before)
+                Log($"audio device was lost ({_sink.LastLoss}) — reopened, " +
+                    $"{_sink.Reconnects} time(s) this run");
+        }
 
         return null;
     }
@@ -613,6 +626,15 @@ public sealed class DaemonServer : IDisposable
             if (e.Kind == SessionEventKind.StateChanged && e.State is { } state)
                 _gate.NoteState(state);
         }
+
+        // An utterance that failed is the single most useful line this daemon can
+        // write, and until now it was written nowhere. It went to the event
+        // stream and stopped there — and nothing subscribes to that yet, so the
+        // one report of "the audio device died five hours ago" was delivered to
+        // an empty room. The dead-stream defect survived exactly that long
+        // because of this.
+        if (e.Kind == SessionEventKind.Error)
+            Log($"utterance failed: {e.Message}");
 
         if (_subscribers.IsEmpty) return;
 

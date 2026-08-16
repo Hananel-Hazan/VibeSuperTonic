@@ -21,10 +21,25 @@ namespace VibeSuperTonic.Core.Audio;
 /// case. The daemon should start, answer <c>status</c>, <c>config</c> and
 /// <c>subscribe</c>, and fail <c>speak</c> with a sentence naming the cause.</para>
 ///
-/// <para>Deferring rather than retrying-forever is deliberate. Once the device
-/// opens it stays open for the life of the process, exactly as before — this
-/// changes <em>when</em> the sink is created and nothing about how it behaves
-/// afterwards.</para>
+/// <para><b>And it reopens a device that went away — added after the field found
+/// the gap.</b> This class used to say that once the device opened it stayed
+/// open for the life of the process, "exactly as before". That was inherited
+/// from the Windows engine, where it is true and harmless: a SAPI engine lives
+/// as long as its host, which is one utterance to a few minutes. This daemon
+/// holds its stream for the whole login session, and on a PipeWire desktop the
+/// audio server restarts routinely — so the assumption expires, quietly, and
+/// takes the product with it.</para>
+///
+/// <para>Measured in the field 2026-08-16: an audio-server restart forty minutes
+/// after the daemon started left every subsequent press doing exactly nothing for
+/// five hours. <c>status</c> answered, <c>config</c> answered, <c>speak</c> was
+/// accepted — and the write failed on a worker thread whose only report was an
+/// <c>Error</c> event on a stream nothing subscribes to yet. This is the R-5
+/// failure shape arriving through a door nobody had watched: not a daemon that
+/// refuses to start, but one that starts, accepts, and silently cannot.</para>
+///
+/// <para><b>Recovery is between utterances, never inside one.</b> See
+/// <see cref="Write"/>.</para>
 /// </summary>
 public sealed class LazyAudioSink : IAudioSink
 {
@@ -33,6 +48,7 @@ public sealed class LazyAudioSink : IAudioSink
 
     private IAudioSink? _inner;
     private bool _disposed;
+    private int _reconnects;
 
     /// <param name="sampleRate">
     /// What the sink will be opened with. Declared up front because
@@ -61,6 +77,32 @@ public sealed class LazyAudioSink : IAudioSink
     public bool IsOpen { get { lock (_gate) return _inner is not null; } }
 
     /// <summary>
+    /// How many times the device has been reopened after being lost. Zero on a
+    /// machine whose audio server has not restarted, which is what makes it worth
+    /// reporting: a non-zero count in a field report says the daemon has already
+    /// survived something, and turns "it stopped working once" into a fact.
+    /// </summary>
+    public int Reconnects { get { lock (_gate) return _reconnects; } }
+
+    /// <summary>
+    /// Why the device was last lost, or null if it never has been. Kept after a
+    /// successful reopen — the interesting question is what happened, not whether
+    /// it is happening right now.
+    /// </summary>
+    public string? LastLoss { get; private set; }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Answers for the inner sink, and answers <c>true</c> before anything is
+    /// open: nothing has been lost yet, and the caller's next step is
+    /// <see cref="TryOpen"/> either way.
+    /// </remarks>
+    public bool IsAlive
+    {
+        get { lock (_gate) return _inner is null || _inner.IsAlive; }
+    }
+
+    /// <summary>
     /// Open the device if it is not open already, reporting why not rather than
     /// throwing.
     ///
@@ -69,6 +111,13 @@ public sealed class LazyAudioSink : IAudioSink
     /// rather than once, because an audio server that was down when the daemon
     /// started may well be up by the time anyone speaks — the same reasoning that
     /// makes the model-directory check per-request.</para>
+    ///
+    /// <para><b>A cached sink is verified, not assumed.</b> Returning true because
+    /// something was opened once is what let a dead stream survive for five hours;
+    /// the device is asked whether it is still there, and a sink that says no is
+    /// dropped here and reopened before the caller ever writes to it. That is what
+    /// makes the <em>first</em> press after an audio-server restart work rather
+    /// than the second.</para>
     /// </summary>
     /// <returns>False if the device could not be opened; <paramref name="error"/> says why.</returns>
     public bool TryOpen(out string? error)
@@ -77,7 +126,11 @@ public sealed class LazyAudioSink : IAudioSink
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (_inner is not null) { error = null; return true; }
+            if (_inner is not null)
+            {
+                if (_inner.IsAlive) { error = null; return true; }
+                DropLocked("the audio device went away");
+            }
 
             try
             {
@@ -106,6 +159,27 @@ public sealed class LazyAudioSink : IAudioSink
         }
     }
 
+    /// <summary>
+    /// Let go of a sink that is gone, so the next <see cref="TryOpen"/> builds a
+    /// new one. Call under <see cref="_gate"/>.
+    /// </summary>
+    /// <remarks>
+    /// Dispose is inside the try because it goes through the same dead handle
+    /// that just failed. <c>pa_simple_free</c> on a terminated stream is fine,
+    /// but "the cleanup of a failure throws and replaces the failure" is a
+    /// mechanism worth denying outright rather than reasoning about per
+    /// implementation.
+    /// </remarks>
+    private void DropLocked(string reason)
+    {
+        if (_inner is null) return;
+
+        try { _inner.Dispose(); } catch { /* it is already gone; that is the point */ }
+        _inner = null;
+        _reconnects++;
+        LastLoss = reason;
+    }
+
     private IAudioSink Opened()
     {
         lock (_gate)
@@ -131,7 +205,33 @@ public sealed class LazyAudioSink : IAudioSink
     public long LatencyUsec { get { lock (_gate) return _inner?.LatencyUsec ?? 0; } }
 
     /// <inheritdoc/>
-    public void Write(ReadOnlySpan<short> pcm) => Opened().Write(pcm);
+    /// <remarks>
+    /// <para><b>A device lost mid-utterance ends that utterance</b>, and the next
+    /// one reconnects. Reconnecting here instead is tempting and wrong: a fresh
+    /// stream starts at zero written frames with no buffered audio, while
+    /// <see cref="PlaybackClock"/> and every boundary already scheduled are
+    /// counted against the old one. The speech would resume and the highlight
+    /// would be permanently wrong — which sounds perfect, and is the failure
+    /// class every offset defect in this repository belongs to.</para>
+    ///
+    /// <para>So the exception propagates, the session reports <c>Error</c> and
+    /// returns to Idle, and the sink is dropped on the way out. The user presses
+    /// again and it works. One lost utterance at the moment the audio server
+    /// restarted is a fair price and an honest one.</para>
+    /// </remarks>
+    public void Write(ReadOnlySpan<short> pcm)
+    {
+        var sink = Opened();
+        try
+        {
+            sink.Write(pcm);
+        }
+        catch (AudioDeviceLostException ex)
+        {
+            lock (_gate) { if (ReferenceEquals(_inner, sink)) DropLocked(ex.Message); }
+            throw;
+        }
+    }
 
     /// <inheritdoc/>
     public void Flush() { lock (_gate) _inner?.Flush(); }
@@ -140,7 +240,26 @@ public sealed class LazyAudioSink : IAudioSink
     public void RequestFlush() { lock (_gate) _inner?.RequestFlush(); }
 
     /// <inheritdoc/>
-    public void Drain() { lock (_gate) _inner?.Drain(); }
+    public void Drain()
+    {
+        IAudioSink? sink;
+        lock (_gate) sink = _inner;
+        if (sink is null) return;
+
+        try
+        {
+            sink.Drain();
+        }
+        catch (AudioDeviceLostException ex)
+        {
+            // Drain is the last thing an utterance does, so losing the device
+            // here costs only the tail. It still has to be dropped, or the next
+            // utterance opens the request path against a sink that is already
+            // known to be gone.
+            lock (_gate) { if (ReferenceEquals(_inner, sink)) DropLocked(ex.Message); }
+            throw;
+        }
+    }
 
     public void Dispose()
     {
@@ -152,6 +271,15 @@ public sealed class LazyAudioSink : IAudioSink
             inner = _inner;
             _inner = null;
         }
-        inner?.Dispose();
+
+        // Guarded, because shutdown and the audio server going away are the same
+        // event more often than not: a logout tears down pipewire and every
+        // client at once, so closing a stream whose server has already gone is
+        // the ORDINARY path out, not an exotic one. An exception here escapes
+        // Main's using-declarations after everything else has been torn down,
+        // which this codebase has already paid for twice — exit 134 and a core
+        // file, read by journald as a crash and by a restart policy as a reason
+        // to act.
+        try { inner?.Dispose(); } catch { /* it is going away; that was the goal */ }
     }
 }
