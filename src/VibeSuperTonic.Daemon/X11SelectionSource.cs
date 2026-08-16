@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using VibeSuperTonic.Core.Selection;
 using VibeSuperTonic.Core.Text;
 using VibeSuperTonic.Daemon.Interop;
 
@@ -20,10 +21,35 @@ namespace VibeSuperTonic.Daemon;
 /// connection setup against a ~600 ms floor before any sound, so there is
 /// nothing to win by holding one, and plenty to lose: the daemon outlives
 /// individual X sessions, and a cached connection to a dead session is a
-/// permanently broken hotkey.</para>
+/// permanently broken hotkey. The one thing carried between requests is the
+/// last selection's <em>identity</em> — two numbers, no handles — which is what
+/// makes a stale selection detectable at all.</para>
+///
+/// <para><b>CLIPBOARD is read only under opt-in, and only when PRIMARY is
+/// provably stale.</b> The paragraph above is still the rule: a tool that
+/// clobbers or helps itself to the clipboard gets uninstalled. But some windows
+/// render selectable text and never claim PRIMARY — Gmail's in-frame attachment
+/// viewer in Brave, found on 2026-08-16 — and for those the clipboard is the
+/// only place the text can be got at without synthesising keystrokes. See
+/// <see cref="SelectionFreshness"/> for why staleness is decidable and what the
+/// opt-in is protecting against.</para>
 /// </summary>
 public sealed class X11SelectionSource : ISelectionSource
 {
+    private readonly bool _clipboardFallback;
+
+    /// <summary>
+    /// PRIMARY's owner and ownership time as of the last capture that read it.
+    ///
+    /// <para>Not a cache: nothing is served from it and it holds no X resources.
+    /// It is the only way to answer "has the selection been re-established since
+    /// I last looked", which is the question that distinguishes a fresh
+    /// selection from an application that never published one.</para>
+    /// </summary>
+    private SelectionStamp? _lastPrimary;
+
+    public X11SelectionSource(bool clipboardFallback = false) =>
+        _clipboardFallback = clipboardFallback;
     /// <summary>R-9. Roughly a long article; Ctrl+A in a book is the case this exists for.</summary>
     public const int MaxChars = 100 * 1024;
 
@@ -77,7 +103,7 @@ public sealed class X11SelectionSource : ISelectionSource
         }
     }
 
-    private static SelectionResult CaptureFrom(IntPtr dpy)
+    private SelectionResult CaptureFrom(IntPtr dpy)
     {
         IntPtr primary = X11Native.XInternAtom(dpy, "PRIMARY", false);
         IntPtr owner = X11Native.XGetSelectionOwner(dpy, primary);
@@ -96,8 +122,6 @@ public sealed class X11SelectionSource : ISelectionSource
                 "the current selection is inside VibeSuperTonic's own window; " +
                 "select text in another application first.");
 
-        IntPtr utf8 = X11Native.XInternAtom(dpy, "UTF8_STRING", false);
-        IntPtr target = X11Native.XInternAtom(dpy, "VST_SELECTION", false);
         IntPtr root = X11Native.XDefaultRootWindow(dpy);
 
         // An unmapped 1x1 window purely as a delivery address. Never shown, and
@@ -106,22 +130,7 @@ public sealed class X11SelectionSource : ISelectionSource
 
         try
         {
-            X11Native.XConvertSelection(dpy, primary, utf8, target, window, X11Native.CurrentTime);
-            X11Native.XFlush(dpy);
-
-            if (!WaitForSelectionNotify(dpy, window, out XEvent reply))
-                return SelectionResult.None(
-                    "the window holding the selection did not answer within " +
-                    $"{Timeout.TotalMilliseconds:F0} ms.");
-
-            // The owner exists but cannot express the selection as UTF-8 text.
-            // Some Java/Swing and a few Electron windows behave this way; the
-            // plan records it as a documented limit rather than a bug to chase.
-            if (reply.Property == X11Native.None)
-                return SelectionResult.None(
-                    "the application holding the selection could not provide it as text.");
-
-            return ReadProperty(dpy, window, reply.Property);
+            return Decide(dpy, window, primary, owner);
         }
         finally
         {
@@ -130,9 +139,164 @@ public sealed class X11SelectionSource : ISelectionSource
     }
 
     /// <summary>
-    /// Pump events until our SelectionNotify arrives or the deadline passes.
+    /// Work out which selection holds what the user meant, then read it.
     /// </summary>
-    private static bool WaitForSelectionNotify(IntPtr dpy, IntPtr window, out XEvent reply)
+    private SelectionResult Decide(IntPtr dpy, IntPtr window, IntPtr primary, IntPtr owner)
+    {
+        uint? primaryTime = SelectionTime(dpy, window, primary);
+
+        // An owner that will not answer TIMESTAMP tells us nothing about
+        // freshness, and guessing would put a misleading notice on a perfectly
+        // good read. Fall through to the behaviour that shipped before this
+        // check existed, and forget any previous claim so the next press does
+        // not compare against a stamp this one could not refresh.
+        if (primaryTime is not uint stampTime)
+        {
+            _lastPrimary = null;
+            return ReadSelection(dpy, window, primary);
+        }
+
+        var stamp = new SelectionStamp((ulong)owner.ToInt64(), stampTime);
+        SelectionStamp? clipboardStamp = null;
+        IntPtr clipboard = X11Native.None;
+
+        if (_clipboardFallback)
+        {
+            clipboard = X11Native.XInternAtom(dpy, "CLIPBOARD", false);
+            IntPtr clipOwner = X11Native.XGetSelectionOwner(dpy, clipboard);
+
+            // Our own clipboard would be no more use than our own selection.
+            if (clipOwner != X11Native.None && !OwnerIsThisProcess(dpy, clipOwner)
+                && SelectionTime(dpy, window, clipboard) is uint clipTime)
+            {
+                clipboardStamp = new SelectionStamp((ulong)clipOwner.ToInt64(), clipTime);
+            }
+        }
+
+        SelectionUse use = SelectionFreshness.Decide(
+            stamp, _lastPrimary, clipboardStamp, _clipboardFallback);
+
+        SelectionResult result = ReadSelection(
+            dpy, window, use == SelectionUse.Clipboard ? clipboard : primary);
+
+        // Recorded whichever selection was read, and only on a read that got
+        // that far: the comparison is about PRIMARY's claim, not about what we
+        // did with it. Updating it on a failed read would make the next press
+        // call a genuinely new selection stale.
+        if (result.Ok || use != SelectionUse.Clipboard)
+            _lastPrimary = stamp;
+
+        if (!result.Ok) return result;
+
+        string? extra = use switch
+        {
+            SelectionUse.PrimaryUnchanged =>
+                "the selection has not changed since the last read. If you just " +
+                "selected something, that application may not publish selections " +
+                "to X11 — copy it with Ctrl+C and press again.",
+
+            SelectionUse.Clipboard =>
+                "read from the clipboard: the selection had not changed, and you " +
+                "copied something more recently.",
+
+            _ => null,
+        };
+
+        if (extra is null) return result;
+
+        // R-9's truncation notice can arrive with either of the above, and
+        // dropping one to keep the other would hide that the text was cut.
+        return result with
+        {
+            Notice = result.Notice is { } had ? had + " " + extra : extra,
+        };
+    }
+
+    /// <summary>
+    /// Ask <paramref name="selection"/> when its owner acquired it.
+    ///
+    /// <para>ICCCM requires every owner to answer TIMESTAMP, but "requires" is
+    /// not "does", so a null return has to mean "unknown" rather than "old".</para>
+    /// </summary>
+    private static uint? SelectionTime(IntPtr dpy, IntPtr window, IntPtr selection)
+    {
+        IntPtr timestamp = X11Native.XInternAtom(dpy, "TIMESTAMP", false);
+        IntPtr property = X11Native.XInternAtom(dpy, "VST_SELECTION_TIME", false);
+
+        X11Native.XConvertSelection(dpy, selection, timestamp, property, window, X11Native.CurrentTime);
+        X11Native.XFlush(dpy);
+
+        if (!WaitForSelectionNotify(dpy, window, timestamp, out XEvent reply)
+            || reply.Property == X11Native.None)
+            return null;
+
+        int status = X11Native.XGetWindowProperty(
+            dpy, window, reply.Property,
+            longOffset: 0, longLength: 1,
+            delete: true,
+            requestedType: X11Native.None,
+            out _, out int format,
+            out nuint itemCount, out _,
+            out IntPtr data);
+
+        if (status != 0 || data == IntPtr.Zero) return null;
+
+        try
+        {
+            // 32-bit property, widened to long by Xlib exactly as _NET_WM_PID is
+            // — the same trap, and wrong in the same silent way if read as four
+            // bytes.
+            if (format != 32 || itemCount < 1) return null;
+            return unchecked((uint)Marshal.ReadInt64(data));
+        }
+        finally
+        {
+            X11Native.XFree(data);
+        }
+    }
+
+    /// <summary>
+    /// Convert one selection to UTF-8 text and read the result.
+    /// </summary>
+    private static SelectionResult ReadSelection(IntPtr dpy, IntPtr window, IntPtr selection)
+    {
+        IntPtr utf8 = X11Native.XInternAtom(dpy, "UTF8_STRING", false);
+        IntPtr target = X11Native.XInternAtom(dpy, "VST_SELECTION", false);
+
+        X11Native.XConvertSelection(dpy, selection, utf8, target, window, X11Native.CurrentTime);
+        X11Native.XFlush(dpy);
+
+        if (!WaitForSelectionNotify(dpy, window, utf8, out XEvent reply))
+            return SelectionResult.None(
+                "the window holding the selection did not answer within " +
+                $"{Timeout.TotalMilliseconds:F0} ms.");
+
+        // The owner exists but cannot express the selection as UTF-8 text.
+        // Some Java/Swing and a few Electron windows behave this way; the
+        // plan records it as a documented limit rather than a bug to chase.
+        if (reply.Property == X11Native.None)
+            return SelectionResult.None(
+                "the application holding the selection could not provide it as text.");
+
+        return ReadProperty(dpy, window, reply.Property);
+    }
+
+    /// <summary>
+    /// Pump events until the SelectionNotify for <paramref name="expectedTarget"/>
+    /// arrives or the deadline passes.
+    /// </summary>
+    /// <remarks>
+    /// The target has to be matched, not just the requestor. A capture now makes
+    /// two conversions on this one window — TIMESTAMP, then UTF8_STRING — and
+    /// the first reply is still queued when the second is issued. Matching on
+    /// the requestor alone hands the text read the timestamp's reply, whose
+    /// property is four bytes of server time that decode as plausible garbage
+    /// rather than as an error. Found while writing the equivalent probe in
+    /// Python, where it produced exactly that: ten characters of noise where the
+    /// selection should have been.
+    /// </remarks>
+    private static bool WaitForSelectionNotify(
+        IntPtr dpy, IntPtr window, IntPtr expectedTarget, out XEvent reply)
     {
         long deadline = Environment.TickCount64 + (long)Timeout.TotalMilliseconds;
         reply = default;
@@ -152,7 +316,9 @@ public sealed class X11SelectionSource : ISelectionSource
 
             // Ours specifically: this connection is private to this call, but a
             // stray event on it should not be mistaken for the answer.
-            if (e.Type == X11Native.SelectionNotify && e.Requestor == window)
+            if (e.Type == X11Native.SelectionNotify
+                && e.Requestor == window
+                && e.Target == expectedTarget)
             {
                 reply = e;
                 return true;

@@ -56,6 +56,23 @@ public sealed class LinuxSettings
     public float SynthesisSilenceSec { get; set; } = 0.3f;
     public int MaxChunkChars { get; set; } = 200;
     public int MinChunkChars { get; set; } = 100;
+
+    /// <summary>
+    /// Read CLIPBOARD when the selection is provably stale. Off by default.
+    ///
+    /// <para>For applications that render selectable text and never claim
+    /// PRIMARY — Gmail's in-frame attachment viewer in Brave is the one this was
+    /// found against — the clipboard is the only place the text can be reached
+    /// without synthesising keystrokes. With this on, selecting inside such a
+    /// viewer, pressing Ctrl+C and then the hotkey works.</para>
+    ///
+    /// <para>Off by default because X11 cannot distinguish "the application did
+    /// not publish my selection" from "the user pressed the key twice on the
+    /// same selection", and in the second case reading the clipboard is the
+    /// wrong answer. See <see cref="VibeSuperTonic.Core.Selection.SelectionFreshness"/>.
+    /// The explanatory notice is emitted either way.</para>
+    /// </summary>
+    public bool ClipboardFallback { get; set; }
 }
 
 [JsonSourceGenerationOptions(ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]

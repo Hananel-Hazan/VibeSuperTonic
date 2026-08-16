@@ -118,7 +118,13 @@ using ISynthesizer synth = new CpuSynthesizer(modelsRoot);
 // the same fix: start anyway, and let the speak path say what is wrong.
 using var sink = new LazyAudioSink(44100, () => new PulseAudioSink(44100, "VibeSuperTonic"));
 var session = new SpeechSession(synth, sink, config.SessionOptions);
-using var server = new DaemonServer(options, config, synth, session, new X11SelectionSource(), sink);
+// ClipboardFallback is read once here rather than per capture: a reload can
+// change it, but the selection source is built with the daemon, and a hotkey
+// that changes behaviour halfway through a session is worse than one that needs
+// a restart to pick the setting up. Noted in the setting's own documentation.
+using var server = new DaemonServer(
+    options, config, synth, session,
+    new X11SelectionSource(config.Settings.ClipboardFallback), sink);
 
 using var lifetime = new CancellationTokenSource();
 
