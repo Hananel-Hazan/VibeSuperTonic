@@ -104,7 +104,7 @@ Three things about it are worth knowing before you touch it:
 | 1 · Extract Core | **Exit gate cleared.** 14 files in Core, 187 tests green, TestHarness all-green on Windows, R-2 and R-14 verified. Two optional items left — see below |
 | 2 · Audio + playback clock | **Exit gate cleared, and verified on Windows.** Worst clock residual 24.2 ms over a 2-minute read vs an 80 ms gate, no accumulation; stop flushes in 0.6 ms; 229 tests green; TestHarness 11 of 11 on the Win11 VM |
 | 3 · Daemon + IPC | **Built.** Acknowledge 28 ms, stop 40 ms vs a 100 ms budget, auto-start 228 ms; 273 tests green. First-audio criterion restated — see [Phase 3](#phase-3) |
-| 4 · Selection capture | **Built 2026-08-15.** PRIMARY capture works, including from a daemon with no `$DISPLAY`; R-9 cap measured. Confirmed against at least one real application in use (a browser selection was captured and read); the four-application sweep still needs a person |
+| 4 · Selection capture | **Done 2026-08-16.** PRIMARY capture works, including from a daemon with no `$DISPLAY`; R-9 cap measured. **The four-application sweep passes** — Firefox, xed, the Cinnamon terminal, xreader — plus Brave. One documented limit: an in-frame document viewer that never claims PRIMARY, for which `Ctrl+C` then the hotkey is the answer. See [the application pass](#phase-4-apps) |
 | 4b · Linux host config | **Built 2026-08-15.** Portable data layout, pronunciation rules finally applied, `reload` + `config` verbs, and the DSP stage. Remaining gap: `InterChunkSilenceMs` — see [Phase 4b](#phase-4b-built) |
 | 5 · Hotkeys | **Built and in daily use 2026-08-15.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9, and the keys confirmed working by the user. Keys revised to Ctrl+backtick / Ctrl+tilde and the primary one now always speaks — see [the hotkey contract](#the-hotkey-contract) |
 | 6 · App + tray | Not started. **Its two seams were prepared 2026-08-15** — the stream now carries the utterance text, and `seek` exists. See [Preparation](#phase-6-prep) |
@@ -1794,15 +1794,89 @@ the Windows side.
 
 **What is still unverified**, and cannot be verified from here:
 
-- The exit criteria proper — Firefox, a GTK editor, the Cinnamon terminal, a PDF
-  viewer. A synthetic owner proves the protocol, not the applications, and the
-  applications are where PRIMARY quirks live.
+- ~~The exit criteria proper — Firefox, a GTK editor, the Cinnamon terminal, a
+  PDF viewer.~~ **Done 2026-08-16** — see [the application pass](#phase-4-apps)
+  below. All four pass, and the sweep found one limit worth knowing about.
 - **R-6 has no real test.** `spike/x11-select` sets no `_NET_WM_PID`, so it
   exercises the "treat as foreign" fallback rather than the match. The match
   cannot be exercised until Phase 6 gives this process a window of its own,
   which is also the first moment the bug it prevents becomes possible.
 - The INCR path reports honestly rather than being implemented; the R-9 cap
   makes it reachable only for a selection above 4 MB.
+
+<a name="phase-4-apps"></a>
+
+#### The application pass — 2026-08-16
+
+The exit criteria, run by the user against live applications. **All four pass**,
+and so does an application that was not on the list.
+
+| Application | Result |
+| --- | --- |
+| Firefox | Reads the selection |
+| xed (GTK editor) | Reads the selection |
+| Cinnamon terminal | Reads the selection |
+| xreader (PDF) | Reads the selection |
+| Brave — Gmail message body | Reads the selection. Instrumented: PRIMARY owned by Brave, `UTF8_STRING` offered, and the daemon's text matched PRIMARY byte for byte at 580 and 2150 characters |
+
+**The limit: an in-frame document viewer never claims PRIMARY.** Selecting
+inside Gmail's attachment preview in Brave and pressing the key reads the
+*previous* selection. The product is reading PRIMARY correctly — the viewer
+renders selectable text and never takes ownership, and X11 has no empty state
+for a selection, so whatever the last owner put there stays until someone else
+claims it.
+
+**The failure mode is worse than wrong text.** The stale content is usually the
+utterance already playing, so re-reading it is indistinguishable from the hotkey
+doing nothing. Pressed repeatedly it reads as a dead key, and the field report
+that produces is "the hotkey stops working in Gmail" — which points at the
+hotkey, the daemon and the socket, none of which are involved.
+
+**The route that works: `Ctrl+C`, then the hotkey.** Verified. Brave claims
+PRIMARY *and* CLIPBOARD in the same instant on copy — both showed the same
+owner, the same ownership timestamp and the same 856 bytes — so the ordinary
+path reads the right text with no fallback involved. This is the documented
+answer for any viewer of this kind.
+
+**What was built in response** — see `SelectionFreshness` in Core:
+
+- **Staleness is now detectable, via ICCCM's `TIMESTAMP` target.** Every owner
+  must answer it with the time it acquired the selection, so "has this been
+  re-established since I last looked" has an answer. An unchanged selection is
+  reported through the `Notice` channel and still read, because pressing the key
+  twice on purpose is legitimate and X11 cannot distinguish that from an
+  application which published nothing.
+- **`ClipboardFallback`, off by default.** Reads CLIPBOARD when the selection is
+  provably stale and the clipboard was claimed more recently. It is *not* what
+  makes the Gmail case work — Brave updates PRIMARY on copy — and it carries a
+  real surprise for a user who copies something unrelated between presses, which
+  is why it is opt-in.
+- **A latent bug fixed on the way in:** `SelectionNotify` replies are matched on
+  target as well as requestor. A capture now makes two conversions on one window,
+  and matching the requestor alone hands the text read four bytes of server time
+  that decode as plausible garbage rather than as an error.
+
+**What the detection does *not* cover, measured rather than assumed.** It
+compares against *the daemon's previous read*, which is not the same as *the
+user's last selection*. If any other window claims PRIMARY in between, a stale
+read looks fresh and no notice fires — observed directly: one press had PRIMARY
+held by an unrelated window with 1393 bytes of unrelated content while the user
+had just selected inside the viewer. Closing that gap is not possible from X11:
+the daemon cannot know what was highlighted in a window that published nothing.
+
+**The notice is invisible in the hotkey path.** `vst-ctl` writes it to stderr and
+the hotkey runs detached from any terminal. Phase 6's tray is the right home for
+it; a `notify-send` call in the client would do until then.
+
+**Two facts for Phase 6, both from instrumenting rather than reading code:**
+
+- **Chromium's PRIMARY owner is an unmapped window with no `WM_CLASS` and no
+  `_NET_WM_PID`.** Any check that compares the selection owner against the
+  focused window is unusable there — which bears directly on **R-6**, whose
+  `_NET_WM_PID` match has the same blind spot for a Chromium-based owner.
+- **The X server's own selections cannot be tested on the live display.** The
+  user selecting text while a test runs takes PRIMARY away mid-case; the
+  end-to-end cases run on a nested `Xephyr` display for that reason.
 
 <a name="phase-4b"></a>
 
