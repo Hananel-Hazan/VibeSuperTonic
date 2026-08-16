@@ -109,6 +109,7 @@ Three things about it are worth knowing before you touch it:
 | 5 · Hotkeys | **Built and in daily use 2026-08-15.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9, and the keys confirmed working by the user. Keys revised to Ctrl+backtick / Ctrl+tilde and the primary one now always speaks — see [the hotkey contract](#the-hotkey-contract) |
 | 6 · App + tray | Not started. **Its two seams were prepared 2026-08-15** — the stream now carries the utterance text, and `seek` exists. See [Preparation](#phase-6-prep) |
 | 7 · Packaging | Not started |
+| 8 · Fit the machine | Not started, **added 2026-08-16**. `MaxCpuPercent` defaults to 20% after measurement, but a percentage is the wrong unit for a curve that is not monotonic — the benchmark replaces the guess, and decides CPU vs GPU with a battery rule. See [Phase 8](#phase-8) |
 
 ### The next three things, in order
 
@@ -733,6 +734,8 @@ should not offer threads as a knob at all.
 Dependency-ordered. Phase 0 is a gate: everything after it assumes its result.
 Each review finding from the [Review](#review) section is folded in as concrete
 work, tagged with its ID.
+
+<a name="phase-0"></a>
 
 ### Phase 0 — Prove the model runs · 0.5 day · **GATE**
 
@@ -2524,6 +2527,118 @@ new code, and it is what a field report will need. Not done here.
 
 <a name="convergence"></a>
 
+<a name="phase-8"></a>
+
+### Phase 8 — Fit the machine it runs on · 1 day + a gated spike · **added 2026-08-16**
+
+Everything above assumes one execution profile for every machine. The CPU work
+on 2026-08-16 showed that assumption is wrong, and wrong in a way no amount of
+reasoning recovers: **the cost curve is not monotonic, so the right setting
+cannot be derived from the core count.** Median of three runs, 28.4 s of audio,
+20-thread i7-12800H:
+
+```
+threads   median wall   RTF     avg cores   core-seconds
+auto      5.64 s        0.199   14.3        81
+8        11.78 s        0.415    8.2        97
+6         6.12 s        0.216    6.4        39
+4         5.08 s        0.179    4.3        22
+2         5.21 s        0.184    2.1        11
+1         9.22 s        0.325    1.0         9
+```
+
+Four threads beats ORT's own pick on wall clock while using a quarter of the
+machine, and **eight is the worst row on the board** — slower than two, and
+burning more total CPU than auto. A model this small stops scaling after a
+handful of threads and spends the rest on synchronisation.
+
+**`MaxCpuPercent` is the wrong unit and its own documentation should say so.**
+A percentage assumes the curve scales with the machine. It does not: 20% of a
+64-core server is 12 threads, which on the shape above is past the knee and into
+the slow region. The default shipped on 2026-08-16 is correct for the machine it
+was measured on and is a guess everywhere else. That is what this phase exists
+to replace.
+
+#### The benchmark
+
+A sweep the machine runs on itself, once, and records the answer.
+
+| Decision | Shape |
+| --- | --- |
+| Where the engine lives | Core, with a `vst-ctl benchmark` verb driving it. Not the UI: it has to work headless, on a server, and before Phase 6 exists. Phase 6's Tune tab button calls the same verb |
+| What it sweeps | Threads 1, 2, 3, 4, 6, 8 and auto — plus each available GPU provider, see below |
+| Sample | ~5 s of audio, median of three, warm session. Long enough to escape per-call noise, short enough that the whole sweep is under a minute |
+| How it picks | Fastest within a few percent, then **fewest cores** among those. The point is not peak speed; it is peak speed that leaves the desktop alone |
+| What it writes | An **absolute** thread count, plus the chosen provider. `MaxCpuPercent` stays as the fallback for a machine that has never run it |
+| Auditability | The result is stored with its date, machine identity and the full table. A number in a settings file with no provenance is a number nobody dares change |
+
+**Guard: refuse to trust a loaded machine.** A sweep run while a build is going
+will pick a profile shaped by the build. Measure idle CPU first and say so rather
+than silently recording a bad answer — this is the same failure the Xephyr
+lesson taught in [Phase 4](#phase-4-apps), where a live desktop turned a real
+result into a coin toss.
+
+#### GPU, as a gated spike
+
+An RTX A2000 8GB with a working driver is present on the development machine, so
+CUDA EP is genuinely available and the benchmark should include it. **Whether it
+wins is an open question, not an assumption** — these models are small and run at
+totalStep 6, GPU per-inference overhead is fixed, and the ~600 ms first-audio
+floor may barely move. That is exactly the shape [Phase 0](#phase-0) had, so it
+gets the same treatment: a spike and a gate before any commitment.
+
+**Gate:** at least 30% off first-audio latency, no RTF regression, and a clean
+fall back to CPU when the driver or libraries are missing. Fail any of the three
+and the answer is CPU-only, recorded, and not revisited until the hardware
+changes.
+
+Three constraints the spike has to design around:
+
+- **[R-13](#r-13) applies unchanged.** The GPU package ships the same managed
+  assembly name with a different managed surface, so this is another backend
+  project beside `Onnx.Cpu`, not a flag inside it.
+- **It fights the portable-folder contract.** CUDA and cuDNN are gigabytes
+  against a base ZIP that is currently 76 MB. It cannot ride in the default
+  download. The model downloader already built for the ONNX weights is the
+  obvious mechanism — an optional provider pack, fetched on request, verified by
+  manifest, and absent by default.
+- **The failure modes are why `Onnx.DirectML` does not exist.** Device loss,
+  driver/runtime mismatch and out-of-VRAM all have to degrade to CPU and *say
+  so*. A GPU path that dies silently is worse than no GPU path, because the
+  symptom is a hotkey that stopped working — the same shape as the selection
+  finding above, and just as misleading in a field report.
+
+#### On battery, use the CPU
+
+**Requested explicitly, and it is the right default.** A discrete GPU on a laptop
+is the difference between a machine that lasts an afternoon and one that does
+not, and the CPU path at four threads is fast enough that nothing is lost by
+switching: RTF 0.179 with 4.3 cores busy.
+
+| Decision | Shape |
+| --- | --- |
+| Detection | `/sys/class/power_supply/AC*/online`, read per decision. No daemon, no D-Bus dependency, no polling — it is one file read and it is always current |
+| When it switches | At the **start of an utterance**, never during one. Changing provider means disposing the ORT session and building another, roughly a second, and doing that mid-sentence to chase a power event the user did not notice would be indefensible |
+| What the user sees | `status` and `config` report the provider in use and why — "CPU (on battery)" is a different answer from "CPU (no GPU found)" and from "CPU (GPU benchmark lost)". Three causes, one symptom, and only the daemon can tell them apart |
+| The setting | `Provider = auto \| cpu \| gpu` with `GpuOnBattery = false`. `auto` means "what the benchmark chose, subject to the battery rule". Someone plugged into a dock permanently can set `gpu` and mean it |
+
+**The cost of switching is why this is not per-request.** Two loaded sessions
+would avoid the rebuild at the price of holding both the CPU and GPU copies
+resident. Worth measuring during the spike, not deciding now.
+
+#### Exit criteria
+
+- `vst-ctl benchmark` completes in under a minute on the development machine and
+  writes a profile that reproduces its own measurement when re-run.
+- A machine with no GPU, and a machine with a GPU whose driver is broken, both
+  benchmark cleanly to a CPU profile without erroring.
+- Unplugging the power lead changes the provider on the next utterance and is
+  visible in `status`, with no gap or glitch in the utterance in progress.
+- The profile survives a portable-folder copy to another machine as a *stale*
+  profile that is detected as such — the recorded machine identity is what makes
+  that possible, and a profile measured on someone else's hardware is exactly the
+  guess this phase exists to remove.
+
 ### Not a phase — the Windows convergence
 
 Three separate pieces of Core now duplicate code the Windows engine still has its
@@ -2569,7 +2684,8 @@ phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
 | 5 · Hotkeys | 0.25 | **done** | R-4 (toggle), R-11 |
 | 6 · App + tray | 2–3 | not started | R-1 enforcement, R-9 tooltip |
 | 7 · Packaging | 1–1.5 | not started | AOT publish |
-| **Remaining** | **3–4.5** | | |
+| 8 · Fit the machine | 1 + spike | not started | `vst-ctl benchmark`; GPU is a gated spike, not in the estimate |
+| **Remaining** | **4–5.5** | | |
 
 **Phase 1 ran well past the top of its range**, and it is worth knowing where the
 time went: not the extraction, which was mostly mechanical, but four Windows

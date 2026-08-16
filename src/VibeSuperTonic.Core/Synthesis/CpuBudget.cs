@@ -35,6 +35,15 @@ namespace VibeSuperTonic.Core.Synthesis;
 ///
 /// <para>The floor is two threads. One measured 1.8x slower than two for a
 /// saving of two core-seconds, which is the wrong trade on any machine.</para>
+///
+/// <para><b>A percentage is the wrong unit, and this is a placeholder for a
+/// measurement.</b> The curve above does not scale with the machine — 20% of a
+/// 64-core server is 12 threads, which is past the knee and into the slow
+/// region. The default here is correct for the machine it was measured on and
+/// is a guess everywhere else; the knee has to be measured per machine, which
+/// is Phase 8's <c>vst-ctl benchmark</c> in the port plan. Until that exists,
+/// prefer a small explicit number over a large one: every count from 2 to 6
+/// measured inside 20% of the best, and everything above 6 lost badly.</para>
 /// </summary>
 public static class CpuBudget
 {
