@@ -30,7 +30,7 @@ The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. Th
 - **GPU acceleration via DirectML** — opt-in (default on); falls back to CPU automatically on hardware/driver issues
 - **Sonic time-stretch** — pitch-synchronous overlap-add up to 2.0× with the voice's formants preserved (no robotic edge, no formant smearing — each output pitch period is bit-perfect from the input)
 - **Live engine telemetry** — RTF, latency, CPU/RAM, voice and resolved knob values, updated 5 Hz
-- **Self-fixing install** — Status tab runs 12 integrity checks (registry, model files, .NET runtime, voice tokens) with one-click Repair; lock-aware (tells you which process is holding the engine DLLs)
+- **Self-fixing install** — Status tab runs 15 integrity checks (registry, model files, both runtimes in both architectures, voice tokens, and whether 32-bit clients can actually use the voices) with one-click Repair; it can install a missing runtime for you, and it is lock-aware, telling you which process is holding the engine DLLs
 - Hybrid registration: HKLM voice token (one-time admin write) + HKCU CLSID (rewritten on every launch from current path)
 - Pipelined synthesis — next sentence renders while the current one plays, eliminating mid-paragraph gaps
 - SAPI rate slider works
@@ -44,26 +44,105 @@ The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. Th
 ## Requirements
 
 - Windows 10 or 11 (x64)
-- [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) — install x64 (and x86 if you want 32-bit SAPI clients to see the voices)
+- **Two runtimes — [.NET 10](https://dotnet.microsoft.com/download/dotnet/10.0) and the [Visual C++ redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist). Read the note below; this is the one thing that trips people up.**
 - ~500 MB disk space (~380 MB ONNX models + ~50 MB engine + runtime)
 - ~1 GB RAM during synthesis (CPU); ~400 MB VRAM additional when GPU is active
 - (Optional, for GPU acceleration) any DirectX 12-capable adapter
 
-## Installation (end user)
+> The plain **.NET Runtime** is enough. The **Desktop Runtime** also works — it
+> contains the plain one — but it is a much larger download than this needs.
 
-1. Download the latest `VibeSuperTonic-<version>-win.zip` from [Releases](https://github.com/Hananel-Hazan/VibeSuperTonic/releases).
-2. Extract anywhere — your home folder, `C:\Tools`, a USB stick, all fine.
-3. Double-click `VibeSuperTonic.exe`. The Control Panel opens.
-4. The Status tab runs the integrity check on launch. Accept the UAC prompt if it asks (one-time — writes voice tokens to HKLM).
-5. Once everything is green, open any SAPI client (Balabolka, NVDA, Narrator, etc.) — voices appear as `VibeSuperTonic M1` … `VibeSuperTonic F5`.
+### ⚠️ You probably need the 32-bit runtimes too
 
-If x86 .NET 10 Desktop Runtime is missing, the Status tab marks that row yellow and prints a fix command. To enable 32-bit clients (some Balabolka builds, Lingoes, etc.):
+The speech engine is a COM in-process server: it loads **inside** your reader, so
+it needs both runtimes **in the same bitness as that program** — not the same
+bitness as Windows.
+
+Most SAPI clients are still 32-bit: **Balabolka, Lingoes, and many NVDA setups**.
+So on a normal 64-bit Windows box you usually want all four:
 
 ```powershell
-winget install Microsoft.DotNet.DesktopRuntime.10 --architecture x86 --force
+# 64-bit clients
+winget install Microsoft.DotNet.Runtime.10
+winget install Microsoft.VCRedist.2015+.x64
+
+# 32-bit clients — Balabolka, Lingoes, most NVDA setups
+winget install Microsoft.DotNet.Runtime.10 --architecture x86 --force
+winget install Microsoft.VCRedist.2015+.x86
 ```
 
-Then click Repair on that row.
+Installing all of them is the safe default and costs little. The x64 Visual C++
+redistributable is usually already present because something else installed it;
+the x86 one usually is not.
+
+**The two missing runtimes fail differently**, which is the whole difficulty:
+
+| Missing | Symptom |
+| --- | --- |
+| .NET 10 runtime (x86) | The reader lists **no** VibeSuperTonic voices at all. Nothing is registered for a bitness that cannot run it. |
+| Visual C++ runtime (x86) | The voices **are** listed, and are **silent**. ONNX Runtime's native DLL links against it and cannot load without it — Windows reports this as `onnxruntime.dll or one of its dependencies (0x8007007E)`, naming the file that *is* present. |
+
+In both cases the Control Panel's own Test button keeps working perfectly,
+because the Control Panel is 64-bit and self-contained. That combination looks
+exactly like "the app is fine, my reader is broken", which is why it gets its own
+warning in the app and this heading here.
+
+**The app can install them for you.** If anything is missing, the Control Panel
+says so on launch and offers to install it via winget (with a UAC prompt), or you
+can double-click that row on the Status tab. Nothing is installed silently — a
+machine-wide runtime install is always something you confirm.
+
+After installing, press **Repair all** and **restart your reader** — a reader
+that was already running keeps the old, failed engine loaded until it does.
+
+## Installation (end user)
+
+1. Install the runtimes above — or let the Control Panel do it in step 4.
+2. Download the latest `VibeSuperTonic-<version>-win.zip` from [Releases](https://github.com/Hananel-Hazan/VibeSuperTonic/releases).
+3. Extract anywhere — your home folder, `C:\Tools`, a USB stick, all fine.
+4. Double-click `VibeSuperTonic.exe`. The Control Panel opens on the Status tab, which lists what is missing and how to fix each item.
+5. Press **Repair all**. This registers the voice tokens (one UAC prompt) and downloads the ~380 MB of models. A fresh extract shows several red rows until you do — that is expected, not a fault.
+6. Once everything is green, open any SAPI client (Balabolka, NVDA, Narrator, etc.) — voices appear as `VibeSuperTonic M1` … `VibeSuperTonic F5`.
+
+If you install a runtime *after* step 5, press **Repair all** again — the newly
+usable bitness only gets registered once it can actually run.
+
+### Why can't the runtime just be bundled?
+
+Because .NET does not allow it for this kind of component. Publishing the engine
+with `--self-contained` alongside `EnableComHosting` fails the build outright:
+
+```
+NETSDK1128: COM hosting does not support self-contained deployments.
+```
+
+So the runtime is a genuine prerequisite. What the app *can* do — and now does —
+is detect exactly which architecture is missing, say what it will break in plain
+words, and offer to install it for you.
+
+### Verifying an install
+
+The ZIP ships a verification harness that drives the engine through a real SAPI
+client and checks what it actually did:
+
+```
+tools\VibeSuperTonic.TestHarness.exe
+```
+
+Exit code 0 means every check passed. Run it after the voices are registered and
+the models have downloaded — it speaks out loud, because the word-boundary checks
+need real audio timing to fire.
+
+It covers COM activation, voice enumeration, sync and async speech, cancellation,
+SSML bookmarks, prosody and language tags, and — the part worth watching —
+whether word-boundary offsets land on the right characters when sentences are
+separated by different whitespace, and when a length-changing pronunciation rule
+is active. Those are the checks a highlight-while-reading client depends on, and
+they cannot be verified by listening: a wrong offset sounds exactly like a right
+one. If you ever file a bug about the highlight drifting, this output is the most
+useful thing you can attach.
+
+`--stress` runs a longer concurrency and recovery suite instead.
 
 ### Picking which GPU to use
 
@@ -236,6 +315,9 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 - [ ] Phase 4: pitch shifting (separate from time-stretch)
 - [x] **Phase 5: pronunciation dictionary** *(shipped in 0.2.2 as the Pronunciations tab)* — user-editable rewrite table (regex / whole-word) applied before chunking, so abbreviations, symbols, and proper nouns the model mispronounces ("etc." → "et cetera", "kg" → "kilograms", "Tcl" → "tickle", "—" → " — ", "i.e." → "that is", domain jargon, names) come out right. Per-voice and per-language scopes; lives in `data\dictionary.json` so it's portable. Control Panel tab to edit + test entries against a live sample. Probably backs onto the same chunker-pre-pass that already does emoji stripping in `UnicodeProcessor.PreprocessText`.
 - [ ] Phase 5: signed binaries (avoids SmartScreen prompt on first run)
+- [x] **Phase 6: shared `VibeSuperTonic.Core`** *(0.2.7)* — the text pipeline, DSP, model manifest/downloader and telemetry contract extracted into one platform-neutral assembly with 187 tests, so the engine and the Control Panel stop keeping duplicate copies of the same logic in sync by hand. Fixed two live word-boundary offset bugs on the way out.
+- [x] **Phase 6: verification harness in the box** *(0.2.7.4)* — `tools\VibeSuperTonic.TestHarness.exe`, which drives the engine through a real SAPI client and checks the offsets a highlight depends on. It found a bug on its first run that five releases had shipped.
+- [ ] Phase 6: Linux port — background daemon, global hotkey, reads the highlighted text. Design and feasibility work is done (`docs/LINUX-PORT-PLAN.md`); the model renders ~25% faster on Linux than on Windows on the same machine.
 
 ## Contributing
 

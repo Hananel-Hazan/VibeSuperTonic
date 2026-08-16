@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using VibeSuperTonic.Core.Telemetry;
 using VibeSuperTonic.Engine.Settings;
 using VibeSuperTonic.Engine.Synth;
 
@@ -110,7 +111,7 @@ internal static class TelemetryWriter
             string errToReport = lastError ?? "";
             if (errToReport.Length == 0) errToReport = SupertonicAdapter.LastDeviceEvent;
 
-            var snap = new SessionSnapshotDto
+            var snap = new SessionSnapshot
             {
                 SchemaVersion = SchemaVersion,
                 Pid = _pid,
@@ -232,12 +233,12 @@ internal static class TelemetryWriter
     /// <summary>Collapse NaN/±Infinity to 0 so JSON serialization can't throw.</summary>
     private static double Finite(double d) => double.IsFinite(d) ? d : 0.0;
 
-    private static void WriteAtomic(string filePath, SessionSnapshotDto snap)
+    private static void WriteAtomic(string filePath, SessionSnapshot snap)
     {
         // Write to a sibling temp file then rename — readers either see the old
         // contents or the new contents, never a half-written file.
         string tmp = filePath + ".tmp";
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(snap, SnapshotJsonContext.Default.SessionSnapshotDto);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(snap, SnapshotJsonContext.Default.SessionSnapshot);
         File.WriteAllBytes(tmp, bytes);
         try { File.Move(tmp, filePath, overwrite: true); }
         catch

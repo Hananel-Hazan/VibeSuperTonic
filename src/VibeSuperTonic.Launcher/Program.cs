@@ -111,6 +111,14 @@ internal static class Program
         {
             Console.WriteLine($"--- {c.Title}: {c.Detail}");
             if (c.Repair is null) { unfixed++; continue; }
+            // Installing a machine-wide runtime is not something a --repair run
+            // should do unasked; print the command and let the operator decide.
+            if (c.NeedsConsent)
+            {
+                Console.WriteLine($"    skipped (needs confirmation). {c.FixHint}");
+                unfixed++;
+                continue;
+            }
             try { if (!await c.Repair(progress, CancellationToken.None)) unfixed++; }
             catch (Exception ex) { Console.Error.WriteLine($"  exception: {ex.Message}"); unfixed++; }
         }

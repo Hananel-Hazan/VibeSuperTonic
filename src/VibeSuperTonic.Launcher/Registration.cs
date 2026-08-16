@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Principal;
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Launcher;
 
@@ -16,12 +17,35 @@ internal static class Registration
         string X64ComHostPath,
         string X86ComHostPath,
         bool X86ComHostExists,
+        bool X64RuntimeInstalled,
         bool X86RuntimeInstalled,
         bool X86Available,
         bool TokensComplete,
         bool ClsidX64Correct,
         bool ClsidX86Correct,
-        bool BaseDirRecorded);
+        bool BaseDirRecorded,
+        bool X86TokensPresent,
+        bool ClsidX86Registered)
+    {
+        /// <summary>
+        /// What a 32-bit SAPI client can actually do right now. Both halves are
+        /// required: the voice tokens must exist in the 32-bit registry view for
+        /// the client to list them, and the CLSID must exist there for it to
+        /// create the engine once listed.
+        ///
+        /// Deliberately independent of <see cref="X86Available"/>. That flag says
+        /// "we are willing to register x86"; this says "a 32-bit client sees
+        /// voices". Conflating the two is how the Status tab came to report a
+        /// clean bill of health on a machine where Balabolka and Lingoes saw
+        /// nothing at all.
+        /// </summary>
+        /// <remarks>
+        /// <c>ClsidX86Registered</c> is the plain fact — is the engine in the
+        /// 32-bit CLSID view? — where <c>ClsidX86Correct</c> is vacuously true
+        /// whenever we decided not to register x86 at all.
+        /// </remarks>
+        public bool Sapi32BitWorks => X86TokensPresent && ClsidX86Registered;
+    }
 
     public static string DefaultBaseDir => AppContext.BaseDirectory.TrimEnd('\\');
 
@@ -31,8 +55,14 @@ internal static class Registration
     public static string X86ComHostPathFor(string baseDir) =>
         Path.Combine(baseDir, "engine", "x86", "VibeSuperTonic.Engine.comhost.dll");
 
-    public static bool X86RuntimeInstalled() => File.Exists(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet", "dotnet.exe"));
+    /// <summary>
+    /// Whether a 32-bit SAPI host can load the engine. See <see cref="DotNetRuntime"/>
+    /// — this used to test for <c>dotnet.exe</c> under Program Files (x86), which
+    /// any .NET install of any version satisfied.
+    /// </summary>
+    public static bool X86RuntimeInstalled() => DotNetRuntime.IsInstalled(DotNetRuntime.Arch.X86);
+
+    public static bool X64RuntimeInstalled() => DotNetRuntime.IsInstalled(DotNetRuntime.Arch.X64);
 
     public static bool IsElevated()
     {
@@ -53,12 +83,17 @@ internal static class Registration
             x64,
             x86,
             x86Exists,
+            X64RuntimeInstalled(),
             x86Rt,
             x86Avail,
             AllVoiceTokensCurrent(includeX86: x86Avail),
             ClsidPathMatches(RegistryView.Registry64, x64),
             !x86Avail || ClsidPathMatches(RegistryView.Registry32, x86),
-            BaseDirRecorded() == baseDir);
+            BaseDirRecorded() == baseDir,
+            // Both asked unconditionally, so the Status tab can report what a
+            // 32-bit client actually sees rather than what we intended it to see.
+            VoiceTokensCurrentInView(RegistryView.Registry32),
+            ClsidPathMatches(RegistryView.Registry32, x86));
     }
 
     /// <summary>
@@ -98,9 +133,16 @@ internal static class Registration
         if (s.X86ComHostExists && !s.X86RuntimeInstalled)
         {
             log("");
-            log("NOTE: x86 engine present but x86 .NET 10 Desktop Runtime is missing.");
-            log("      32-bit SAPI clients won't see the voices until you install it:");
-            log("      winget install Microsoft.DotNet.DesktopRuntime.10 --architecture x86 --force");
+            log($"WARNING: the 32-bit .NET {DotNetRuntime.RequiredMajor} runtime is missing ({DotNetRuntime.Describe(DotNetRuntime.Arch.X86)}).");
+            log("         32-bit SAPI clients — Balabolka, Lingoes, NVDA and most older");
+            log("         readers — will NOT list the VibeSuperTonic voices at all. This is");
+            log("         not a partial degradation: nothing was registered for 32-bit, so");
+            log("         those programs show no VibeSuperTonic entries whatsoever.");
+            log("         64-bit clients are unaffected.");
+            log("");
+            log($"         Fix:  {DotNetRuntime.WingetCommand(DotNetRuntime.Arch.X86)}");
+            log($"         or:   {DotNetRuntime.DownloadUrl}  (x86 Runtime)");
+            log("         Then re-run this program to finish registration.");
         }
         return 0;
     }
@@ -146,18 +188,26 @@ internal static class Registration
 
     // ---------------------------------------------------------- inspection
 
-    public static bool AllVoiceTokensCurrent(bool includeX86)
+    public static bool AllVoiceTokensCurrent(bool includeX86) =>
+        VoiceTokensCurrentInView(RegistryView.Registry64)
+        && (!includeX86 || VoiceTokensCurrentInView(RegistryView.Registry32));
+
+    /// <summary>
+    /// Are all voice tokens present and current in one registry view? Split out
+    /// so a caller can ask about the 32-bit view on its own — a 32-bit SAPI
+    /// client reads only that view, and whether we chose to populate it is not
+    /// the same question as whether it is populated.
+    /// </summary>
+    public static bool VoiceTokensCurrentInView(RegistryView view)
     {
-        var views = includeX86 ? new[] { RegistryView.Registry64, RegistryView.Registry32 } : new[] { RegistryView.Registry64 };
         foreach (var v in Voices.All)
             foreach (var root in Voices.VoiceTokenRoots)
-                foreach (var view in views)
-                {
-                    using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
-                    using var attrs = baseKey.OpenSubKey($@"{root}\VibeSuperTonic_{v.Id}\Attributes");
-                    if (attrs is null) return false;
-                    if ((attrs.GetValue("VibeSuperTonicSchemaVersion") as string) != Voices.TokenSchemaVersion) return false;
-                }
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                using var attrs = baseKey.OpenSubKey($@"{root}\VibeSuperTonic_{v.Id}\Attributes");
+                if (attrs is null) return false;
+                if ((attrs.GetValue("VibeSuperTonicSchemaVersion") as string) != Voices.TokenSchemaVersion) return false;
+            }
         return true;
     }
 
@@ -225,7 +275,7 @@ internal static class Registration
         // the hex LCID, the value DATA is what a client shows for that language.
         // Without a per-LCID entry a client filtering on, say, 407 finds the voice
         // in the Language attribute but has no display string for it.
-        foreach (var l in Shared.SupertonicLanguages.All)
+        foreach (var l in SupertonicLanguages.All)
             tokenKey.SetValue(l.HexLcid, $"{v.DisplayName} - {l.DisplayName}", RegistryValueKind.String);
         tokenKey.SetValue("CLSID", Voices.EngineClsid, RegistryValueKind.String);
         tokenKey.SetValue("LangDataPath", langDataPath, RegistryValueKind.ExpandString);
@@ -239,7 +289,7 @@ internal static class Registration
         // (NVDA's picker, SpVoice.GetVoices("Language=40C")) only offer this
         // voice for a language listed here, so advertising just 409 hid the
         // other 30 languages the model has always been able to speak.
-        attrs.SetValue("Language", Shared.SupertonicLanguages.AllHexLcidsSemicolonSeparated, RegistryValueKind.String);
+        attrs.SetValue("Language", SupertonicLanguages.AllHexLcidsSemicolonSeparated, RegistryValueKind.String);
         attrs.SetValue("Name", v.DisplayName, RegistryValueKind.String);
         attrs.SetValue("SharedPronunciation", "", RegistryValueKind.String);
         attrs.SetValue("Vendor", "VibeSuperTonic", RegistryValueKind.String);

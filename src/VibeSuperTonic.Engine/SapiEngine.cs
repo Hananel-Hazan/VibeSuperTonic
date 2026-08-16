@@ -1,9 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using VibeSuperTonic.Core.Text;
 using VibeSuperTonic.Engine.Interop;
 using VibeSuperTonic.Engine.Settings;
 using VibeSuperTonic.Engine.Synth;
 using VibeSuperTonic.Engine.Telemetry;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Diagnostics;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Engine;
 
@@ -217,7 +221,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             float volumeScale = Math.Clamp(siteVolumePct / 100f * volTrimLinear, 0f, 4f);
             uint interChunkSilenceMs = (uint)Math.Max(0, resolved.InterChunkSilenceMs);
 
-            string defaultLang = Shared.SupertonicLanguages.Normalize(resolved.Language);
+            string defaultLang = SupertonicLanguages.Normalize(resolved.Language);
             var planItems = BuildSpeakPlan(pTextFragList, defaultLang);
             Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
 
@@ -239,14 +243,31 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             {
                 if (item is SpeakTextItem speakItem)
                 {
-                    var chunks = SupertonicAdapter.ChunkText(speakItem.Text);
-                    int offsetWithin = 0;
-                    foreach (var chunkText in chunks)
+                    // ChunkWithOffsets, not Chunk + IndexOf: the chunker
+                    // normalises whitespace, so a chunk built from text with a
+                    // newline or a double space between sentences is not a
+                    // substring of its input and IndexOf misses every time. The
+                    // old fallback then walked forward in rewritten coordinates
+                    // and drifted — the same class of defect as R-2.
+                    foreach (var chunk in SentenceChunker.ChunkWithOffsets(
+                                 speakItem.Text, resolved.MaxChunkChars, resolved.MinChunkChars))
                     {
-                        int idx = speakItem.Text.IndexOf(chunkText, offsetWithin, StringComparison.Ordinal);
-                        if (idx < 0) idx = offsetWithin;
-                        execPlan.Add(new SpeakChunkExec(chunkText, speakItem.SourceCharOffset + (uint)idx, speakItem.RateAdj, speakItem.Lang));
-                        offsetWithin = idx + chunkText.Length;
+                        // Two rewrites sit between a chunk index and the client's
+                        // text, and BOTH have to be undone:
+                        //   chunk index -> rewritten  (chunk.Map: the chunker
+                        //                              collapsed whitespace)
+                        //   rewritten   -> source     (speakItem.Offsets: rules
+                        //                              and the sanitizer, R-2)
+                        // Composing them once per chunk means the emit path is a
+                        // single lookup and cannot get the order wrong. Carrying
+                        // only chunk.Start instead was correct exactly while every
+                        // separator was one character long — so single spaces,
+                        // newlines and tabs looked right and double spaces and
+                        // paragraph breaks drifted one character per separator.
+                        execPlan.Add(new SpeakChunkExec(
+                            chunk.Text, speakItem.SourceCharOffset,
+                            TextOffsetMap.Chain(chunk.Map, speakItem.Offsets),
+                            speakItem.RateAdj, speakItem.Lang));
                     }
                 }
                 else
@@ -584,7 +605,48 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         }
     }
 
-    private sealed record SpeakChunkExec(string Text, uint SourceCharOffset, int RateAdj, string Lang);
+    /// <summary>
+    /// One synthesis chunk, plus everything needed to say where it came from.
+    ///
+    /// <c>FragmentSourceOffset</c> is the SAPI fragment's offset in the client's
+    /// text. <c>Offsets</c> maps an index in THIS CHUNK all the way back to the
+    /// fragment's source text, having already composed the chunker's whitespace
+    /// normalisation with the pronunciation and sanitizer rewrites.
+    ///
+    /// The two live in different coordinate spaces and must never be added
+    /// together — doing exactly that was R-2. Go through
+    /// <see cref="SourceOffsetAt"/>, which crosses the spaces via the map.
+    /// </summary>
+    private sealed record SpeakChunkExec(
+        string Text,
+        uint FragmentSourceOffset,
+        TextOffsetMap Offsets,
+        int RateAdj,
+        string Lang)
+    {
+        /// <summary>Absolute offset in the client's text of a position within this chunk.</summary>
+        public uint SourceOffsetAt(int indexInChunk) =>
+            FragmentSourceOffset + (uint)Offsets.ToSource(indexInChunk);
+
+        /// <summary>
+        /// How many source characters a span of this chunk covers — the length a
+        /// client should highlight. "kilograms" is nine characters of spoken text
+        /// but covers the two the user typed.
+        /// </summary>
+        public int SourceLengthAt(int indexInChunk, int lengthInChunk)
+        {
+            int length = Offsets.SourceSpanLength(indexInChunk, lengthInChunk);
+            if (length > 0 || lengthInChunk <= 0) return length;
+
+            // The span sits entirely inside one substitution, so it covers no
+            // distinct source range of its own ("kg" → "kilo grams" splits into two
+            // spoken words over one source token). Report a single character at the
+            // right place rather than a zero-width selection that clients render as
+            // nothing at all.
+            int start = Offsets.ToSource(indexInChunk);
+            return start < Offsets.SourceLength ? 1 : 0;
+        }
+    }
 
     /// <summary>
     /// Returns true if <paramref name="ex"/> is (or wraps) an
@@ -728,8 +790,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             elParamType = SapiConstants.SPET_LPARAM_IS_UNDEFINED,
             ulStreamNum = 0,
             ullAudioStreamOffset = streamOffsetBytes,
-            wParam = (IntPtr)chunk.Text.Length,
-            lParam = (IntPtr)(int)chunk.SourceCharOffset,
+            wParam = (IntPtr)chunk.SourceLengthAt(0, chunk.Text.Length),
+            lParam = (IntPtr)(int)chunk.SourceOffsetAt(0),
         };
         int hr = addEvents(sitePtr, &ev, 1);
         if (hr < 0) Trace("Speak", $"AddEvents(sentence) hr=0x{hr:X8}");
@@ -766,8 +828,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 elParamType = SapiConstants.SPET_LPARAM_IS_UNDEFINED,
                 ulStreamNum = 0,
                 ullAudioStreamOffset = wordAudioOffset,
-                wParam = (IntPtr)wordLen,
-                lParam = (IntPtr)(int)(chunk.SourceCharOffset + (uint)start),
+                wParam = (IntPtr)chunk.SourceLengthAt(start, wordLen),
+                lParam = (IntPtr)(int)chunk.SourceOffsetAt(start),
             });
         }
 
@@ -911,7 +973,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// &lt;prosody rate="..."&gt; tags affect only their own enclosed text.
     /// </summary>
     private abstract record SpeakItem;
-    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang) : SpeakItem;
+    /// <param name="SourceCharOffset">Where this fragment starts in the client's text.</param>
+    /// <param name="Offsets">Maps an index in <paramref name="Text"/> (rewritten) back into the fragment's source text.</param>
+    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang, TextOffsetMap Offsets) : SpeakItem;
     private sealed record SpeakSilenceItem(uint Milliseconds) : SpeakItem;
     private sealed record SpeakBookmarkItem(string Name, uint SourceCharOffset) : SpeakItem;
 
@@ -954,16 +1018,21 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         // wedged the synth in the field. Done before chunking so
                         // the chunker sees clean text and the engine's downstream
                         // IndexOf on the same string still finds chunks.
-                        string spoken = SupertonicAdapter.SanitizeForSynth(pron.Apply(text, pronCompiled));
+                        // Prepare returns the text the model will speak plus a map
+                        // from that text's indices back to the client's. Both stages
+                        // change length — rules substitute, the sanitizer strips —
+                        // so without the map every later boundary offset is wrong by
+                        // the accumulated delta (R-2).
+                        string spoken = SynthTextPipeline.Prepare(text, pron, pronCompiled, out var offsets);
                         if (!string.IsNullOrEmpty(spoken))
                         {
                             // FromLcid returns null both for "fragment carries no
                             // language" (LangID 0, the common case) and for "a
                             // language Supertonic doesn't speak" — both fall back
                             // to the user's configured language.
-                            string fragLang = Shared.SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
+                            string fragLang = SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
                             Trace("BuildSpeakPlan", $"frag LangID=0x{frag.State.LangID:X4} → lang={fragLang}");
-                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang));
+                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang, offsets));
                         }
                     }
                     break;
@@ -1023,7 +1092,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         {
             lock (_logLock)
             {
-                Shared.LogRotation.RollIfNeeded(LogPath);
+                LogRotation.RollIfNeeded(LogPath);
                 File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {where}: {msg}\n");
             }
         }
@@ -1046,7 +1115,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             sb.Append('\n');
             lock (_logLock)
             {
-                Shared.LogRotation.RollIfNeeded(LogPath);
+                LogRotation.RollIfNeeded(LogPath);
                 File.AppendAllText(LogPath, sb.ToString());
             }
         }

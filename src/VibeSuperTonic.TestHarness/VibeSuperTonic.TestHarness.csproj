@@ -13,4 +13,18 @@
     <PackageReference Include="System.Speech" Version="10.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Steps 10 and 11 check Core's Phase 2 code on Windows. Step 10 in
+      particular is only meaningful with the real thing referenced: it predicts
+      boundaries with the same BoundaryPlanner the Linux daemon uses and holds
+      the prediction against what the live SAPI engine actually reports.
+
+      Safe to reference from here for the same reason Core exists — no
+      PackageReferences, nothing platform-specific, so it adds one small managed
+      DLL to tools/ and no native dependencies.
+    -->
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -2,17 +2,25 @@ name: build
 
 on:
   push:
-    branches: [main]
+    # Dev is where the Linux port is being built (docs/LINUX-PORT-PLAN.md), and
+    # the plan's own gate for the second isolation step is "Core.Tests green on
+    # Windows and on Linux, in CI, not locally". With main-only triggers that
+    # gate could never be reached from the branch the work actually happens on —
+    # every commit below would land on main already unverified.
+    branches: [main, Dev]
     paths-ignore:
       - 'README.md'
       - 'LICENSE'
       - '.gitignore'
-      - '.github/**'
   pull_request:
-    branches: [main]
+    branches: [main, Dev]
   workflow_dispatch:
 
 jobs:
+  # ---------------------------------------------------------------- Windows
+  # Produces the shippable ZIP. Also the only job that can catch a regression in
+  # the 32-bit engine, which is the half of the product with no local coverage —
+  # nobody runs a 32-bit SAPI host by accident.
   build:
     runs-on: windows-latest
     steps:
@@ -24,11 +32,39 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
+      # Core is platform-neutral, but "runs on Linux" is not evidence that it
+      # runs on Windows — line endings, path separators, string comparison and
+      # culture all differ, and the text/offset code this suite covers touches
+      # the first three. The isolation gate in docs/LINUX-PORT-PLAN.md requires
+      # this suite green on BOTH runners; the Linux job alone only half-satisfies
+      # it. Placed before the publishes so a Core regression fails in seconds
+      # rather than after two RID publishes and a ZIP.
+      - name: Test platform-neutral code
+        run: dotnet test src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj -c Release --nologo
+
       - name: Restore + build engine (x64)
         run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x64 --no-self-contained --nologo
 
       - name: Restore + build engine (x86)
         run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x86 --no-self-contained --nologo
+
+      # The ORT 1.22.1 pin in VibeSuperTonic.Engine.csproj is load-bearing: 1.23.0
+      # dropped the win-x86 native from the package, and the failure is silent —
+      # publish succeeds, the x86 folder gets DirectML.dll but no onnxruntime.dll,
+      # and the engine dies with DllNotFoundException on first Speak inside a
+      # 32-bit host. The csproj says so in a comment; this step is what enforces
+      # it. Most likely future cause of a bump: the Linux port, which needs the
+      # CPU package and has no reason to care about win-x86.
+      - name: Assert win-x86 ONNX Runtime native survived the publish
+        shell: pwsh
+        run: |
+          $pub = "src/VibeSuperTonic.Engine/bin/Release/net10.0-windows/win-x86/publish"
+          $dll = Get-ChildItem $pub -Recurse -Filter onnxruntime.dll -ErrorAction SilentlyContinue
+          if (-not $dll) {
+            Get-ChildItem $pub -Recurse | Select-Object -ExpandProperty Name | Sort-Object
+            throw "win-x86 publish contains no onnxruntime.dll. ORT was probably bumped past 1.22.1 — read the pin comment in src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj before changing that version."
+          }
+          Write-Host "OK: $($dll[0].FullName) ($([math]::Round($dll[0].Length/1MB,1)) MB)"
 
       - name: Restore + build launcher (x64 single-file)
         run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x64 --nologo
@@ -43,3 +79,61 @@ jobs:
           name: VibeSuperTonic-ci-${{ github.sha }}
           path: dist/*.zip
           retention-days: 14
+
+  # ------------------------------------------------------------------ Linux
+  # Builds the platform-neutral half of the tree (docs/LINUX-PORT-PLAN.md).
+  # Exists so the two platforms guard each other: without it, a Windows-motivated
+  # change to shared code breaks Linux and nobody finds out until someone next
+  # opens the Mint box, and the Windows job above cannot see a net10.0 project
+  # regress because it never builds one on a machine where Windows types are
+  # absent.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Build Linux solution
+        run: dotnet build VibeSuperTonic.linux.slnx -c Release --nologo
+
+      # Was guarded on the directory existing, so it would activate by itself
+      # when Phase 1 landed Core.Tests. It has: the guard is now permanently true
+      # and only obscures a failure to restore.
+      - name: Test platform-neutral code
+        run: dotnet test VibeSuperTonic.linux.slnx -c Release --nologo
+
+      # PublishAot only takes effect on `dotnet publish`, so the step above
+      # compiles vst-ctl without ever exercising the native toolchain — and the
+      # plan (Phase 7) names the release run as the first place this can fail.
+      # That is the same shape as the win-x86 ONNX pin: a build that succeeds
+      # while producing something that does not work.
+      #
+      # It fails in two directions and both matter. Without clang and the
+      # platform headers the publish errors out, which is the toolchain answer
+      # Phase 7 needs before it starts rather than during. And a publish that
+      # silently falls back to a managed binary ships a client that starts in
+      # ~107 ms instead of 6 — it works, so nothing complains, and the only
+      # symptom is a hotkey that feels sluggish on every single press.
+      - name: Publish vst-ctl (NativeAOT)
+        run: dotnet publish src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj -c Release -r linux-x64 -o out/ctl --nologo
+
+      - name: Assert the shipped client is a native binary
+        run: |
+          if [ ! -f out/ctl/vst-ctl ]; then
+            echo "no vst-ctl in the publish output:"; ls -la out/ctl; exit 1
+          fi
+          if [ -f out/ctl/vst-ctl.dll ]; then
+            echo "vst-ctl.dll is present, so this is a managed publish, not an AOT one."
+            echo "The client would start in ~107 ms instead of 6 — most of the"
+            echo "acknowledgement budget, spent before any work begins."
+            exit 1
+          fi
+          file out/ctl/vst-ctl | grep -q 'ELF 64-bit.*executable' || {
+            echo "vst-ctl is not a native ELF executable:"; file out/ctl/vst-ctl; exit 1
+          }
+          echo "OK: $(file -b out/ctl/vst-ctl | cut -d, -f1-2), $(du -h out/ctl/vst-ctl | cut -f1)"

@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Launcher;
 
@@ -24,7 +26,7 @@ internal sealed class EngineSettings
     /// text itself. Settable globally or per voice. A client that sends SSML
     /// <c>xml:lang</c> overrides it for the tagged fragment.
     /// </summary>
-    public string Language { get; set; } = Shared.SupertonicLanguages.Default;
+    public string Language { get; set; } = SupertonicLanguages.Default;
     public float VolumeTrimDb { get; set; } = 0f;
 
     public int MaxChunkChars { get; set; } = 200;
@@ -46,6 +48,23 @@ internal sealed class EngineSettings
 
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
 
+    /// <summary>
+    /// Keys this build does not know about, carried through a read/write cycle
+    /// unchanged.
+    ///
+    /// This one matters more than the engine's copy of it, because the launcher
+    /// is the half that <em>writes</em>. Without it the deserializer drops
+    /// unrecognised properties and Save() then persists the object it parsed, so
+    /// every key the Linux daemon added is erased the next time the user touches
+    /// a slider. The data folder is portable by design — a USB stick, a dual-boot
+    /// mount, a synced directory — so the two hosts genuinely do share a file.
+    ///
+    /// <see cref="PerVoice"/> nests this same type, so per-voice overrides
+    /// inherit the behaviour.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
+
     public void ApplyPreset(QualityPreset p)
     {
         Preset = p;
@@ -63,6 +82,11 @@ internal sealed class EngineSettings
     {
         var c = (EngineSettings)MemberwiseClone();
         c.PerVoice = PerVoice.ToDictionary(kv => kv.Key, kv => kv.Value.Clone());
+        // Copied rather than shared: the UI clones settings to build an "edited"
+        // candidate it may discard, and a shared dictionary would let a discarded
+        // edit reach the live object. JsonElement itself is immutable, so a
+        // shallow copy of the dictionary is enough.
+        c.Extra = Extra is null ? null : new Dictionary<string, JsonElement>(Extra);
         return c;
     }
 }
@@ -258,10 +282,10 @@ internal static class EngineSettingsRegistry
                     // instruction, and "typo'd de-DE quietly became English" is a
                     // worse outcome here than an error the caller can read.
                     string want = value.Trim().ToLowerInvariant();
-                    if (want != "na" && !Shared.SupertonicLanguages.All.Any(l => l.Code == want))
+                    if (want != "na" && !SupertonicLanguages.All.Any(l => l.Code == want))
                     {
                         error = $"Unknown language: {value}. Supported: " +
-                                string.Join(", ", Shared.SupertonicLanguages.All.Select(l => l.Code));
+                                string.Join(", ", SupertonicLanguages.All.Select(l => l.Code));
                         return false;
                     }
                     s.Language = want;

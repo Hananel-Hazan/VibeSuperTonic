@@ -1,4 +1,6 @@
 using System.Windows.Forms;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Launcher.Ui;
 
@@ -117,7 +119,7 @@ internal sealed class TuneTab : UserControl
             "overrides this for the tagged passage.");
         body.Controls.Add(languageLabel, 0, 6);
         _language = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
-        foreach (var l in Shared.SupertonicLanguages.All) _language.Items.Add(l.DisplayName);
+        foreach (var l in SupertonicLanguages.All) _language.Items.Add(l.DisplayName);
         languageTip.SetToolTip(_language, "Applies to the scope selected above — globally, or to one voice.");
         _language.SelectedIndexChanged += (_, _) => OnAnyChanged();
         body.Controls.Add(_language, 1, 6);
@@ -240,8 +242,8 @@ internal sealed class TuneTab : UserControl
             int idx = Array.FindIndex(Voices.All, v => v.Id == target.DefaultVoice);
             _defaultVoice.SelectedIndex = idx < 0 ? 0 : idx;
 
-            string langCode = Shared.SupertonicLanguages.Normalize(target.Language);
-            int langIdx = Array.FindIndex(Shared.SupertonicLanguages.All, l => l.Code == langCode);
+            string langCode = SupertonicLanguages.Normalize(target.Language);
+            int langIdx = Array.FindIndex(SupertonicLanguages.All, l => l.Code == langCode);
             _language.SelectedIndex = langIdx < 0 ? 0 : langIdx;
 
             switch (target.Preset)
@@ -268,7 +270,7 @@ internal sealed class TuneTab : UserControl
             DspRate = _dspRate.Value / 100f,
             VolumeTrimDb = _volumeTrim.Value,
             DefaultVoice = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id,
-            Language = Shared.SupertonicLanguages.All[Math.Max(0, _language.SelectedIndex)].Code,
+            Language = SupertonicLanguages.All[Math.Max(0, _language.SelectedIndex)].Code,
             Preset = CurrentPreset(),
             // Tier B knobs preserved from existing settings
             MaxChunkChars = s.MaxChunkChars,

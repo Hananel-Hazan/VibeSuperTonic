@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Models;
 
 namespace VibeSuperTonic.Launcher.Integrity;
 
@@ -10,7 +11,14 @@ internal sealed record CheckResult(
     bool Ok,
     string Detail,
     string? FixHint,
-    Func<IProgress<string>?, CancellationToken, Task<bool>>? Repair);
+    Func<IProgress<string>?, CancellationToken, Task<bool>>? Repair,
+    /// <summary>
+    /// True when <see cref="Repair"/> changes something outside this install —
+    /// currently only "install a .NET runtime machine-wide". Callers must ask
+    /// first: "Repair all" writing registry keys and fetching models is what the
+    /// button promises, silently installing a system runtime is not.
+    /// </summary>
+    bool NeedsConsent = false);
 
 internal static class Checks
 {
@@ -19,13 +27,16 @@ internal static class Checks
         var results = new List<CheckResult>();
         var state = Registration.Inspect(baseDirOverride);
         results.Add(BaseDirCheck(state));
-        results.Add(DotNetX64Check());
+        results.Add(DotNetX64Check(state));
         results.Add(DotNetX86Check(state));
+        results.Add(VcRuntimeCheck(state, DotNetRuntime.Arch.X64));
+        results.Add(VcRuntimeCheck(state, DotNetRuntime.Arch.X86));
         results.Add(X64ComHostFileCheck(state));
         results.Add(X86ComHostFileCheck(state));
         results.Add(HklmTokensCheck(state));
         results.Add(HkcuClsidX64Check(state));
         results.Add(HkcuClsidX86Check(state));
+        results.Add(Sapi32BitCheck(state));
         results.Add(BaseDirRecordedCheck(state));
         results.Add(ModelsCheck(state));
         results.Add(VoiceStylesCheck(state));
@@ -41,31 +52,136 @@ internal static class Checks
         FixHint: null,
         Repair: null);
 
-    private static CheckResult DotNetX64Check()
+    // Named ".NET 10 Runtime", not "Desktop Runtime". The engine targets
+    // net10.0-windows but sets neither UseWindowsForms nor UseWPF, so its
+    // runtimeconfig.json asks only for Microsoft.NETCore.App. Recommending the
+    // Desktop Runtime worked, but sent users after a much larger download than
+    // they need and misdescribed what was actually missing.
+    private static CheckResult DotNetX64Check(Registration.State s)
     {
-        bool ok = File.Exists(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe"));
+        bool ok = s.X64RuntimeInstalled;
         return new(
-            ".NET 10 Desktop Runtime (x64)",
+            $".NET {DotNetRuntime.RequiredMajor} Runtime (x64)",
             CheckSeverity.Error,
             ok,
-            ok ? "installed" : "missing — required for the engine to run",
-            "winget install Microsoft.DotNet.DesktopRuntime.10",
-            Repair: null);
+            ok ? DotNetRuntime.Describe(DotNetRuntime.Arch.X64)
+               : $"{DotNetRuntime.Describe(DotNetRuntime.Arch.X64)} — 64-bit SAPI clients cannot load the engine",
+            $"Double-click this row to install it, or run: {DotNetRuntime.WingetCommand(DotNetRuntime.Arch.X64)}",
+            Repair: (log, ct) => RuntimeInstaller.InstallAsync(DotNetRuntime.Arch.X64, log, ct),
+            NeedsConsent: true);
     }
 
     private static CheckResult DotNetX86Check(Registration.State s)
     {
         if (!s.X86ComHostExists)
-            return new(".NET 10 Desktop Runtime (x86)", CheckSeverity.Info, true, "not required (no x86 engine)", null, null);
+            return new($".NET {DotNetRuntime.RequiredMajor} Runtime (x86)", CheckSeverity.Info, true,
+                "not required (no x86 engine shipped)", null, null);
+
         bool ok = s.X86RuntimeInstalled;
         return new(
-            ".NET 10 Desktop Runtime (x86)",
-            CheckSeverity.Warning,
+            $".NET {DotNetRuntime.RequiredMajor} Runtime (x86)",
+            // Error, not Warning. This build ships an x86 engine, which is a
+            // promise that 32-bit hosts work; without the runtime they do not,
+            // and a yellow "!" in a list of green ticks reads as a footnote
+            // rather than as the reason nothing works.
+            CheckSeverity.Error,
             ok,
-            ok ? "installed" : "missing — 32-bit SAPI clients (Balabolka 32-bit, etc.) cannot use the engine",
-            "winget install Microsoft.DotNet.DesktopRuntime.10 --architecture x86 --force",
-            Repair: null);
+            ok ? DotNetRuntime.Describe(DotNetRuntime.Arch.X86)
+               : $"{DotNetRuntime.Describe(DotNetRuntime.Arch.X86)} — 32-bit clients (Balabolka, Lingoes, NVDA) see NO voices",
+            $"Double-click this row to install it, or run: {DotNetRuntime.WingetCommand(DotNetRuntime.Arch.X86)}",
+            Repair: (log, ct) => RuntimeInstaller.InstallAsync(DotNetRuntime.Arch.X86, log, ct),
+            NeedsConsent: true);
+    }
+
+    /// <summary>
+    /// The Visual C++ runtime that ONNX Runtime's native DLL links against.
+    ///
+    /// Missing, the engine fails at the first ORT call with
+    /// "Unable to load DLL '…\onnxruntime.dll' or one of its dependencies
+    /// (0x8007007E)" — naming a file that is present and not naming the one that
+    /// is not. It is worth a check row of its own precisely because that error
+    /// sends everyone who reads it to look at the wrong file.
+    ///
+    /// The x64 redistributable is on most machines already, dragged in by
+    /// something else; the x86 one usually is not. So this reproduces the .NET
+    /// split exactly — 64-bit hosts fine, 32-bit hosts silent.
+    /// </summary>
+    private static CheckResult VcRuntimeCheck(Registration.State s, DotNetRuntime.Arch arch)
+    {
+        bool x86 = arch == DotNetRuntime.Arch.X86;
+        string title = $"Visual C++ runtime ({(x86 ? "x86" : "x64")})";
+
+        if (x86 && !s.X86ComHostExists)
+            return new(title, CheckSeverity.Info, true, "not required (no x86 engine shipped)", null, null);
+
+        bool ok = VcRuntime.IsInstalled(arch);
+        return new(
+            title,
+            CheckSeverity.Error,
+            ok,
+            ok ? VcRuntime.Describe(arch)
+               : $"{VcRuntime.Describe(arch)} — ONNX Runtime cannot load, so {(x86 ? "32" : "64")}-bit clients get no audio",
+            $"Double-click this row to install it, or run: {VcRuntime.WingetCommand(arch)}",
+            Repair: (log, ct) => RuntimeInstaller.InstallVcRuntimeAsync(arch, log, ct),
+            NeedsConsent: true);
+    }
+
+    /// <summary>
+    /// The bottom line for a 32-bit host, stated once and plainly.
+    ///
+    /// Every other row here reports on a step; this one reports on the outcome.
+    /// It exists because the Status tab could show eleven green ticks on a
+    /// machine where Balabolka and Lingoes listed no VibeSuperTonic voices at
+    /// all: the token check only inspected the 32-bit registry view when we had
+    /// decided to populate it, and the x86 CLSID row rendered "(skipped)" as a
+    /// pass. Both were self-consistent and together they told the user the
+    /// install was fine.
+    /// </summary>
+    private static CheckResult Sapi32BitCheck(Registration.State s)
+    {
+        if (!s.X86ComHostExists)
+            return new("32-bit SAPI clients", CheckSeverity.Info, true,
+                "not supported by this build (no x86 engine shipped)", null, null);
+
+        // Listed and usable are different claims. Registration can be perfect
+        // while the engine still cannot synthesise a sample, which is exactly what
+        // a missing x86 Visual C++ runtime produces: the voices appear in the
+        // reader, the user picks one, and nothing is ever heard. Reporting "all
+        // voices visible" there would be true and useless.
+        if (s.Sapi32BitWorks && !VcRuntime.IsInstalled(DotNetRuntime.Arch.X86))
+            return new(
+                "32-bit SAPI clients",
+                CheckSeverity.Error,
+                Ok: false,
+                Detail: "voices are listed but produce NO audio — Visual C++ runtime (x86) is missing",
+                FixHint: $"Install it, then restart your reader:  {VcRuntime.WingetCommand(DotNetRuntime.Arch.X86)}",
+                Repair: (log, ct) => RuntimeInstaller.InstallVcRuntimeAsync(DotNetRuntime.Arch.X86, log, ct),
+                NeedsConsent: true);
+
+        if (s.Sapi32BitWorks)
+            return new("32-bit SAPI clients", CheckSeverity.Error, true,
+                $"all {Voices.All.Length} voices visible to 32-bit hosts", null, null);
+
+        string why = !s.X86RuntimeInstalled
+            ? $"the 32-bit .NET {DotNetRuntime.RequiredMajor} runtime is not installed"
+            : !s.X86TokensPresent
+                ? "voice tokens are missing from the 32-bit registry view"
+                : "the engine is not registered in the 32-bit CLSID view";
+
+        return new(
+            "32-bit SAPI clients",
+            CheckSeverity.Error,
+            Ok: false,
+            Detail: $"NO voices — {why}",
+            FixHint: !s.X86RuntimeInstalled
+                ? $"Install the x86 runtime, then press Repair all:  {DotNetRuntime.WingetCommand(DotNetRuntime.Arch.X86)}"
+                : "Press Repair all (UAC required to write the 32-bit voice tokens).",
+            Repair: s.X86RuntimeInstalled
+                ? async (log, ct) => await Task.Run(() => Registration.Register(msg => log?.Report(msg)) == 0, ct)
+                // No Repair while the runtime is absent: registering would make the
+                // voices appear and then fail on first Speak, which sends the user
+                // hunting an engine bug instead of a missing download.
+                : null);
     }
 
     private static CheckResult X64ComHostFileCheck(Registration.State s) => new(
@@ -89,7 +205,10 @@ internal static class Checks
         CheckSeverity.Error,
         s.TokensComplete,
         s.TokensComplete
-            ? $"all {Voices.All.Length} voices registered"
+            // Says which views, because "all 10 voices registered" was true of the
+            // 64-bit view alone and read as "registered everywhere" — on a machine
+            // where no 32-bit client could see a single one.
+            ? $"all {Voices.All.Length} voices registered — 64-bit{(s.X86TokensPresent ? " and 32-bit" : " only, NOT 32-bit")}"
             : "missing or stale — run Repair (UAC required)",
         "Repair will elevate and rewrite the tokens.",
         Repair: async (log, ct) => await Task.Run(() =>
@@ -114,8 +233,15 @@ internal static class Checks
         "HKCU CLSID InprocServer32 (x86)",
         s.X86Available ? CheckSeverity.Warning : CheckSeverity.Info,
         Ok: s.ClsidX86Correct,
-        Detail: !s.X86Available ? "(skipped — no x86 engine or runtime)" :
-                s.ClsidX86Correct ? s.X86ComHostPath : "missing or pointing to wrong path",
+        // "(skipped)" used to render as a pass. It is a pass for *this* row — we
+        // did what we intended — but the reason belongs in the text, because the
+        // consequence is that 32-bit hosts get nothing. The blunt version of that
+        // is the "32-bit SAPI clients" row below.
+        Detail: !s.X86Available
+            ? (s.X86ComHostExists
+                ? "not registered — 32-bit runtime missing (see below)"
+                : "(skipped — no x86 engine shipped)")
+            : s.ClsidX86Correct ? s.X86ComHostPath : "missing or pointing to wrong path",
         FixHint: "Repair will rewrite from BaseDir.",
         Repair: async (log, ct) => await Task.Run(() =>
         {
@@ -159,7 +285,10 @@ internal static class Checks
             "Repair will download missing files (with SHA-256 verify).",
             Repair: async (log, ct) =>
             {
-                var dl = new ModelDownloader(s.BaseDir, manifest);
+                // Core has no way to ask Windows who holds a file, so the
+                // Restart Manager probe is supplied from this side (R-12: the
+                // Windows-only machinery stays Windows-side).
+                var dl = new ModelDownloader(s.BaseDir, manifest, DescribeLockHolders);
                 return await dl.EnsureAllAsync(log, ct);
             });
     }
@@ -200,6 +329,19 @@ internal static class Checks
             Detail: $"In use by: {who}",
             FixHint: "Close the listed program(s) before running Repair or replacing model files.",
             Repair: null);
+    }
+
+    /// <summary>
+    /// Who is holding a model file open, or null when nobody is. Shaped for
+    /// Core's <c>FileLockDescriber</c>.
+    /// </summary>
+    private static string? DescribeLockHolders(string path)
+    {
+        if (LockProbe.IsWritable(path)) return null;
+        var holders = LockProbe.GetHolders(path);
+        return holders.Count > 0
+            ? string.Join(", ", holders.Select(h => $"{h.FriendlyName} (PID {h.Pid})"))
+            : "(unknown processes)";
     }
 
     private static bool HasAnyOnnx(string baseDir)

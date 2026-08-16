@@ -1,57 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
+using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.Launcher;
 
-/// <summary>
-/// Mirror of <c>VibeSuperTonic.Engine.Settings.PronunciationRule</c> — duplicated
-/// for the same reason as <see cref="DataPaths"/> and <see cref="EngineSettings"/>:
-/// the engine loads as a COM in-proc DLL inside arbitrary host processes and
-/// pulling the launcher in via project reference would balloon every host's
-/// working set. Keep the field set in sync.
-/// </summary>
-internal sealed class PronunciationRule
-{
-    public bool   Enabled       { get; set; } = true;
-    public string Match         { get; set; } = "";
-    public string Replace       { get; set; } = "";
-    public bool   WholeWord     { get; set; } = true;
-    public bool   CaseSensitive { get; set; } = true;
-    public string Notes         { get; set; } = "";
-
-    public PronunciationRule Clone() => (PronunciationRule)MemberwiseClone();
-}
-
-internal sealed class PronunciationsConfig
-{
-    public bool Enabled { get; set; } = true;
-    public List<PronunciationRule> Rules { get; set; } = new();
-
-    /// <summary>
-    /// Used by the Pronunciations tab's "Test" pane so the user sees exactly
-    /// what the engine will see. Engine-side <c>Apply</c> uses pre-compiled
-    /// regexes (cached); the tab compiles on demand because edits are rare.
-    /// </summary>
-    public string Apply(string text)
-    {
-        if (!Enabled || string.IsNullOrEmpty(text) || Rules.Count == 0) return text;
-        foreach (var r in Rules)
-        {
-            if (!r.Enabled || string.IsNullOrEmpty(r.Match)) continue;
-            try
-            {
-                string pattern = Regex.Escape(r.Match);
-                if (r.WholeWord) pattern = @"\b" + pattern + @"\b";
-                var opts = RegexOptions.CultureInvariant;
-                if (!r.CaseSensitive) opts |= RegexOptions.IgnoreCase;
-                text = Regex.Replace(text, pattern, r.Replace ?? "", opts);
-            }
-            catch { /* skip broken rule */ }
-        }
-        return text;
-    }
-}
+// PronunciationRule and PronunciationsConfig used to be declared here as a
+// hand-maintained mirror of the engine's copies. They now come from
+// VibeSuperTonic.Core.Text, so the Test pane in the Pronunciations tab runs the
+// exact code the engine runs — the previous arrangement had two Apply methods
+// that were merely intended to agree, and one of them (this one) compiled its
+// regexes with different options.
+//
+// The load/save portal below stays here: it resolves the path through the
+// launcher's DataPaths, which is registry-backed and therefore Windows-only.
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
 [JsonSerializable(typeof(PronunciationsConfig))]

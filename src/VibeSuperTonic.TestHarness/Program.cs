@@ -3,7 +3,10 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.TestHarness;
 
@@ -29,9 +32,535 @@ internal static class Program
         failures += Step5_SsmlEvents();
         failures += Step6_ProsodyRate();
         failures += Step7_LanguageTag();
+        failures += Step8_WordBoundaryOffsets();
+        failures += Step9_PronunciationOffsets();
+        failures += Step10_PlannerMatchesEngine();
+        failures += Step11_PlaybackClockAndScheduler();
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "ALL TESTS PASSED" : $"{failures} TEST(S) FAILED");
         return failures;
+    }
+
+
+    // ================================================================ offsets
+    //
+    // R-2 and R-14 are both about where a word-boundary event says the spoken
+    // word is. Nothing above tests that: Step 5 counts events and never looks at
+    // their positions, which is how both bugs survived for as long as they did.
+    //
+    // These two steps are the automated form of "watch Balabolka highlight and
+    // see whether it drifts". They are the check that clears the Phase 1 gate.
+
+    /// <summary>
+    /// Every reported word-boundary offset must land exactly on a word start in
+    /// the source text.
+    ///
+    /// Not circular, though it looks it. System.Speech derives
+    /// <c>SpeakProgressEventArgs.Text</c> BY substringing the prompt at the
+    /// offset the engine reported, so comparing those two always agrees and
+    /// proves nothing. The ground truth here is computed independently — the
+    /// actual word starts of the source string — and the engine's reported
+    /// positions are matched against it.
+    ///
+    /// The separators are the point. The chunker normalises whitespace, so a
+    /// newline, a tab or a double space between sentences produced a chunk that
+    /// was not a substring of its own input; the old IndexOf recovery missed and
+    /// fell back to a running count in rewritten coordinates, drifting one
+    /// character per collapsed separator (R-14).
+    /// </summary>
+    private static int Step8_WordBoundaryOffsets()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Step 8: word-boundary offsets land on real words (R-14) ===");
+
+        var cases = new (string Label, string Text)[]
+        {
+            ("single space",   "First sentence here. Second sentence here. Third one is here."),
+            ("newline",        "First sentence here.\nSecond sentence here.\nThird one is here."),
+            ("double space",   "First sentence here.  Second sentence here.  Third one is here."),
+            ("paragraph break","First sentence here.\n\nSecond sentence here.\n\nThird one is here."),
+            ("tab",            "First sentence here.\tSecond sentence here.\tThird one is here."),
+        };
+
+        int failures = 0;
+        foreach (var (label, text) in cases)
+        {
+            try
+            {
+                var events = new List<(int Pos, int Count)>();
+                using (var synth = new SpeechSynthesizer())
+                {
+                    synth.SelectVoice(TargetVoice);
+                    synth.SetOutputToDefaultAudioDevice();
+                    synth.SpeakProgress += (s, e) => events.Add((e.CharacterPosition, e.CharacterCount));
+                    synth.Speak(text);
+                }
+
+                // Ground truth: index of every word start in the SOURCE.
+                var wordStarts = new HashSet<int>();
+                for (int i = 0; i < text.Length; i++)
+                    if (!char.IsWhiteSpace(text[i]) && (i == 0 || char.IsWhiteSpace(text[i - 1])))
+                        wordStarts.Add(i);
+
+                int offBy = 0, outOfRange = 0, maxDrift = 0;
+                foreach (var (pos, count) in events)
+                {
+                    if (pos < 0 || pos >= text.Length || pos + count > text.Length) { outOfRange++; continue; }
+                    if (wordStarts.Contains(pos)) continue;
+                    offBy++;
+                    int nearest = int.MaxValue;
+                    foreach (int w in wordStarts) nearest = Math.Min(nearest, Math.Abs(w - pos));
+                    maxDrift = Math.Max(maxDrift, nearest);
+                }
+
+                bool ok = events.Count >= 6 && offBy == 0 && outOfRange == 0;
+                Console.WriteLine(
+                    $"  {(ok ? "PASS" : "FAIL")} {label,-16} events={events.Count,3}  " +
+                    $"off-word={offBy}  out-of-range={outOfRange}" +
+                    (maxDrift > 0 ? $"  max drift={maxDrift} chars" : ""));
+
+                if (!ok)
+                {
+                    failures++;
+                    foreach (var (pos, count) in events.Take(12))
+                    {
+                        string shown = pos >= 0 && pos + count <= text.Length && count > 0
+                            ? text.Substring(pos, count) : "<out of range>";
+                        Console.WriteLine($"      pos={pos,3} len={count,2} -> \"{shown}\"" +
+                                          (wordStarts.Contains(pos) ? "" : "   <-- not a word start"));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  FAIL {label}: {ex.GetType().Name}: {ex.Message}");
+                failures++;
+            }
+        }
+        return failures;
+    }
+
+    /// <summary>
+    /// The same check with a length-changing pronunciation rule active — R-2
+    /// itself.
+    ///
+    /// A rule that rewrites "kg" to "kilograms" adds seven characters before the
+    /// text reaches the model, so every later boundary in that fragment used to
+    /// be reported seven characters late, and the error accumulated per rule
+    /// firing. The rule is installed into pronunciations.json for the duration of
+    /// this step and the previous file is restored afterwards, including when the
+    /// step throws.
+    /// </summary>
+    private static int Step9_PronunciationOffsets()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Step 9: offsets survive a length-changing rule (R-2) ===");
+
+        string? dataDir = ResolveDataDir();
+        if (dataDir is null)
+        {
+            Console.WriteLine("  SKIP: cannot resolve the data directory from HKCU\\SOFTWARE\\VibeSuperTonic");
+            return 0;
+        }
+
+        string path = Path.Combine(dataDir, "pronunciations.json");
+        string? backup = File.Exists(path) ? File.ReadAllText(path) : null;
+
+        try
+        {
+            File.WriteAllText(path, """
+            {
+              "Enabled": true,
+              "Rules": [
+                { "Enabled": true, "Match": "kg", "Replace": "kilograms", "WholeWord": true, "CaseSensitive": false, "Notes": "harness R-2 probe" }
+              ]
+            }
+            """);
+            // The engine caches by mtime, so a fresh write is picked up on the
+            // next Speak without restarting anything.
+
+            const string Text = "The parcel weighs 5 kg today.\nThe second parcel weighs 9 kg also.";
+            var events = new List<(int Pos, int Count)>();
+            using (var synth = new SpeechSynthesizer())
+            {
+                synth.SelectVoice(TargetVoice);
+                synth.SetOutputToDefaultAudioDevice();
+                synth.SpeakProgress += (s, e) => events.Add((e.CharacterPosition, e.CharacterCount));
+                synth.Speak(Text);
+            }
+
+            var wordStarts = new HashSet<int>();
+            for (int i = 0; i < Text.Length; i++)
+                if (!char.IsWhiteSpace(Text[i]) && (i == 0 || char.IsWhiteSpace(Text[i - 1])))
+                    wordStarts.Add(i);
+
+            int offBy = 0, maxDrift = 0;
+            foreach (var (pos, count) in events)
+            {
+                if (pos < 0 || pos >= Text.Length) { offBy++; continue; }
+                if (wordStarts.Contains(pos)) continue;
+                offBy++;
+                int nearest = int.MaxValue;
+                foreach (int w in wordStarts) nearest = Math.Min(nearest, Math.Abs(w - pos));
+                maxDrift = Math.Max(maxDrift, nearest);
+            }
+
+            // "kilograms" is nine spoken characters covering the two the user
+            // typed, so a boundary landing on it must report length 2 — the
+            // second half of the R-2 fix.
+            int kg = Text.IndexOf("kg", StringComparison.Ordinal);
+            var atKg = events.Where(e => e.Pos == kg).ToList();
+
+            bool ok = offBy == 0 && events.Count >= 8;
+            Console.WriteLine($"  {(ok ? "PASS" : "FAIL")} events={events.Count}  off-word={offBy}" +
+                              (maxDrift > 0 ? $"  max drift={maxDrift} chars" : ""));
+            Console.WriteLine(atKg.Count > 0
+                ? $"  boundary at \"kg\" (pos {kg}): length {atKg[0].Count} " +
+                  (atKg[0].Count == 2 ? "(correct — covers the source token)" : "(expected 2)")
+                : $"  note: no boundary reported exactly at \"kg\" (pos {kg}); client may group it");
+
+            if (!ok)
+                foreach (var (pos, count) in events.Take(14))
+                {
+                    string shown = pos >= 0 && pos + count <= Text.Length && count > 0
+                        ? Text.Substring(pos, count) : "<out of range>";
+                    Console.WriteLine($"      pos={pos,3} len={count,2} -> \"{shown}\"" +
+                                      (wordStarts.Contains(pos) ? "" : "   <-- not a word start"));
+                }
+            return ok ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  FAIL: {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try
+            {
+                if (backup is null) File.Delete(path);
+                else File.WriteAllText(path, backup);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  WARN: could not restore {path}: {ex.Message}. " +
+                                  "Check the Pronunciations tab before shipping anything.");
+            }
+        }
+    }
+
+    // ============================================================== Phase 2
+    //
+    // The Linux port grows a second consumer of Core's text handling: the daemon
+    // has no SAPI to hold the playback clock, so it plans word boundaries itself
+    // and releases them as audio plays. Both halves of that live in Core and are
+    // therefore Windows code as much as Linux code — which is why they are
+    // checked here, on the machine that has a real engine to disagree with.
+    //
+    // Step 10 is the one that could not be written anywhere else. Step 11 is
+    // pure arithmetic that also runs in Core.Tests; it is repeated here because
+    // this exe is what actually gets run on a target machine.
+
+    /// <summary>
+    /// Core's <c>BoundaryPlanner</c> must predict exactly the offsets the live
+    /// engine reports.
+    ///
+    /// <para>There is a unit test that holds the planner against a transcription
+    /// of <c>SapiEngine.EmitWordBoundaries</c>. This is the stronger claim: it
+    /// holds it against the engine <em>as installed and running</em>, through
+    /// COM, SAPI and whatever settings and pronunciation rules this machine
+    /// actually has. A transcription can be faithful to source that has since
+    /// changed; this cannot.</para>
+    ///
+    /// <para>Reads this machine's <c>pronunciations.json</c> and chunk-size
+    /// settings and feeds them to the planner, because a check that only passes
+    /// on a default install tells you about the default install.</para>
+    ///
+    /// <para>Matched as a subsequence rather than element-for-element:
+    /// System.Speech is free to coalesce progress events, so an engine event
+    /// that never surfaces is not a disagreement. Every event that <em>does</em>
+    /// surface must be one the planner predicted, at the same position and the
+    /// same length, in order.</para>
+    /// </summary>
+    private static int Step10_PlannerMatchesEngine()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Step 10: Core's boundary planner agrees with the live engine ===");
+
+        var (pron, compiled, maxChars, minChars) = LoadEngineTextConfig();
+        Console.WriteLine($"  config: rules={pron?.Rules.Count(r => r.Enabled) ?? 0} " +
+                          $"maxChunk={maxChars} minChunk={minChars}");
+
+        var cases = new (string Label, string Text)[]
+        {
+            ("single space",    "First sentence here. Second sentence here. Third one is here."),
+            ("double space",    "First sentence here.  Second sentence here.  Third one is here."),
+            ("paragraph break", "First sentence here.\n\nSecond sentence here.\n\nThird one is here."),
+            ("tab",             "First sentence here.\tSecond sentence here.\tThird one is here."),
+            ("hyphens/apostrophes",
+                               "It's a well-known fact. Don't split hyphenates. Twenty-one items remain."),
+        };
+
+        int failures = 0;
+        foreach (var (label, text) in cases)
+        {
+            try
+            {
+                var reported = new List<(int Pos, int Count)>();
+                using (var synth = new SpeechSynthesizer())
+                {
+                    synth.SelectVoice(TargetVoice);
+                    synth.SetOutputToDefaultAudioDevice();
+                    synth.SpeakProgress += (s, e) => reported.Add((e.CharacterPosition, e.CharacterCount));
+                    synth.Speak(text);
+                }
+
+                var predicted = PredictBoundaries(text, pron, compiled, maxChars, minChars);
+
+                // Subsequence match — see the summary for why.
+                int p = 0, unmatched = 0;
+                (int Pos, int Count)? firstMiss = null;
+                foreach (var ev in reported)
+                {
+                    while (p < predicted.Count && predicted[p] != ev) p++;
+                    if (p < predicted.Count) { p++; continue; }
+
+                    unmatched++;
+                    firstMiss ??= ev;
+                    p = 0;  // restart so one stray event does not fail all the rest
+                }
+
+                bool ok = reported.Count >= 6 && unmatched == 0;
+                Console.WriteLine(
+                    $"  {(ok ? "PASS" : "FAIL")} {label,-20} engine={reported.Count,3} " +
+                    $"predicted={predicted.Count,3}  unmatched={unmatched}");
+
+                if (!ok)
+                {
+                    failures++;
+                    if (firstMiss is { } miss)
+                    {
+                        string shown = miss.Pos >= 0 && miss.Pos + miss.Count <= text.Length && miss.Count > 0
+                            ? text.Substring(miss.Pos, miss.Count) : "<out of range>";
+                        Console.WriteLine($"      engine reported pos={miss.Pos} len={miss.Count} " +
+                                          $"-> \"{shown}\", which the planner did not predict");
+                    }
+                    Console.WriteLine("      engine:    " + Format(reported, text));
+                    Console.WriteLine("      predicted: " + Format(predicted, text));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  FAIL {label}: {ex.GetType().Name}: {ex.Message}");
+                failures++;
+            }
+        }
+        return failures;
+
+        static string Format(List<(int Pos, int Count)> events, string text) =>
+            string.Join(" ", events.Take(10).Select(e =>
+                e.Pos >= 0 && e.Pos + e.Count <= text.Length && e.Count > 0
+                    ? $"{e.Pos}:\"{text.Substring(e.Pos, e.Count)}\""
+                    : $"{e.Pos}:<bad>"));
+    }
+
+    /// <summary>
+    /// Run <paramref name="text"/> through exactly the composition
+    /// <c>SapiEngine.Speak</c> uses, and return every word boundary the planner
+    /// would place, as (source offset, source length).
+    ///
+    /// Frame counts are irrelevant here and any positive number does: character
+    /// offsets do not depend on how much audio a chunk rendered to. The audio
+    /// placement is proportional and is checked by ear and by the calibration
+    /// spike on Linux, not from here.
+    /// </summary>
+    private static List<(int Pos, int Count)> PredictBoundaries(
+        string text, PronunciationsConfig? pron, IReadOnlyList<Regex?>? compiled,
+        int maxChars, int minChars)
+    {
+        string spoken = SynthTextPipeline.Prepare(text, pron, compiled, out var pipelineMap);
+
+        var planned = new List<BoundaryEvent>();
+        long frame = 0;
+        const int FramesPerChunk = 44_100;
+
+        foreach (var chunk in SentenceChunker.ChunkWithOffsets(spoken, maxChars, minChars))
+        {
+            BoundaryPlanner.PlanChunk(
+                planned, chunk.Text,
+                TextOffsetMap.Chain(chunk.Map, pipelineMap),
+                sourceBase: 0, chunkFrames: FramesPerChunk, streamStartFrame: frame);
+            frame += FramesPerChunk;
+        }
+
+        return planned
+            .Where(e => e.Kind == BoundaryKind.Word)
+            .Select(e => (e.SourceOffset, e.SourceLength))
+            .ToList();
+    }
+
+    /// <summary>
+    /// This machine's pronunciation rules and chunk sizes, read from the same
+    /// files the engine reads. Missing or unreadable files fall back to the
+    /// defaults, which is what the engine does too.
+    /// </summary>
+    private static (PronunciationsConfig? Pron, Regex?[]? Compiled, int MaxChars, int MinChars)
+        LoadEngineTextConfig()
+    {
+        int maxChars = SentenceChunker.MaxChunkChars;
+        int minChars = SentenceChunker.MinChunkChars;
+        PronunciationsConfig? pron = null;
+
+        string? dataDir = ResolveDataDir();
+        if (dataDir is not null)
+        {
+            try
+            {
+                string settingsPath = Path.Combine(dataDir, "settings.json");
+                if (File.Exists(settingsPath))
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(settingsPath));
+                    if (doc.RootElement.TryGetProperty("MaxChunkChars", out var mx) &&
+                        mx.TryGetInt32(out int mxv)) maxChars = mxv;
+                    if (doc.RootElement.TryGetProperty("MinChunkChars", out var mn) &&
+                        mn.TryGetInt32(out int mnv)) minChars = mnv;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  note: could not read settings.json ({ex.GetType().Name}); using defaults");
+            }
+
+            try
+            {
+                string pronPath = Path.Combine(dataDir, "pronunciations.json");
+                if (File.Exists(pronPath))
+                {
+                    var cfg = JsonSerializer.Deserialize<PronunciationsConfig>(
+                        File.ReadAllText(pronPath),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (cfg is { Enabled: true, Rules.Count: > 0 }) pron = cfg;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  note: could not read pronunciations.json ({ex.GetType().Name}); assuming none");
+            }
+        }
+
+        var compiled = pron?.Rules.Select(PronunciationsConfig.Compile).ToArray();
+        return (pron, compiled, maxChars, minChars);
+    }
+
+    /// <summary>
+    /// The playback clock and boundary scheduler, checked on Windows.
+    ///
+    /// Neither touches an audio device — that is the design, so that the part of
+    /// Phase 2 most likely to be subtly wrong can be driven with latency curves
+    /// a real sink only produces on someone else's machine. The same checks run
+    /// in Core.Tests; they are here because this exe is what gets run on a target
+    /// machine, and because a Core that stops compiling on Windows should fail
+    /// loudly in the harness rather than quietly in a CI log nobody opened.
+    /// </summary>
+    private static int Step11_PlaybackClockAndScheduler()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Step 11: playback clock and boundary scheduler (Phase 2) ===");
+
+        const int Rate = 44100;
+        static long Frames(int ms) => (long)Rate * ms / 1000L;
+        static long Usec(long frames) => frames * 1_000_000L / Rate;
+
+        int failures = 0;
+
+        // R-7: no answer before the stream primes. Without this the highlight
+        // opens on the wrong word at every single utterance.
+        var clock = new PlaybackClock(Rate);
+        clock.AddWritten(Frames(500));
+        failures += Check("suppressed while latency reads zero", !clock.Update(0) && !clock.IsPrimed);
+
+        failures += Check("primes and fast-forwards to the true position",
+            clock.Update(Usec(Frames(350))) && clock.PlayedFrames == Frames(150));
+
+        // Jitter must not drag the highlight back over text already shown.
+        clock.Update(Usec(Frames(400)));
+        failures += Check("never moves backwards on jitter", clock.PlayedFrames == Frames(150));
+
+        failures += Check("recovers on the next good reading",
+            clock.Update(Usec(Frames(300))) && clock.PlayedFrames == Frames(200));
+
+        clock.Drained();
+        failures += Check("drain is exact", clock.PlayedFrames == clock.WrittenFrames);
+
+        clock.Reset();
+        failures += Check("reset unprimes", !clock.IsPrimed && clock.WrittenFrames == 0);
+
+        // A whole utterance at the cadence the daemon will use.
+        var steady = new PlaybackClock(Rate);
+        long buffered = Frames(150), truly = 0;
+        bool ranAhead = false, fellBehind = false;
+        for (int i = 0; i < 200; i++)
+        {
+            steady.AddWritten(Frames(20));
+            if (steady.WrittenFrames > buffered) truly = steady.WrittenFrames - buffered;
+            if (!steady.Update(Usec(steady.WrittenFrames - truly))) continue;
+            if (steady.PlayedFrames > truly) ranAhead = true;
+            if (truly - steady.PlayedFrames > Frames(20)) fellBehind = true;
+        }
+        failures += Check("tracks a simulated stream without running ahead", !ranAhead);
+        failures += Check("tracks a simulated stream without falling behind", !fellBehind);
+
+        // Scheduler. Frames start at 1000, not 0: these four checks share one
+        // scheduler and run in sequence, so each expected count is what is left
+        // after the previous call consumed its share. Seeding from frame 0 makes
+        // the first event already due on the "nothing early" check.
+        var sched = new BoundaryScheduler();
+        for (int i = 1; i <= 5; i++) sched.Add(new BoundaryEvent(i * 1000, i * 6, 4, BoundaryKind.Word));
+
+        failures += Check("releases nothing early", sched.Advance(999).Count == 0);
+        failures += Check("releases one at a time", sched.Advance(1000).Count == 1);
+        // 2000, 3000 and 4000 all fall due at once — the priming fast-forward.
+        failures += Check("returns the whole batch when the clock jumps", sched.Advance(4000).Count == 3);
+        failures += Check("does not replay released events", sched.Advance(4000).Count == 0);
+        failures += Check("still holds the event beyond the jump", sched.PendingCount == 1);
+
+        bool threw = false;
+        try { sched.Add(new BoundaryEvent(0, 0, 1, BoundaryKind.Word)); }
+        catch (ArgumentOutOfRangeException) { threw = true; }
+        failures += Check("refuses a backwards frame", threw);
+
+        sched.Reset();
+        failures += Check("reset drops everything", sched.PendingCount == 0 && sched.Current is null);
+
+        return failures;
+
+        static int Check(string label, bool ok)
+        {
+            Console.WriteLine($"  {(ok ? "PASS" : "FAIL")} {label}");
+            return ok ? 0 : 1;
+        }
+    }
+
+    /// <summary>Data directory, resolved the same way the engine resolves it.</summary>
+    private static string? ResolveDataDir()
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
+            if (k is null) return null;
+            string? baseDir = k.GetValue("BaseDir") as string;
+            string? raw = k.GetValue("DataDir") as string;
+            if (string.IsNullOrWhiteSpace(baseDir)) return null;
+
+            string dir = string.IsNullOrWhiteSpace(raw)
+                ? Path.Combine(baseDir, "data")
+                : Path.IsPathRooted(Environment.ExpandEnvironmentVariables(raw))
+                    ? Environment.ExpandEnvironmentVariables(raw)
+                    : Path.Combine(baseDir, Environment.ExpandEnvironmentVariables(raw));
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+        catch { return null; }
     }
 
     /// <summary>

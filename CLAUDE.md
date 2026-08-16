@@ -25,8 +25,11 @@ artifacts. The script is canonical because it:
 
 ### Before you run it: settle the version
 
-The script defaults to `0.2.0`. Before invoking it, **ask the user** whether to
-bump the version, and propose a bump based on what changed:
+The script defaults to `<VstVersion>` in
+[Directory.Build.props](Directory.Build.props) — the last shipped version,
+shared with the Linux packer so one number produces both artifacts. Before
+invoking it, **ask the user** whether to bump the version, and propose a bump
+based on what changed:
 
 - **Patch** (`0.2.0` → `0.2.1`) — bug fixes, internal refactors, no
   user-visible behavior change.
@@ -38,6 +41,10 @@ bump the version, and propose a bump based on what changed:
 Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
+
+After a release ships, update `<VstVersion>` in
+[Directory.Build.props](Directory.Build.props) to the version just shipped, so
+the default stays truthful for the next run and the Linux packer agrees.
 
 Use `AskUserQuestion` to confirm the version — do not silently pick one. The
 version is durable: it embeds in the ZIP filename and is what the user will
