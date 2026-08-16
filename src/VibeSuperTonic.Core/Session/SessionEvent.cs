@@ -29,14 +29,24 @@ public enum SessionEventKind
 /// The single channel through which anything learns what the speech pipeline is
 /// doing.
 ///
-/// <para>That "single" is load-bearing and is [R-1]. The tray and the window
-/// live in the daemon process, which makes it trivially easy for them to read
-/// pipeline state directly — and then splitting them out later, or adding an
-/// external subscriber, or a speech-dispatcher front end, becomes a rewrite. The
-/// order of work is the enforcement: this stream and a <c>vst-ctl subscribe</c>
-/// that merely prints it are built <em>before</em> anything consumes them, so it
-/// has to be a real interface rather than a convenience wrapper over fields
-/// someone already has a reference to.</para>
+/// <para>That "single" is load-bearing and is [R-1]. The order of work was the
+/// first enforcement: this stream and a <c>vst-ctl subscribe</c> that merely
+/// prints it were built <em>before</em> anything consumed them, so it had to be
+/// a real interface rather than a convenience wrapper over fields someone
+/// already has a reference to.</para>
+///
+/// <para><b>Corrected 2026-08-16.</b> This used to say "the tray and the window
+/// live in the daemon process". Half of that is now wrong and half is still the
+/// hazard:</para>
+///
+/// <para>The <em>window</em> is its own process, <c>vibesupertonic-ui</c>, so
+/// for it R-1 is enforced structurally — it cannot reach a field it has no
+/// reference to. The <em>tray</em> is in the daemon, because it has to exist
+/// while the window is closed, and there the original hazard is undiminished:
+/// tray code sits next to <c>SpeechSession</c> and reading its state directly
+/// would cost nothing today and a rewrite the first time anything else wants
+/// the same information. <b>The tray subscribes here like any external client
+/// and touches no session field.</b></para>
 ///
 /// <para>One flat record with nullable fields rather than a subtype per kind:
 /// this goes over a socket as one JSON object per line, and a shape that

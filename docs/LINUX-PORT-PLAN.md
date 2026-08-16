@@ -94,14 +94,16 @@ has something real to be disabled *against*.
 
 **3 · [Phase 6](#phase-6) — app and tray.** The only remaining phase with a
 contingency ladder and the only one whose output a person uses directly — the two
-properties that made Phase 1 overrun. Budget the top of 2–3 days
-([R-10](#constraints)).
+properties that made Phase 1 overrun. Budget the top of **3–4 days**
+([R-10](#constraints)); it grew on 2026-08-16 and [Effort](#effort) says where.
 
-Two things confirmed on this machine 2026-08-16 that remove most of the ladder
-risk: Avalonia **11.3.20** is in the local NuGet cache and restores offline, and
-**tray rung 1 is live** — `org.kde.StatusNotifierWatcher` *and*
-`org.x.StatusNotifierWatcher` are both on the session bus, owned by
-`xapp-sn-watcher`, with `libayatana-appindicator3.so.1` installed as rung 2.
+Two things confirmed on this machine 2026-08-16 that remove most of the risk:
+Avalonia **11.3.20** is in the local NuGet cache and restores offline, which is
+the window; and **the tray's rung 1 has a watcher to register with** —
+`org.kde.StatusNotifierWatcher` *and* `org.x.StatusNotifierWatcher` are both on
+the session bus, owned by `xapp-sn-watcher`, with
+`libayatana-appindicator3.so.1` present as rung 2 if the D-Bus surface
+disappoints.
 
 **4 · [Phase 7](#phase-7) — packaging**, then **the rest of
 [Phase 8](#phase-8)**: the GPU spike behind its gate, the battery rule, and
@@ -284,27 +286,35 @@ Wayland arrives eventually and avoids anything that would be a dead end there.
 
 ## What we're building
 
+Updated 2026-08-16 for the [process decisions](#decisions) — the window moved
+out of the daemon and the keys changed meaning.
+
 ```mermaid
 flowchart TD
-    HK["hotkey: Ctrl+`<br/>(toggle)"] --> CTL
-    CTL["vst-ctl (NativeAOT, ~5ms)"] -->|unix socket| D
-    D["vibesupertonicd"] --> SEL["X11 PRIMARY selection<br/>(never CLIPBOARD)"]
+    HK["hotkeys<br/>Ctrl+` read · Ctrl+~ stop"] --> CTL
+    CTL["vst-ctl (NativeAOT, 6 ms)"] -->|unix socket| D
+    UI["vibesupertonic-ui<br/>Reader / Tune / Status"] -->|same socket:<br/>subscribe + the same verbs| D
+    D["vibesupertonicd<br/>+ tray icon (D-Bus SNI)"] --> SEL["X11 PRIMARY selection<br/>(never CLIPBOARD)"]
     D --> CORE["VibeSuperTonic.Core<br/>shared with Windows engine"]
     CORE --> PA["PulseAudio sink<br/>+ playback clock"]
-    D -->|event stream| UI["Avalonia app<br/>Reader / Tune / Status"]
-    D --> TRAY["tray icon"]
 ```
 
-Three new components, one shared library:
+**Three binaries and one shared library**, all in the same portable folder:
 
-- **`VibeSuperTonic.Core`** — `net10.0`, no Windows types. Model, chunker, DSP,
-  settings, pronunciations. Used by *both* the Windows SAPI engine and the Linux
-  daemon.
-- **`vibesupertonicd`** — long-lived. Holds the warm ONNX session, owns the audio
-  device, owns the tray icon and the window.
-- **`vst-ctl`** — tiny client. Writes one line to a socket and exits.
+- **`VibeSuperTonic.Core`** — `net10.0`, no Windows types, and **no packages at
+  all** ([R-13](#constraints)). Model, chunker, DSP, settings, pronunciations,
+  the session and the protocol. Used by *both* the Windows SAPI engine and the
+  Linux daemon.
+- **`vibesupertonicd`** — long-lived, started on the first hotkey press. Holds
+  the warm ONNX session, owns the audio device, owns the **tray icon** — and
+  does *not* own the window.
+- **`vibesupertonic-ui`** — Avalonia, its own process, runs only when the user
+  opens it. A client of the daemon like any other, which is
+  [R-1](#constraints) enforced by a process boundary rather than by discipline.
+- **`vst-ctl`** — tiny NativeAOT client. Writes one line to a socket and exits,
+  and can do everything the window can ([parity](#decisions)).
 
-The hotkey is registered with the desktop (gsettings), not grabbed by us.
+The hotkeys are registered with the desktop (gsettings), not grabbed by us.
 Selection is read from X11 `PRIMARY`, so the clipboard is never touched.
 
 ---
@@ -603,7 +613,7 @@ to argue with one.
 
 | ID | The constraint, in one line | Bears on |
 | --- | --- | --- |
-| **R-1** | The UI is a subscriber and never an insider: it consumes `subscribe` and sends the same verbs any external client would | Phase 6 — now enforced structurally by the separate-process decision |
+| **R-1** | Anything watching the pipeline is a subscriber and never an insider: it consumes `subscribe` and sends the same verbs any external client would | Phase 6. **Structural for the window** — it is a separate process and has no reference to reach for. **Discipline for the tray**, which is inside the daemon and must subscribe anyway |
 | **R-5** | A hotkey with a dead daemon must never be silence — `vst-ctl` auto-starts one and retries inside a 5 s budget. Generalised: **anything the daemon refuses to start for is a hotkey that silently does nothing**, and that set should stay at "the socket is already held" | Phase 6, Phase 7 |
 | **R-6** | The Reader must not steal its own PRIMARY selection and re-read our own window | Phase 6 — measure whether Avalonia claims PRIMARY at all before building anything |
 | **R-9** | 100 KB selection cap, truncated at a sentence boundary, reporting what was dropped. Built and measured; the tray tooltip that shows it is not | Phase 6 |
@@ -624,7 +634,7 @@ the work that remains.
 
 <a name="phase-6"></a>
 
-### Phase 6 — App and tray · 2–3 days
+### Phase 6 — App and tray · 3–4 days
 
 **Goal.** The window you open to follow along and change knobs.
 
@@ -636,13 +646,17 @@ per-host monitoring has lost its reason to exist.
 Reader tab shows the selection text with a live highlight driven by the playback
 clock, click-a-word-to-jump (the `seek` verb — **not** `ApplySkip`, see the
 preparation note below), and a short history of what was
-read. Tray icon carries the daemon's state — idle, preparing, speaking — so the
-one-key toggle is never a guess, and its tooltip shows "speaking N sentences"
-for long selections (R-9) and whatever the stream's `Notice` says. Menu:
-Speak/Stop (the same toggle), Open, Quit. Clicking it opens the Reader tab, not
-Status: this is a reader that has settings, not a control panel that shows text.
-Autostart via `~/.config/autostart/vibesupertonic.desktop` — **the UI, not the
-daemon**, which `vst-ctl` starts on demand.
+read. **The tray icon is the daemon's** ([decided](#startup)) and carries its
+state — idle, preparing, speaking — so a press is never a guess, with a tooltip
+showing "speaking N sentences" for long selections (R-9) and whatever the
+stream's `Notice` says. Menu: Speak/Stop (the `toggle` verb), Open, and a fourth
+item that is **not** Quit — see [conflict 2](#phase-6-pass2). Clicking it opens
+the Reader tab, not Status: this is a reader that has settings, not a control
+panel that shows text.
+
+**Nothing is autostarted** — no `~/.config/autostart` entry at all. The daemon
+comes up on the first hotkey press and the UI only when opened; the arrangement
+and why it is safe are under [startup and ownership](#startup).
 
 **Two things this phase must honour that are not obvious from the tab list:**
 
@@ -742,8 +756,10 @@ caller wants its own answer, and the two readers are genuinely different.
 It was undecided, and this document assumed both answers:
 [SessionEvent.cs](../src/VibeSuperTonic.Core/Session/SessionEvent.cs) stated it
 as settled — *"The tray and the window live in the daemon process"* — while this
-phase's exit criteria describe two processes, since *"killing the UI window
-leaves speech running"* is a tautology if there is only one.
+phase's exit criteria described two processes, since *"killing the UI window
+leaves speech running"* is a tautology if there is only one. **Both have since
+been corrected**: that comment now records which half survived, and the exit
+criteria below are restated.
 
 **The answer is a separate `vibesupertonic-ui`, and it is the Linux
 convention.** A daemon with a GUI toolkit linked into it is a Windows shape;
@@ -781,9 +797,9 @@ free, [R-1](LINUX-PORT-ARCHIVE.md#r-1) is enforced by a process boundary instead
 of by discipline, the 830 MB resident daemon does not also carry a UI toolkit,
 and the exit criterion becomes something you can actually run.
 
-**What it costs, stated plainly.** One more binary to publish, install,
-autostart and version. R-6 needs the UI's pid — one field on a request, or a
-`hello` verb — see conflict 3 below, which needs the same mechanism.
+**What it costs, stated plainly.** One more binary to publish, install and
+version. R-6 needs the UI's pid — one field on a request, or a `hello` verb —
+see conflict 3 below, which needs the same mechanism.
 
 <a name="startup"></a>
 
@@ -821,9 +837,9 @@ later:
    easy for them to read pipeline state directly". The window escaped that by
    moving out; the tray did not. **Rule: the daemon's tray code subscribes to the
    same `SessionEvent` channel every external client gets, and touches no
-   `SpeechSession` field.** That comment also needs correcting rather than
-   deleting — it is now half true, and half-true comments are worse than wrong
-   ones.
+   `SpeechSession` field.** The comment was corrected in place on 2026-08-16
+   rather than deleted — it had become half true, and a half-true comment is
+   worse than a wrong one, because a reader has no reason to doubt it.
 2. **The tray's Quit has no verb, so it breaks
    [parity](#decisions).** There is no `quit` or `shutdown` in the protocol —
    checked. Either add one, or make the menu item something else. Note what Quit
@@ -895,10 +911,23 @@ report press → ack (already 28 ms, measured) plus ack → icon separately. Two
 numbers that can each be wrong on their own beat one number that cannot be
 checked.
 
-**Exit criteria.** Open the window mid-read and the highlight snaps to the
-correct word. Killing the UI window leaves speech running; killing the daemon
-takes both down. The tray shows Preparing within 150 ms of a press — restated as
-two measurable halves, see finding 6.
+**Exit criteria** — restated 2026-08-16, because two of the three were written
+for a single process and one of those is now false:
+
+- **Open the window mid-read and the highlight snaps to the correct word.**
+  Unchanged, and the `subscribe` snapshot already makes it reachable.
+- **Killing the UI leaves speech running.** Unchanged, and now free: it is a
+  different process.
+- **~~Killing the daemon takes both down.~~** No longer true and no longer
+  wanted. Killing the daemon removes the tray icon, since the daemon owns it,
+  and leaves the window open and **visibly disconnected** — not blank, not
+  pretending. Reconnect on the next press without the user restarting anything.
+- **The tray shows Preparing within 150 ms of a press**, measured as two halves
+  rather than asserted as one — see finding 6.
+- **Every control has a verb.** Walk the window and the tray menu and name the
+  verb behind each. A control that cannot be named is a
+  [parity](#decisions) break, and the two already known are the benchmark button
+  ([Phase 8](#phase-8)'s to wire) and Quit ([conflict 2](#phase-6-pass2)).
 
 **Contingencies** — tray, in descending preference. **Revised 2026-08-16: the
 old rung 1 is gone.** It was Avalonia's `TrayIcon`, and Avalonia now lives in the
@@ -940,7 +969,7 @@ README rather than letting it read as drift.
 
 <a name="phase-7"></a>
 
-### Phase 7 — Packaging · 1–1.5 days
+### Phase 7 — Packaging · 1.5–2 days
 
 **Work.** `build/pack-tar.sh` mirroring the discipline of
 [pack-zip.ps1](../build/pack-zip.ps1): self-contained linux-x64 multi-file,
@@ -1012,6 +1041,15 @@ worse.
 
 *Contingency:* a `.deb` later if people ask for one. Not v1 — it fights the
 portable-folder model that already works.
+
+**Update [CLAUDE.md](../CLAUDE.md) when `pack-tar.sh` exists.** It currently
+names `build/pack-zip.ps1` as *the* canonical packaging script and says in as
+many words not to hand-roll `dotnet publish` for a shippable artifact — a rule
+written when Windows was the only target. Until the Linux packer is named there
+too, the instruction reads as "there is no supported way to build a Linux
+release", and the next agent asked for a tarball will do exactly the ad-hoc
+thing the rule exists to prevent. Same treatment: the script is canonical, the
+version comes from `<VstVersion>`, and the user is asked before it is bumped.
 
 #### Two gaps found by a user double-clicking the daemon, 2026-08-15
 
@@ -1120,7 +1158,7 @@ a failure means.
 
 <a name="phase-8"></a>
 
-### Phase 8 — Fit the machine it runs on · 1 day + a gated spike · **added 2026-08-16**
+### Phase 8 — Fit the machine it runs on · 1.5 days + a gated spike, split around Phase 6 · **added 2026-08-16**
 
 > **Split by decision, 2026-08-16.** The `vst-ctl benchmark` verb and its profile
 > (~1 day) run **before** Phase 6; the battery rule, the GPU spike and wiring
@@ -1346,10 +1384,10 @@ phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
 | 5 · Hotkeys | 0.25 | **done** | R-4 (toggle), R-11 |
 | — · Seam fixes, before 6 | 0.5 | **next** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the list](#next) |
 | 8a · `vst-ctl benchmark`, before 6 | 1 | not started | the sweep, the profile format, the verb. Split out by decision |
-| 6 · App + tray | 2–3 | not started | a second binary, R-1 enforcement, R-9 tooltip, the settings writer's round-trip discipline |
-| 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, two binaries |
+| 6 · App + tray | 3–4 | not started | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip, the settings writer's round-trip discipline |
+| 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, three binaries |
 | 8b · Fit the machine, the rest | 0.5 + spike | not started | battery rule, wiring the Tune control; GPU is a gated spike, not in the estimate |
-| **Remaining** | **5.5–7** | | |
+| **Remaining** | **6.5–8** | | |
 
 **Phase 1 ran well past the top of its range**, and it is worth knowing where the
 time went: not the extraction, which was mostly mechanical, but four Windows
@@ -1368,7 +1406,8 @@ the estimate.
 **Phase 5 drops to 0.25 day and Phase 7 rises.** Phase 3 delivered a working
 `vst-ctl toggle`, so hotkeys are now a `gsettings` write and a conflict check
 rather than any behaviour. Packaging picked that day back up: the tarball now
-carries two binaries, one of which needs a NativeAOT publish — see Phase 7.
+carries **three** binaries, each published a different way, one of them
+NativeAOT — see [Phase 7](#phase-7).
 
 **Phase 5 came in on that estimate**, and the reason is worth keeping: the
 prediction that it had no behaviour left in it held exactly. What time it did
@@ -1384,7 +1423,17 @@ day.
 
 **Three rows are new, all from the 2026-08-16 pass:** the half-day of seam
 fixes, Phase 8's benchmark verb pulled forward as `8a`, and Phase 7 rising
-again. Packaging picked up `fetch-models`, which is the difference
+again.
+
+**Phase 6 rose from 2–3 to 3–4, and the reason is scope rather than pessimism.**
+The 2–3 estimate was written for one process containing Avalonia, its tabs and
+an Avalonia tray icon. The decisions of 2026-08-16 replaced that with: a second
+binary to build, publish and install; a tray icon implemented **in the daemon
+over D-Bus**, which is a new dependency and a protocol the repository has never
+spoken; a `hello` verb to carry client identity; and a first-run window that
+also owns the licence acceptance and the model download. Each is small; together
+they are a day. Recording the rise here rather than absorbing it silently is
+what [R-10](#constraints) asks for. Packaging picked up `fetch-models`, which is the difference
 between a tarball a stranger can use and one that needs a `models/` folder
 copied from a Windows install. The seam fixes are broken out as their own row
 rather than folded into Phase 6 for the reason the last two were: things done
