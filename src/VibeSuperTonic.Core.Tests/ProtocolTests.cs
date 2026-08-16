@@ -108,10 +108,29 @@ public class ProtocolTests
     [Fact]
     public void The_socket_path_is_per_user_and_under_the_runtime_directory()
     {
-        string path = Protocol.SocketPath();
+        // XDG_RUNTIME_DIR is set here rather than inherited. Reading whatever
+        // the environment happened to provide made this test assert the runtime
+        // directory branch on a developer box and the /tmp fallback branch on a
+        // Windows CI runner, where the variable is never set -- and the fallback
+        // directory is named vibesupertonic-<user>, so the assertion below could
+        // not match it. The test named the branch it wanted; now it selects it.
+        string? saved = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        string runtime = Path.Combine(Path.GetTempPath(), "vst-runtime-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(runtime);
+        try
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", runtime);
+            string path = Protocol.SocketPath();
 
-        Assert.EndsWith(Path.Combine(Protocol.SocketDirName, Protocol.SocketFileName), path);
-        Assert.True(Path.IsPathRooted(path));
+            Assert.StartsWith(runtime, path);
+            Assert.EndsWith(Path.Combine(Protocol.SocketDirName, Protocol.SocketFileName), path);
+            Assert.True(Path.IsPathRooted(path));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", saved);
+            Directory.Delete(runtime, recursive: true);
+        }
     }
 
     [Fact]
@@ -126,7 +145,13 @@ public class ProtocolTests
             string path = Protocol.SocketPath();
 
             Assert.EndsWith(Protocol.SocketFileName, path);
-            Assert.Contains(Environment.UserName, path);
+
+            // Asserted on the directory name, not on the whole path: a Windows
+            // temp path is under C:\Users\<user>\AppData\Local\Temp, so a
+            // Contains(UserName) over the whole string passes there whether or
+            // not the fallback is per-user at all.
+            Assert.Equal($"{Protocol.SocketDirName}-{Environment.UserName}",
+                         Path.GetFileName(Path.GetDirectoryName(path)));
         }
         finally
         {
