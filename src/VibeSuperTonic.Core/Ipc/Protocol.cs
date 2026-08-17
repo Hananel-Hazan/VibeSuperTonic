@@ -100,6 +100,31 @@ public enum RequestVerb
     /// would be indistinguishable from one that had hung.</para>
     /// </summary>
     Benchmark,
+
+    /// <summary>
+    /// Stop the daemon: stop any speech, close the socket, exit 0.
+    ///
+    /// <para><b>This is not "quit the application".</b> R-5 brings the daemon
+    /// straight back on the next hotkey press, so what this actually does is
+    /// <em>stop holding ~830 MB until I need you again</em> — and it should be
+    /// labelled as
+    /// that wherever a person sees it, never as Quit. The product has no "off":
+    /// the hotkey works either way, and the only difference is whether the next
+    /// press waits for a model load.</para>
+    ///
+    /// <para><b>Two customers, and neither is an afterthought.</b> Phase 6's tray
+    /// menu needs a fourth item, and a menu item with no verb behind it breaks the
+    /// parity rule — the window is a client and may not have a private path to the
+    /// daemon. Separately, ORT sizes its thread pool when the session is built, so
+    /// a profile written by <see cref="Benchmark"/> cannot reach the session that
+    /// measured it: <c>benchmark</c> then <c>shutdown</c> is how a measurement
+    /// takes effect.</para>
+    ///
+    /// <para>The reply is sent before the daemon begins tearing down. A verb whose
+    /// success is indistinguishable from a dropped connection is one nobody
+    /// trusts.</para>
+    /// </summary>
+    Shutdown,
 }
 
 /// <summary>

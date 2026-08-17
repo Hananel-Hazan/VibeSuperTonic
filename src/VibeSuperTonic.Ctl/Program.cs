@@ -17,6 +17,7 @@ using VibeSuperTonic.Core.Synthesis;
 //   vst-ctl reload              re-read settings.json and pronunciations.json
 //   vst-ctl config              where config was read from, and what it made of it
 //   vst-ctl benchmark           measure this machine and record its thread count
+//   vst-ctl shutdown            stop the daemon; the next press starts it again
 //
 // It holds no state. The daemon decides what a toggle means, which is what
 // makes the hotkey, the tray menu and D-Bus behave identically — and what lets
@@ -46,6 +47,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
           reload       re-read settings.json and pronunciations.json
           config       print the effective configuration and its paths
           benchmark    measure this machine's best thread count and record it
+          shutdown     stop the daemon; the next hotkey press starts it again
 
         Options:
           --no-start   fail instead of starting a daemon that is not running
@@ -111,6 +113,16 @@ string path = Protocol.SocketPath();
 Socket? socket = Connect(path);
 if (socket is null)
 {
+    // Starting a daemon in order to stop it is absurd, and "there is no daemon"
+    // is the state the caller asked for — so this is a success, not an error.
+    // Reporting it as a failure would make `benchmark && shutdown` fail on the
+    // machine where it had the least to do.
+    if (verb == RequestVerb.Shutdown)
+    {
+        Console.Error.WriteLine("no daemon running");
+        return 0;
+    }
+
     // R-5: a hotkey with a dead daemon is silence. Autostart may not have fired,
     // or the daemon may have crashed; either way the user pressed a key and is
     // owed something. Starting it here costs a cold load — slow, but audibly
@@ -194,6 +206,15 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     if (verb == RequestVerb.Reload)
     {
         Console.Error.WriteLine("reloaded");
+        return 0;
+    }
+
+    if (verb == RequestVerb.Shutdown)
+    {
+        // Says what happens next, because "stopped" on its own invites the
+        // conclusion that the hotkey is now dead. It is not: the next press
+        // starts a fresh daemon (R-5), and the only cost is the model load.
+        Console.Error.WriteLine("daemon stopped — the next hotkey press will start it again");
         return 0;
     }
 

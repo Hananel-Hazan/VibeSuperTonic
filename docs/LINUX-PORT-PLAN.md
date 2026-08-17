@@ -221,6 +221,24 @@ TotalStep 8, this daemon runs 6"* and the next start fall back to the percentage
 with the reason attached; a profile edited to carry another machine's identity is
 refused with *"measured on a different machine"*.
 
+**A `shutdown` verb came with it, and it was not scope creep.** The profile
+cannot reach the session that measured it, so the sweep needed a way to take
+effect — and [Phase 6's conflict 2](#phase-6-pass2) needed exactly the same verb
+for the tray's fourth menu item, which had no verb behind it and therefore broke
+the parity rule. One verb closed both. Verified mid-utterance: the daemon was
+`Speaking` at offset 29, the reply came back in 3 ms, the process exited 0
+through the same path a signal uses, and the socket was cleaned up. `shutdown`
+with nothing running is a success and never starts a daemon in order to stop one.
+
+**One environmental finding worth keeping.**
+`Environment.ProcessorCount` honours CPU affinity, so a sweep run under
+`taskset`, a cgroup or a container records the *restricted* core count — this was
+noticed because a shell here was pinned to 12 of 20 cores and the daemon
+correctly swept 12. That is the right behaviour and the staleness check already
+covers the consequence: running unrestricted later reports *"measured on 12
+logical processors, this machine has 20"* and falls back rather than applying a
+number measured under a limit that no longer holds.
+
 **Phase 8's note 2 is discharged**: `config` now reports `Provider`,
 `IntraOpThreads`, `ThreadsReason` and a `Benchmark` block carrying the stored
 profile, whether it is applied, and why not. The reason travels with the number,
@@ -258,7 +276,18 @@ vst-ctl seek 42                 # start again from character 42
 vst-ctl config                  # which folder is this instance actually using
 vst-ctl benchmark               # measure this machine; ~1 min, writes data/benchmark.json
 vst-ctl benchmark --force       # ... even if the machine is busy (worth less)
+vst-ctl shutdown                # stop the daemon; the next press starts it again
 ```
+
+**`benchmark && shutdown` is how a measurement takes effect.** ORT sizes its
+thread pool when the session is built, so a profile written at 11:00 governs the
+daemon started at 12:00 and not the one that measured it. `shutdown` exists for
+that and for [Phase 6's tray menu](#phase-6-pass2), which needed a fourth item
+with a verb behind it. It is not "quit": [R-5](LINUX-PORT-ARCHIVE.md#r-5) brings
+the daemon back on the next press, so what it really does is stop holding 830 MB
+until you need it. `vst-ctl shutdown` with nothing running is a **success** —
+that is the state you asked for — and it never starts a daemon in order to stop
+one.
 
 `benchmark` prints its table and progress on **stderr** and the profile as one
 JSON line on **stdout**, the same split `status` and `config` already use, so
@@ -806,7 +835,8 @@ read. **The tray icon is the daemon's** ([decided](#startup)) and carries its
 state — idle, preparing, speaking — so a press is never a guess, with a tooltip
 showing "speaking N sentences" for long selections (R-9) and whatever the
 stream's `Notice` says. Menu: Speak/Stop (the `toggle` verb), Open, and a fourth
-item that is **not** Quit — see [conflict 2](#phase-6-pass2). Clicking it opens
+item that is **not** Quit — the `shutdown` verb, which now exists, under a label
+that says what it does; see [conflict 2](#phase-6-pass2). Clicking it opens
 the Reader tab, not Status: this is a reader that has settings, not a control
 panel that shows text.
 
@@ -1004,13 +1034,19 @@ later:
    `SpeechSession` field.** The comment was corrected in place on 2026-08-16
    rather than deleted — it had become half true, and a half-true comment is
    worse than a wrong one, because a reader has no reason to doubt it.
-2. **The tray's Quit has no verb, so it breaks
-   [parity](#decisions).** There is no `quit` or `shutdown` in the protocol —
-   checked. Either add one, or make the menu item something else. Note what Quit
-   even means here: [R-5](LINUX-PORT-ARCHIVE.md#r-5) brings the daemon straight
-   back on the next press, so it is "stop holding 830 MB until I need you", which
-   is a reasonable thing to offer and should be labelled as that rather than as
-   Quit.
+2. **~~The tray's Quit has no verb, so it breaks
+   [parity](#decisions).~~ Resolved 2026-08-16: `shutdown` exists.** It was
+   built alongside [8a](#phase-8a) rather than inside Phase 6, because the
+   benchmark needed it too — ORT sizes its thread pool when the session is built,
+   so a freshly measured profile cannot reach the daemon that measured it, and
+   `vst-ctl benchmark && vst-ctl shutdown` is how a measurement takes effect. One
+   verb, two customers, and the tray's fourth item now has something to call.
+
+   **Label it for what it does.** [R-5](LINUX-PORT-ARCHIVE.md#r-5) brings the
+   daemon straight back on the next press, so this is "stop holding 830 MB until
+   I need you", not Quit — the product has no off switch and the menu should not
+   pretend otherwise. Phase 6 picks the wording; the verb is deliberately named
+   for the mechanism rather than the label so the two can differ.
 3. **The daemon cannot currently tell a UI from any other subscriber.**
    `_subscribers` is keyed by `Guid` and holds only a writer — so "change the
    icon while a UI is attached" is unimplementable, and `vst-ctl subscribe | jq`
@@ -1776,10 +1812,10 @@ three are in [Decisions](#decisions), and the arrangement is written out under
 **What remains genuinely open is the deferred pile above, plus two small ones
 that Phase 6 will answer by building:**
 
-- **What replaces the tray's Quit?** It has no verb, so as written it breaks
-  parity — and [R-5](LINUX-PORT-ARCHIVE.md#r-5) brings the daemon back on the
-  next press anyway, so "quit" is not what it does. Either a `shutdown` verb or a
-  different, honest label. See [conflict 2](#phase-6-pass2).
+- ~~**What replaces the tray's Quit?**~~ **Answered 2026-08-16: the `shutdown`
+  verb, built with [8a](#phase-8a) because the benchmark needed the same thing.**
+  What is left for Phase 6 is the *label*, which must say "stop holding 830 MB
+  until I need you" rather than Quit — see [conflict 2](#phase-6-pass2).
 - **Does `install.sh` launch the first-run window, or does the user?** If the
   script does it, it must check for a session first and print instructions
   otherwise — an installer run over `ssh` should not try to open a window. It

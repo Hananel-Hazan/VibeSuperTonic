@@ -245,7 +245,8 @@ public class ProtocolTests
         // Enums cross the wire as names so reordering the enum cannot silently
         // change what a client asked for.
         foreach (var verb in new[]
-                 { RequestVerb.Reload, RequestVerb.Config, RequestVerb.Read, RequestVerb.Benchmark })
+                 { RequestVerb.Reload, RequestVerb.Config, RequestVerb.Read,
+                   RequestVerb.Benchmark, RequestVerb.Shutdown })
         {
             string line = Protocol.Encode(new Request { Verb = verb });
             Assert.Contains(verb.ToString(), line, StringComparison.OrdinalIgnoreCase);

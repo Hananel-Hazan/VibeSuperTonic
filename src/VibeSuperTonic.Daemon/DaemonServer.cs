@@ -43,6 +43,16 @@ public sealed class DaemonServer : IDisposable
     // 0 idle, 1 sweeping. A second benchmark would measure the first one.
     private int _benchmarking;
 
+    /// <summary>
+    /// Linked to the token <see cref="RunAsync"/> was given, so the daemon can
+    /// stop itself without <c>Program</c> having to hand its lifetime source into
+    /// the server. Cancelling it ends the accept loop exactly as a signal does,
+    /// which means <c>shutdown</c> and SIGTERM leave by the same door — and that
+    /// door is the one already known to stop speech and release the audio device
+    /// cleanly.
+    /// </summary>
+    private CancellationTokenSource? _stopping;
+
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
@@ -141,23 +151,42 @@ public sealed class DaemonServer : IDisposable
 
         Log($"listening on {path}");
 
+        // Everything below runs on the linked token rather than the caller's, so
+        // that the `shutdown` verb can end the loop from inside a connection.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _stopping = stopping;
+        var serving = stopping.Token;
+
         try
         {
-            while (!token.IsCancellationRequested)
+            while (!serving.IsCancellationRequested)
             {
                 Socket client;
-                try { client = await listener.AcceptAsync(token); }
+                try { client = await listener.AcceptAsync(serving); }
                 catch (OperationCanceledException) { break; }
 
                 // Fire and forget: one misbehaving client must not stall accept.
-                _ = Task.Run(() => ServeAsync(client, token), CancellationToken.None);
+                _ = Task.Run(() => ServeAsync(client, serving), CancellationToken.None);
             }
         }
         finally
         {
+            _stopping = null;
             listener.Close();
             try { File.Delete(path); } catch { /* going away anyway */ }
         }
+    }
+
+    /// <summary>
+    /// End the accept loop, as if a signal had arrived. Safe to call more than
+    /// once and safe to call before <see cref="RunAsync"/> has started, which is
+    /// what the null check is for — a client cannot reach this before the socket
+    /// exists, but a test can.
+    /// </summary>
+    private void RequestShutdown()
+    {
+        try { _stopping?.Cancel(); }
+        catch (ObjectDisposedException) { /* already on the way out */ }
     }
 
     /// <summary>
@@ -278,6 +307,19 @@ public sealed class DaemonServer : IDisposable
                     continue;
                 }
 
+                if (request.Verb == RequestVerb.Shutdown)
+                {
+                    // Answer BEFORE tearing anything down. Cancelling first would
+                    // race the listener's close against this write, and the client
+                    // would see "the daemon closed the connection without
+                    // replying" — a success that reads as a failure, on the one
+                    // verb whose whole job is to end the process.
+                    await WriteAsync(writer, Response.Success());
+                    Log("shutdown requested");
+                    RequestShutdown();
+                    break;
+                }
+
                 await WriteAsync(writer, Handle(request));
             }
         }
@@ -340,6 +382,15 @@ public sealed class DaemonServer : IDisposable
             case RequestVerb.Config:
                 RefreshConfig(force: false);
                 return new Response { Ok = true, Config = ConfigSnapshot() };
+
+            case RequestVerb.Shutdown:
+                // Handled in the connection loop, which owns the ordering between
+                // the reply and the teardown. Reaching here means someone called
+                // Handle directly, and answering honestly beats falling through
+                // to "unsupported verb" — which would be a lie about a verb that
+                // exists.
+                RequestShutdown();
+                return Response.Success();
 
             default:
                 return Response.Fail($"unsupported verb {request.Verb}");
@@ -544,7 +595,8 @@ public sealed class DaemonServer : IDisposable
                 notes.Add(
                     $"the running daemon is using {Describe(_cpuProfile.Threads)} ({_cpuProfile.Reason}). " +
                     "ORT sizes its thread pool when the session is built, so this profile applies " +
-                    "the next time the daemon starts.");
+                    "the next time the daemon starts — run `vst-ctl shutdown` to apply it now, " +
+                    "and the next hotkey press will start a daemon that uses it.");
 
             Log($"benchmark: picked {Describe(profile.Threads)}" +
                 $"{(saved ? $", saved to {path}" : ", not saved")}");
