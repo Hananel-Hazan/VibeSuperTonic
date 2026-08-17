@@ -577,10 +577,31 @@ first push, exactly as predicted.
   Mint, and green on `windows-latest` in CI** as of 2026-08-16 — this was the
   one ⚠️ on the list and it cleared itself on the first push, as expected. It is
   also the first of the three conditions on [the Way 3 gate](LINUX-PORT-PLAN.md#the-gate).
+
+  **Re-verified on physical Windows 2026-08-17**, and both numbers above have
+  moved: **881** Core tests green, and **eleven** harness steps rather than nine,
+  against an engine built from the current tree. The CPU-provider caveat no
+  longer applies on that machine — it has two real adapters and the run reported
+  `DirectML provider appended (device 0)`. Same day, **the 32-bit engine was
+  executed by the harness for the first time anywhere** and passed all eleven
+  steps too, which no previous record could claim —
+  [the record](LINUX-PORT-PLAN.md#x86-executed). The upgrade hazard found while
+  getting there is [trap 16](LINUX-PORT-PLAN.md#traps), worth reading before the
+  next in-place install.
 - ✅ A Windows patch release built from Core — carrying the R-2 fix — ships and
   survives real daily use before Linux work starts. 0.2.7.5 shipped from the
   Way 2 layout and has been in use since. Skip this and the first Core regression
   gets misdiagnosed as a Linux bug.
+
+  **Narrowed 2026-08-17.** "In use since" means *the Win11 VM*. The user's
+  physical Windows install was found still running a **0.2.5-era engine** — DLL
+  dated 2026-05-29, no `VibeSuperTonic.Core.dll` beside it at all, so from before
+  the Core extraction — with a rotated `engine.log` showing genuine daily use
+  through 2026-08-14, and Lingoes holding the 32-bit engine open at the moment
+  the check ran. So the daily use that cleared this criterion, and the daily use
+  the user actually had, were two different builds on two different machines.
+  Nothing is wrong with the criterion; it is weaker evidence than the sentence
+  implies, and [the Way 3 gate](LINUX-PORT-PLAN.md#the-gate) rests on it.
 
 **Contingencies.**
 

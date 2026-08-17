@@ -50,6 +50,12 @@ What it must do when it is written, all of it settled in the port plan:
 - Generate `LICENSE-MODELS.txt` and `INSTALL.txt`, and ship **no models**. They
   download on first run, because the OpenRAIL-M acceptance has to be a human
   agreeing to something.
+- **Stop the daemon before replacing anything**, in `install.sh` and in the
+  `INSTALL.txt` instructions for a hand-untar. Added 2026-08-17 from trap 16 in
+  the port plan: `vibesupertonicd` is long-lived by design, Linux lets you
+  replace a running executable without complaint, and the result is a new binary
+  on disk with the old one still serving every hotkey press — and `status`
+  truthfully reporting the old version.
 
 Add it to the table above and delete this section once it exists.
 

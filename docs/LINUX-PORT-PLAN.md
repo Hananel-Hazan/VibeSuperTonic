@@ -5,6 +5,15 @@ is fixed, and [8a — `vst-ctl benchmark`](#phase-8a) landed 2026-08-16.** Phase
 6, 7 and 8b are what is left. 881 Core tests. Next is
 **[Phase 6](#phase-6)** — see [What to do next](#next).
 
+**The Windows product was re-verified on real hardware 2026-08-17 and nothing the
+Mint work did has reached it** — build, both RID publishes, 881 Core tests and all
+eleven TestHarness steps green against a freshly built COM engine **in both
+bitnesses**, on a physical Windows 11 box rather than the VM. Three things changed
+as a result: the **32-bit engine has been executed at last**, by anything, ever
+([how](#x86-executed)); **DirectML is no longer unexercised** ([trap 14](#traps));
+and a Windows-side upgrade gap turned up that nothing had looked for
+([trap 16](#traps)). [The record](#windows-check).
+
 The completed record — build notes, every measurement, the defect accounts, the
 full review write-ups — is in
 [LINUX-PORT-ARCHIVE.md](LINUX-PORT-ARCHIVE.md). **Everything that still binds
@@ -19,7 +28,7 @@ you can open to follow along, and a CLI that can do everything the window can.
 Deliberately **not** a speech-dispatcher module — analyzed and deferred in
 [Non-goals](#non-goals-for-v1).
 
-Written 2026-08-14; last worked 2026-08-16.
+Written 2026-08-14; last worked 2026-08-17.
 
 ---
 
@@ -70,10 +79,102 @@ before changing it.
 | 5 · Hotkeys | **Done 2026-08-15, in daily use.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9. [Record](LINUX-PORT-ARCHIVE.md#phase-5-built) |
 | — · Audio-device loss | **Fixed 2026-08-16.** A daemon whose audio server restarted stayed silent forever, invisibly. Detected, recovered and logged. [The record](#audio-loss) |
 | — · Seam fixes before 6 | **Done 2026-08-16.** All five: notice on the stream, `[JsonExtensionData]`, the daemon log, the PRIMARY measurement (**R-6 does not fire**), `InterChunkSilenceMs`. Plus one crash found while verifying. [The record](#seam-fixes) |
+| — · Windows regression check | **Clean 2026-08-17**, on physical Windows for the first time. No Linux change reaches the Windows product; **x86 engine executed at last** and green; DirectML exercised at last; one upgrade gap found. [The record](#windows-check) |
 | 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
 | 6 · App + tray | **Next.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
 | 7 · Packaging | Not started. Ships as 0.3.0, and carries a hole worth knowing now: **nothing on Linux can download the models** |
 | 8b · Fit the machine, the rest | Not started. Battery rule, the gated GPU spike, wiring Phase 6's Tune control — see [Phase 8](#phase-8) |
+
+<a name="windows-check"></a>
+
+### The Windows side, checked on real hardware — 2026-08-17
+
+Every "verified on Windows" claim in this document and the archive was made on a
+**Win11 VM**. This is the first run on the user's physical Windows machine, and
+the question it was asked was narrow: *has any of the Mint work reached the
+shipping product?* It has not.
+
+| Check | Result |
+| --- | --- |
+| `dotnet build VibeSuperTonic.slnx -c Release` | 0 errors. 5 warnings, all pre-existing — one `CS0219` in the harness, four `xUnit2031` in Core.Tests |
+| `dotnet test VibeSuperTonic.slnx -c Release` | **881 passed, 0 failed**, 3 s. Same count as Mint |
+| Engine publish `win-x64` / `win-x86` | Both clean. `onnxruntime.dll` present in each (16.5 MB / 14.5 MB) — the [trap 4](#traps) pin holds |
+| Launcher `win-x64` self-contained single-file | Clean |
+| RenderHost + TestHarness `win-x64` | Clean |
+| Core through the real seam, no Windows engine | `spike/linux-render` **runs on Windows** against the installed models. Warm RTF **0.294** vs the ≤ 0.5 gate; cancellation interrupted inference in 236 ms |
+| **TestHarness, all 11 steps, live COM engine (x64)** | **ALL TESTS PASSED**, exit 0 |
+| **TestHarness, all 11 steps, live COM engine (x86)** | **ALL TESTS PASSED**, exit 0 — the first time the 32-bit engine has ever been executed by the harness on any machine |
+| **TestHarness `--stress`, 12 scenarios (x64)** | **ALL PASSED**, exit 0 |
+| **TestHarness `--stress`, 12 scenarios (x86)** | **ALL PASSED**, exit 0 — also a first |
+| RenderHost export, out-of-process | `wav` / `mp3` / `aac` all exit 0, correct sizes. Media Foundation reports `128 kbps (mono 44.1 kHz)` for a 192 kbps MP3 request — MF picking the nearest supported mono rate, logged rather than silent |
+
+That is **every automated check the repository has for Windows**, plus both
+bitnesses of the two that can only run on a real install. The only thing not run
+locally is `pack-zip.ps1`, which CI composes on every push and which is a release
+action requiring a version decision ([CLAUDE.md](../CLAUDE.md)).
+
+Machine: Windows 11 Pro 26200, i7-12800H (14C/20T), Intel Iris Xe + NVIDIA RTX
+A2000 8GB, .NET SDK 10.0.204.
+
+**Why the isolation actually held**, rather than merely appearing to:
+
+- **One `#if` in the entire Windows tree** — `ORT_DIRECTML` at
+  [SupertonicSdk.cs:794](../src/VibeSuperTonic.Engine/Synth/SupertonicSdk.cs#L794).
+  Nothing else in `src/` is conditionally compiled, and the only
+  `[SupportedOSPlatform]` attributes sit on the two Linux-only projects.
+- **The Windows engine imports five Core namespaces and no others**: `Core.Text`,
+  `Core.Audio`, `Core.Diagnostics`, `Core.Synthesis`, `Core.Telemetry`. It never
+  touches `Core.Ipc`, `Core.Session` or `Core.Selection` — so `Protocol.cs`
+  (22 KB), `SpeechSession.cs` (30 KB), `ToggleGate`, `SelectionFreshness` and the
+  8a benchmark types are compiled into the 231 KB `VibeSuperTonic.Core.dll` that
+  now ships in `engine\`, and are never reached by a SAPI host.
+
+That last point is the honest shape of the guarantee: the Linux code does not
+*execute* on Windows, but it does *ship* there, and the shared assembly is what
+every SAPI host loads. Core growing is a Windows cost, paid in bytes rather than
+behaviour. Way 3 is what would stop that, and it is still [correctly
+deferred](#the-gate).
+
+<a name="x86-executed"></a>
+
+**The 32-bit engine has now been executed, and it passes.** This closes the gap
+every previous record left open: the VM ran x64, CI *publishes* x86 and asserts
+`onnxruntime.dll` survived, and nothing anywhere had ever loaded the 32-bit
+engine into a SAPI client and checked what it did. Publishing the harness for
+`win-x86` and running it is all it takes — SAPI then loads the x86 engine
+because the client is 32-bit, which is the whole mechanism:
+
+```powershell
+dotnet publish src\VibeSuperTonic.TestHarness\VibeSuperTonic.TestHarness.csproj `
+    -c Release -r win-x86 --no-self-contained
+```
+
+**All eleven steps green, exit 0**, including the offset steps (8, 9, 10) that
+are the reason the harness exists. The 32-bit engine agrees with the 64-bit one
+about every boundary. It also appended DirectML — `DirectML provider appended
+(device 0)` — which was not expected and is worth knowing: the DML path is live
+in 32-bit hosts too, not just the Control Panel's.
+
+x86 is consistently **~20% slower** than x64 on the same machine and the same
+text — `Speak()` 6997 ms vs 5838, SSML 5468 vs 4517, prosody 7618 vs 6130, cancel
+451 ms vs 246. Not a defect, and nowhere near a gate; recorded because most SAPI
+clients are 32-bit, so **this is the number real users experience**, and every
+timing in this repo until now was measured on the half of the product fewer
+people run.
+
+**This should be in CI's Windows job as a publish step**, next to the existing
+x86 assertion — the harness needs registered voices and models so CI cannot
+*run* it, but publishing `win-x86` at least keeps it buildable. And
+[pack-zip.ps1](../build/pack-zip.ps1) ships only the x64 harness in `tools\`,
+which means a user diagnosing a 32-bit reader has no way to test the engine that
+reader actually loads. Shipping both is a small change to the packer and the
+obvious follow-up.
+
+**Still not covered:** a *real* DirectML device loss — a TDR or driver reset, as
+opposed to the injected one `--stress` drives. See [trap 14](#traps), which was
+corrected the same day: the recovery path turned out to have had coverage all
+along, through the `InternalsVisibleTo` hook, and this run is the first time it
+executed with a device that had genuinely been acquired first.
 
 <a name="next"></a>
 
@@ -351,6 +452,37 @@ for win-x64 and win-x86 and asserts `onnxruntime.dll` survived the x86 publish;
 these two guards exist precisely because the failures they catch are silent
 locally.
 
+**On the Windows box itself**, the check that CI cannot do — added 2026-08-17
+after [the first run on real hardware](#windows-check). CI proves the tree
+*builds* and *packages*; only a machine with registered voices and models on it
+proves the engine *works*, which is [trap 11](#traps) in operational form.
+
+```powershell
+dotnet build VibeSuperTonic.slnx -c Release      # Windows half; 0 errors
+dotnet test  VibeSuperTonic.slnx -c Release      # 881 tests, ~3 s
+
+# Core + the CPU backend, end to end, WITHOUT the SAPI engine. The spike is named
+# linux-render and runs perfectly well on Windows — it is named for the execution
+# provider's origin, not a platform restriction. Point it at any install's models.
+dotnet run --project spike\linux-render\LinuxRender.csproj -c Release -- `
+    "<install>\models" out.wav
+
+# The decisive one: a real SAPI client driving the real COM engine.
+# Requires the freshly built engine to be the REGISTERED one — see trap 16 before
+# copying over a live install, and close every SAPI client first.
+<install>\tools\VibeSuperTonic.TestHarness.exe   # exit 0 = all 11 steps green
+
+# And the same thing for the OTHER half of the product. A win-x86 harness is a
+# 32-bit process, so SAPI loads engine\x86 into it — that is the entire trick,
+# and it is the only way the 32-bit engine ever gets executed. Needs the .NET 10
+# x86 runtime (the engine needs it anyway; see trap 5).
+dotnet publish src\VibeSuperTonic.TestHarness\VibeSuperTonic.TestHarness.csproj `
+    -c Release -r win-x86 --no-self-contained
+```
+
+Note that `git` is **not** on `PATH` on this Windows box. Nothing in the build or
+verification path needs it, but a script that assumes it will fail here.
+
 Shipping is `build/pack-zip.ps1` only — never a hand-rolled `dotnet publish`. Ask
 the user for the version first; see [CLAUDE.md](../CLAUDE.md).
 
@@ -442,12 +574,60 @@ Each of these has already cost time.
     code did exactly what it said. Run anything with a threshold in it against
     the real machine before believing it, and prefer a threshold derived from a
     measurement you took to one that looks reasonable.
-14. **DirectML is unexercised everywhere.** The Win11 VM has no GPU
-    (`C0262002 Specified display adapter handle is invalid`), so every harness
-    run silently takes the CPU branch. The ~600 lines of device-loss recovery in
-    `SupertonicAdapter` have no test anywhere, on any machine currently
-    available. Treat that code as untestable-in-practice and change it only with
-    real hardware to run it on.
+14. **DirectML is half-exercised — narrowed 2026-08-17, was "unexercised
+    everywhere".** The Win11 VM has no GPU (`C0262002 Specified display adapter
+    handle is invalid`), so every harness run there silently took the CPU branch.
+    The user's physical Windows box has two real adapters (Intel Iris Xe + NVIDIA
+    RTX A2000), `UseDirectML: true` in its `settings.json`, and on
+    [2026-08-17](#windows-check) the harness printed **`DirectML provider
+    appended (device 0)`** and went on to pass all eleven steps at an engine-side
+    RTF of 0.28. So the DML *append* path, which had never run anywhere, now has
+    a machine that runs it — **in both bitnesses**: the 32-bit run appended it
+    too, so DML is live inside ordinary 32-bit readers and not just the 64-bit
+    Control Panel.
+
+    **The device-loss recovery is tested too, and the claim that it was not was
+    simply wrong.** `--stress` has covered it all along, through the
+    `_testInjectDeviceLossOnNextCall` hook the engine grants the harness — which
+    is exactly why that `InternalsVisibleTo` exists. Stress 10 injects a loss and
+    checks the rebuild-on-CPU retry; stress 12 drives the watchdog and a second
+    loss inside 60 s, and checks the latch (*"GPU disabled for this process"*).
+    Both pass, **on both bitnesses**, on a machine where DirectML genuinely
+    appended first — which is what makes this different from the VM, where the
+    same code was "recovering" from a device that had never been acquired.
+
+    What remains genuinely uncovered is narrower than the original trap implied:
+    **a real device loss** — a TDR, a driver update, a GPU reset — as opposed to
+    an injected one. Injection drives the handler; it does not prove the engine
+    *detects* an actual loss. And nothing here measured GPU-vs-CPU execution: a
+    clean append is not proof of where the ops ran.
+
+16. **An in-place upgrade silently skips whichever engine bitness a SAPI host has
+    loaded — found 2026-08-17.** The engine is a COM in-process server, so a
+    running client holds its DLLs open. Copying a new `engine\` over a portable
+    install while **Lingoes** was running failed on `engine\x86\` with a sharing
+    violation and succeeded on `engine\x64\`. The result is a **split-bitness
+    install**: 64-bit hosts on the new engine, 32-bit hosts still on the old one,
+    no warning anywhere, and the two halves disagreeing about exactly the offset
+    and chunking behaviour the last five releases were spent fixing.
+
+    Nothing in the product owns this. `pack-zip.ps1` produces a ZIP; the *unpack*
+    is the user's, and `INSTALL.txt` says "Move folder anywhere. Re-run
+    VibeSuperTonic.exe" without ever mentioning that a reader must be closed
+    first. The failure is quiet in the worst way — the user sees the Control
+    Panel's Test button speak correctly (it is x64) while their actual reader
+    runs months-old code.
+
+    Two consequences, both real work rather than notes. **Windows:** the Status
+    tab already knows how to detect and repair a broken registration; detecting
+    *"engine\x86 is older than engine\x64"* is the same shape of check and the
+    same place to surface it. At minimum `INSTALL.txt` must say to close SAPI
+    clients before upgrading. **Linux ([Phase 7](#phase-7)):** the same hazard
+    with a different mechanism — the daemon is long-lived by design and holds its
+    own binary, so an upgrade over a running `vibesupertonicd` has to be thought
+    about before the packer ships, not after. There is no bitness split to save
+    us there; there is one binary, and it is the one that stays running for a
+    week.
 
 ---
 
@@ -688,6 +868,13 @@ CI is green on both runners, 0.2.7.5 shipped from the Way 2 layout and has been
 in daily use, and the daemon has spoken end to end since Phase 3. So the gate is
 open, which is worth stating plainly rather than leaving someone to discover it
 mid-Phase-6 and take it as an invitation.
+
+*Second condition, narrowed 2026-08-17:* "in daily use" is **the VM**. The user's
+physical Windows machine was still on a 0.2.5-era engine, in genuine daily use,
+when [the Windows check](#windows-check) ran — so the condition holds on the
+evidence it was written against, and on less evidence than the phrase suggests.
+The check itself does not weaken the gate: the current tree passes all eleven
+harness steps on real hardware. It is the *soak* that is thinner than recorded.
 
 Do not take it yet. Way 3 dissolves the Core *assembly* into linked source in
 two trees; it touches the build of the shipping Windows product, produces no
@@ -1234,6 +1421,23 @@ same class of trap as the Windows packer's x86 half:
 *Contingency:* if a build machine cannot do AOT, publish the client
 framework-dependent and accept ~107 ms — but say so in the release notes, because
 it is user-visible on every press.
+
+**Upgrading over a running daemon needs an answer before this ships — added
+2026-08-17**, from [trap 16](#traps), where the Windows half of the same hazard
+was found the hard way. On Windows a running SAPI client holds the engine DLL
+open, so an in-place copy fails for that bitness and leaves a split install; the
+OS refuses the write, which at least makes it *loud* to whoever is copying. Linux
+does not refuse. Unlinking and replacing a running executable succeeds silently,
+and `vibesupertonicd` is long-lived **by design** — it comes up on the first press
+and stays for a week. So the natural upgrade is: untar over the folder, get a new
+binary on disk and the old one still serving every hotkey press, indefinitely,
+with `status` cheerfully reporting the **old** version because that is genuinely
+what is running.
+
+`install.sh` must stop the daemon before replacing anything, and `INSTALL.txt`
+must say the same for anyone untarring by hand. Cheap now; a confusing field
+report later, of exactly the kind that is impossible to reproduce because the
+user's folder contains the fixed binary.
 
 **Version comes from `<VstVersion>` in
 [Directory.Build.props](../Directory.Build.props)**, the same element
