@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Synthesis;
 
 // vst-ctl — the stateless client. Connect, write one line, exit.
 //
@@ -14,10 +16,16 @@ using VibeSuperTonic.Core.Ipc;
 //   vst-ctl subscribe           stream events until interrupted
 //   vst-ctl reload              re-read settings.json and pronunciations.json
 //   vst-ctl config              where config was read from, and what it made of it
+//   vst-ctl benchmark           measure this machine and record its thread count
 //
 // It holds no state. The daemon decides what a toggle means, which is what
 // makes the hotkey, the tray menu and D-Bus behave identically — and what lets
 // this be a process whose whole job is one write.
+//
+// `benchmark` is the one verb that reads more than one reply: the daemon reports
+// a row at a time over tens of seconds. It is here rather than in the app because
+// it has to work over ssh, on a server, and before any window exists — and
+// because the Tune tab calls this same verb rather than having a path of its own.
 
 const int AutoStartBudgetMs = 5000;
 
@@ -37,14 +45,17 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
           subscribe    print the event stream until interrupted
           reload       re-read settings.json and pronunciations.json
           config       print the effective configuration and its paths
+          benchmark    measure this machine's best thread count and record it
 
         Options:
           --no-start   fail instead of starting a daemon that is not running
+          --force      benchmark even on a busy machine (the result is worth less)
         """);
     return args.Length == 0 ? 2 : 0;
 }
 
 bool noStart = args.Contains("--no-start");
+bool force = args.Contains("--force");
 var positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
 
 if (!Enum.TryParse<RequestVerb>(positional[0], ignoreCase: true, out var verb))
@@ -83,6 +94,10 @@ var request = new Request
     Display = verb is RequestVerb.Toggle or RequestVerb.Read
         ? Environment.GetEnvironmentVariable("DISPLAY")
         : null,
+
+    // Only benchmark reads it, and only to override its load guard. Sent as null
+    // otherwise so the flag cannot quietly acquire a second meaning later.
+    Force = verb == RequestVerb.Benchmark && force ? true : null,
 };
 
 if (verb == RequestVerb.Speak && string.IsNullOrWhiteSpace(request.Text))
@@ -128,6 +143,12 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
 {
     var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
     writer.WriteLine(Protocol.Encode(request));
+
+    // The one verb whose reply is a stream of replies. Handled before the
+    // single-line path below rather than inside it, because "read exactly one
+    // line" is the contract every other verb depends on and is worth leaving
+    // undisturbed.
+    if (verb == RequestVerb.Benchmark) return RunBenchmark(reader);
 
     string? line = reader.ReadLine();
     if (line is null)
@@ -215,6 +236,100 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
 }
 
 // ---------------------------------------------------------------------- helpers
+
+/// <summary>
+/// Read the sweep: a row at a time on stderr, then the table and the verdict,
+/// with the profile itself as one JSON line on stdout.
+///
+/// <para>Same split as <c>status</c> and <c>config</c> — stdout stays clean for
+/// <c>jq</c>, everything a person reads goes to stderr. Here that split earns
+/// more than consistency: the sweep takes the better part of a minute, and a
+/// terminal printing nothing for that long is indistinguishable from one that
+/// has hung.</para>
+/// </summary>
+static int RunBenchmark(StreamReader reader)
+{
+    while (true)
+    {
+        string? line = reader.ReadLine();
+        if (line is null)
+        {
+            Console.Error.WriteLine("the daemon closed the connection mid-benchmark");
+            return 1;
+        }
+
+        var reply = Protocol.TryDecode<Response>(line);
+        if (reply is null)
+        {
+            Console.Error.WriteLine($"unparseable reply: {line}");
+            return 1;
+        }
+
+        if (!reply.Ok)
+        {
+            Console.Error.WriteLine(reply.Error ?? "benchmark failed");
+            return 1;
+        }
+
+        if (reply.Progress is { } progress)
+        {
+            var row = progress.Row;
+            Console.Error.WriteLine(row.Failed
+                ? $"  [{progress.Index}/{progress.Total}] {row.Label,-4} failed: {row.Error}"
+                : $"  [{progress.Index}/{progress.Total}] {row.Label,-4} " +
+                  $"{row.MedianWallMs / 1000.0,6:F2} s   RTF {row.Rtf,5:F3}   {row.AvgCores,4:F1} cores");
+            continue;
+        }
+
+        if (reply.Benchmark is not { } result)
+        {
+            Console.Error.WriteLine("the daemon ended the benchmark without a result");
+            return 1;
+        }
+
+        PrintTable(result);
+        Console.WriteLine(Protocol.Encode(result.Profile));
+        return 0;
+    }
+}
+
+static void PrintTable(BenchmarkPayload result)
+{
+    var profile = result.Profile;
+
+    Console.Error.WriteLine();
+    Console.Error.WriteLine($"  {profile.Machine.Cpu} · {profile.Machine.LogicalProcessors} logical processors · " +
+                            $"TotalStep {profile.Machine.TotalStep} · {profile.Machine.PowerState}");
+    Console.Error.WriteLine();
+    Console.Error.WriteLine("  threads   median      RTF   cores   core-s");
+
+    foreach (var row in profile.Table)
+    {
+        if (row.Failed)
+        {
+            Console.Error.WriteLine($"  {row.Label,-7}   (failed)");
+            continue;
+        }
+
+        // The winner is marked in the table rather than only announced below it:
+        // the reason the whole table is printed is so the pick can be argued
+        // with, and that needs the pick visible in its own row.
+        bool won = row.Threads == profile.Threads && row.Provider == profile.Provider;
+        Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  {row.Label,-7} {row.MedianWallMs / 1000.0,7:F2} s  {row.Rtf,5:F3}  {row.AvgCores,6:F1}  {row.CoreSeconds,7:F1}{(won ? "   <- picked" : "")}"));
+    }
+
+    Console.Error.WriteLine();
+    Console.Error.WriteLine(
+        $"  picked {(profile.Threads == CpuBudget.Auto ? "auto" : profile.Threads + " threads")} " +
+        $"({profile.Provider}), from {profile.SampleSeconds:F1} s of audio per run");
+
+    if (result.Saved) Console.Error.WriteLine($"  saved to {result.Path}");
+    if (result.AppliesNow) Console.Error.WriteLine("  in force now");
+
+    foreach (string note in result.Notes) Console.Error.WriteLine($"  note: {note}");
+    Console.Error.WriteLine();
+}
 
 /// <summary>
 /// Connect, or return null to mean "there is genuinely no daemon there".

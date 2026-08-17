@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VibeSuperTonic.Core.Session;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Core.Ipc;
 
@@ -83,6 +84,22 @@ public enum RequestVerb
     /// writer.</para>
     /// </summary>
     Config,
+
+    /// <summary>
+    /// Sweep this machine's execution profile and record the answer.
+    ///
+    /// <para><b>A verb before it is a button.</b> It has to work headless, on a
+    /// server, over ssh, and before any window exists — and the Tune tab's
+    /// control calls exactly this rather than having a private path of its own.
+    /// Phase 8 was originally sequenced after the tab that calls it, which is how
+    /// a button wired to nothing gets shipped.</para>
+    ///
+    /// <para>Unlike every other verb this one answers more than once: a row at a
+    /// time as the sweep proceeds, then a final reply carrying the whole profile.
+    /// It takes tens of seconds, and a client that printed nothing until the end
+    /// would be indistinguishable from one that had hung.</para>
+    /// </summary>
+    Benchmark,
 }
 
 /// <summary>
@@ -124,6 +141,18 @@ public sealed record Request
     /// string on a socket that is already 0600 and owned by the same user.</para>
     /// </summary>
     public string? Display { get; init; }
+
+    /// <summary>
+    /// Proceed despite a guard that would otherwise refuse. Only
+    /// <see cref="RequestVerb.Benchmark"/> reads it, where the guard is "this
+    /// machine is too busy to measure honestly".
+    ///
+    /// <para>An override rather than a warning because the refusal is usually
+    /// right: a sweep run while a build is going measures the build. But the
+    /// person who knows the load is a video call they are about to leave should
+    /// not have to kill it to get an answer.</para>
+    /// </summary>
+    public bool? Force { get; init; }
 }
 
 /// <summary>
@@ -167,6 +196,23 @@ public sealed record Response
 
     /// <summary>Present on <see cref="RequestVerb.Config"/>.</summary>
     public ConfigPayload? Config { get; init; }
+
+    /// <summary>
+    /// Present on the final reply to <see cref="RequestVerb.Benchmark"/>, and the
+    /// marker that the sweep is over.
+    /// </summary>
+    public BenchmarkPayload? Benchmark { get; init; }
+
+    /// <summary>
+    /// Present on the intermediate replies to <see cref="RequestVerb.Benchmark"/>
+    /// — one per row measured.
+    ///
+    /// <para>This is what makes a multi-reply verb legible without a second
+    /// channel: a client reads lines until one arrives with this unset, which is
+    /// either the profile or a failure. Older clients are unaffected because no
+    /// other verb ever sets it.</para>
+    /// </summary>
+    public BenchmarkProgress? Progress { get; init; }
 
     public static Response Success() => new() { Ok = true };
 
@@ -223,6 +269,21 @@ public sealed record StatusPayload(
 /// "speak something and listen" — which for a timing knob is no answer at all.
 /// </param>
 /// <param name="Notes">Non-fatal problems — an unreadable file, a rule that did not compile.</param>
+/// <param name="Provider">Execution provider in force — "cpu" until Phase 8b.</param>
+/// <param name="IntraOpThreads">
+/// Threads the loaded session was built with. 0 is ORT's own pick.
+///
+/// <para>Reported because it is decided at startup and cannot be moved by
+/// <c>reload</c> — ORT sizes its pool when the session is created — so "what is
+/// actually in force" and "what the settings file says" are legitimately
+/// different questions, and only the daemon can answer the first.</para>
+/// </param>
+/// <param name="ThreadsReason">
+/// Where that number came from, in one phrase: a benchmark and its date, or the
+/// percentage fallback and why the stored measurement did not apply. A number in
+/// a settings file with no provenance is a number nobody dares change.
+/// </param>
+/// <param name="Benchmark">The stored profile, or null when this machine has never been swept.</param>
 public sealed record ConfigPayload(
     string BaseDir,
     string DataDir,
@@ -238,6 +299,52 @@ public sealed record ConfigPayload(
     int MaxChunkChars,
     int MinChunkChars,
     int InterChunkSilenceMs,
+    IReadOnlyList<string> Notes,
+    string Provider = "cpu",
+    int IntraOpThreads = 0,
+    string ThreadsReason = "",
+    BenchmarkSummary? Benchmark = null);
+
+/// <summary>
+/// The stored profile as <c>config</c> reports it — enough to judge it without
+/// opening the file, and no more.
+/// </summary>
+/// <param name="MeasuredUtc">When the sweep ran.</param>
+/// <param name="Threads">What it picked.</param>
+/// <param name="Provider">Which provider it picked.</param>
+/// <param name="Applied">
+/// False when a profile exists but something about the machine has changed since.
+/// This is the field that turns "my benchmark did nothing" into a question with
+/// an answer.
+/// </param>
+/// <param name="Staleness">Why not, when <paramref name="Applied"/> is false.</param>
+public sealed record BenchmarkSummary(
+    string MeasuredUtc,
+    int Threads,
+    string Provider,
+    bool Applied,
+    IReadOnlyList<string> Staleness);
+
+/// <summary>
+/// The result of a sweep, and what became of it.
+/// </summary>
+/// <param name="Profile">The measurement, including every row.</param>
+/// <param name="Saved">False on a read-only install — the answer is still correct, it just could not be kept.</param>
+/// <param name="Path">Where it was written, when it was.</param>
+/// <param name="AppliesNow">
+/// False whenever the running daemon is already using a different number.
+///
+/// <para>It usually is: ORT builds its thread pool with the session, so a profile
+/// measured at 11:00 governs the daemon started at 12:00, not the one that
+/// measured it. Saying so is the difference between a verb that appears to do
+/// nothing and one that reports honestly.</para>
+/// </param>
+/// <param name="Notes">The load guard, an unwritable data directory, rows that failed.</param>
+public sealed record BenchmarkPayload(
+    BenchmarkProfile Profile,
+    bool Saved,
+    string? Path,
+    bool AppliesNow,
     IReadOnlyList<string> Notes);
 
 /// <summary>
@@ -343,6 +450,16 @@ public static class Protocol
 [JsonSerializable(typeof(StatusPayload))]
 [JsonSerializable(typeof(ConfigPayload))]
 [JsonSerializable(typeof(SessionEvent))]
+// Phase 8a. Six types for one verb, which is exactly the shape that fails under
+// AOT and nowhere else: BenchmarkPayload nests a BenchmarkProfile, which nests a
+// BenchmarkMachine and a list of BenchmarkRow. The generator walks that graph, so
+// missing one of them is not caught by the outermost type being present.
+[JsonSerializable(typeof(BenchmarkPayload))]
+[JsonSerializable(typeof(BenchmarkProgress))]
+[JsonSerializable(typeof(BenchmarkSummary))]
+[JsonSerializable(typeof(BenchmarkProfile))]
+[JsonSerializable(typeof(BenchmarkMachine))]
+[JsonSerializable(typeof(BenchmarkRow))]
 public sealed partial class ProtocolJson : JsonSerializerContext
 {
 }

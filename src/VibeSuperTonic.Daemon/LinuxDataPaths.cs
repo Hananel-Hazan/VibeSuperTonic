@@ -119,6 +119,13 @@ internal static class LinuxDataPaths
     public static string LogsDir(string dataDir) => Path.Combine(dataDir, "logs");
 
     /// <summary>
+    /// What <c>vst-ctl benchmark</c> measured about this machine. Beside the
+    /// other two rather than under <c>logs/</c>: it is state the daemon reads
+    /// back on every start, not a record of something that happened.
+    /// </summary>
+    public static string BenchmarkFile(string dataDir) => Path.Combine(dataDir, "benchmark.json");
+
+    /// <summary>
     /// Best effort, and deliberately not fatal. A portable folder can sit on a
     /// read-only mount, a CD, or a directory owned by root — in which case the
     /// settings that are already there still load and still apply, and only

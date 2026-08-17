@@ -36,14 +36,20 @@ namespace VibeSuperTonic.Core.Synthesis;
 /// <para>The floor is two threads. One measured 1.8x slower than two for a
 /// saving of two core-seconds, which is the wrong trade on any machine.</para>
 ///
-/// <para><b>A percentage is the wrong unit, and this is a placeholder for a
-/// measurement.</b> The curve above does not scale with the machine — 20% of a
-/// 64-core server is 12 threads, which is past the knee and into the slow
-/// region. The default here is correct for the machine it was measured on and
-/// is a guess everywhere else; the knee has to be measured per machine, which
-/// is Phase 8's <c>vst-ctl benchmark</c> in the port plan. Until that exists,
-/// prefer a small explicit number over a large one: every count from 2 to 6
-/// measured inside 20% of the best, and everything above 6 lost badly.</para>
+/// <para><b>A percentage is the wrong unit, and this is now the fallback rather
+/// than the answer.</b> The curve above does not scale with the machine — 20% of
+/// a 64-core server is 12 threads, which is past the knee and into the slow
+/// region. The default here is correct for the machine it was measured on and is
+/// a guess everywhere else, so the knee is measured per machine by
+/// <c>vst-ctl benchmark</c> (<see cref="BenchmarkSweep"/>) and recorded in
+/// <c>data/benchmark.json</c>. <see cref="CpuProfileDecision.Decide"/> prefers
+/// that measurement whenever it still describes the machine and falls back to
+/// this percentage when it does not — a machine that has never been swept, or one
+/// whose profile arrived with a copied folder.</para>
+///
+/// <para><b>A stale profile is never scaled to fit.</b> There is no honest way to
+/// turn someone else's thread count into this machine's, because the curve is not
+/// monotonic — which is the whole reason the sweep exists rather than a formula.</para>
 /// </summary>
 public static class CpuBudget
 {

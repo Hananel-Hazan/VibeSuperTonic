@@ -37,12 +37,31 @@ public sealed class DaemonServer : IDisposable
     private readonly ConcurrentDictionary<Guid, Subscriber> _subscribers = new();
     private volatile bool _modelLoaded;
 
+    private readonly Func<int, ISynthesizer>? _synthesizerFor;
+    private readonly CpuProfileDecision _cpuProfile;
+
+    // 0 idle, 1 sweeping. A second benchmark would measure the first one.
+    private int _benchmarking;
+
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
     /// </param>
+    /// <param name="synthesizerFor">
+    /// Builds a synthesizer at a given intra-op thread count, for
+    /// <see cref="RequestVerb.Benchmark"/>. Null disables the verb — which is the
+    /// right answer for a test that has no models, and the reason the failure is
+    /// a sentence rather than a NullReferenceException.
+    /// </param>
+    /// <param name="cpuProfile">
+    /// The thread count this daemon's session was actually built with, and where
+    /// it came from. Decided in <c>Program</c> before the session exists, because
+    /// ORT sizes its pool at session construction and nothing after that can move
+    /// it.
+    /// </param>
     public DaemonServer(DaemonOptions options, HostConfig config, ISynthesizer synth,
-        SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null)
+        SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null,
+        Func<int, ISynthesizer>? synthesizerFor = null, CpuProfileDecision? cpuProfile = null)
     {
         _options = options;
         _config = config;
@@ -50,6 +69,9 @@ public sealed class DaemonServer : IDisposable
         _session = session;
         _selection = selection ?? new NullSelectionSource();
         _sink = sink;
+        _synthesizerFor = synthesizerFor;
+        _cpuProfile = cpuProfile
+            ?? new CpuProfileDecision(CpuBudget.Auto, "cpu", "not recorded", FromProfile: false);
 
         _session.Emitted += OnSessionEvent;
     }
@@ -247,6 +269,15 @@ public sealed class DaemonServer : IDisposable
                     break;
                 }
 
+                if (request.Verb == RequestVerb.Benchmark)
+                {
+                    // The only verb that answers more than once. It writes a row
+                    // per configuration and then a terminal reply, so it owns the
+                    // writer for the duration rather than returning a Response.
+                    await BenchmarkAsync(writer, request, token);
+                    continue;
+                }
+
                 await WriteAsync(writer, Handle(request));
             }
         }
@@ -354,7 +385,204 @@ public sealed class DaemonServer : IDisposable
         _config.Settings.MaxChunkChars,
         _config.Settings.MinChunkChars,
         _config.Settings.InterChunkSilenceMs,
-        _config.Notes);
+        _config.Notes,
+        _cpuProfile.Provider,
+        _cpuProfile.Threads,
+        _cpuProfile.Reason,
+        BenchmarkSnapshot());
+
+    /// <summary>
+    /// The stored profile as reported, re-tested against the machine as it is
+    /// now rather than as it was at startup.
+    ///
+    /// <para>Re-testing matters: <c>TotalStep</c> is a setting, so editing
+    /// <c>settings.json</c> can invalidate a profile without anything else
+    /// happening — and the moment a user asks <c>config</c> why their benchmark
+    /// stopped applying is exactly when the answer needs to be current.</para>
+    /// </summary>
+    private BenchmarkSummary? BenchmarkSnapshot()
+    {
+        var stored = BenchmarkStore.Load(_config.DataDir);
+        if (stored is null) return null;
+
+        var now = MachineFacts.Current(
+            _config.ModelsRoot, _config.Settings.TotalStep, EffectiveVoice, EffectiveLanguage);
+
+        var staleness = stored.StalenessAgainst(now);
+
+        // "Applied" is about the session that is running, not only about
+        // staleness: a profile measured five minutes ago is perfectly valid and
+        // still not in force until the daemon restarts.
+        bool inForce = staleness.Count == 0
+                       && stored.Threads == _cpuProfile.Threads
+                       && string.Equals(stored.Provider, _cpuProfile.Provider, StringComparison.Ordinal);
+
+        var reasons = staleness.Count > 0
+            ? staleness
+            : inForce
+                ? Array.Empty<string>()
+                : new[] { "valid, but the daemon started before it was measured — restart to apply" };
+
+        return new BenchmarkSummary(
+            stored.MeasuredUtc, stored.Threads, stored.Provider, inForce, reasons);
+    }
+
+    // --------------------------------------------------------------- benchmark
+
+    /// <summary>
+    /// Sweep this machine and record the answer, reporting a row at a time.
+    ///
+    /// <para><b>Why the daemon runs it and not the client.</b> Sweeping means
+    /// building ONNX sessions, and <c>vst-ctl</c> is NativeAOT precisely so that
+    /// it carries nothing — putting ORT in it would trade 6 ms of process start
+    /// for ~100 ms on every hotkey press. The daemon is the process that already
+    /// has the model, so it is the one that can measure.</para>
+    ///
+    /// <para><b>What it costs while it runs.</b> One extra session at a time,
+    /// built and disposed per row, alongside whatever the daemon already holds.
+    /// Peak is therefore two sessions, not eight.</para>
+    /// </summary>
+    private async Task BenchmarkAsync(StreamWriter writer, Request request, CancellationToken token)
+    {
+        if (_synthesizerFor is null)
+        {
+            await WriteAsync(writer, Response.Fail("this daemon was built without a benchmark backend"));
+            return;
+        }
+
+        // Interlocked rather than a lock: the refusal has to be immediate and
+        // must never queue behind the sweep it is refusing to duplicate.
+        if (Interlocked.CompareExchange(ref _benchmarking, 1, 0) != 0)
+        {
+            await WriteAsync(writer, Response.Fail("a benchmark is already running"));
+            return;
+        }
+
+        try
+        {
+            RefreshConfig(force: false);
+
+            if (!Directory.Exists(Path.Combine(_config.ModelsRoot, "onnx")))
+            {
+                await WriteAsync(writer, Response.Fail(
+                    $"no onnx/ under {_config.ModelsRoot} — nothing to measure. " +
+                    "Download the models first."));
+                return;
+            }
+
+            // Speaking is the most obvious form of "this machine is busy", and it
+            // is also the one case where the load is ours: the sweep would both
+            // measure the utterance and stutter it.
+            if (_session.State != SpeechState.Idle)
+            {
+                await WriteAsync(writer, Response.Fail(
+                    "the daemon is speaking — stop it first, or the sweep measures the utterance"));
+                return;
+            }
+
+            var notes = new List<string>();
+            bool force = request.Force ?? false;
+
+            double load = await MachineFacts.IdleCpuPercentAsync(cancellationToken: token);
+            if (load >= LoadGuardPercent && !force)
+            {
+                await WriteAsync(writer, Response.Fail(
+                    $"this machine is {load:F0}% busy — a sweep run now measures whatever else is " +
+                    "running, and would be recorded with a timestamp as if it were sound. " +
+                    "Wait, or pass --force."));
+                return;
+            }
+
+            if (load >= LoadGuardPercent)
+                notes.Add($"measured with the machine {load:F0}% busy (--force): treat the table as indicative.");
+            else if (load < 0)
+                notes.Add("could not read /proc/stat, so the machine's load before the sweep is unknown.");
+
+            var machine = MachineFacts.Current(
+                _config.ModelsRoot, _config.Settings.TotalStep,
+                EffectiveVoice, EffectiveLanguage, Math.Max(load, 0));
+
+            var options = _config.Synthesis(EffectiveVoice, EffectiveLanguage);
+            var writeLock = new object();
+
+            Log($"benchmark: sweeping {BenchmarkSweep.Candidates(machine.LogicalProcessors).Count} " +
+                $"configurations on {machine.LogicalProcessors} logical processors");
+
+            // Off the connection's thread: the sweep is tens of seconds of
+            // blocking native work, and holding an async continuation on it would
+            // occupy a thread-pool thread for the duration.
+            var profile = await Task.Run(() => BenchmarkSweep.Run(
+                machine,
+                _synthesizerFor,
+                options,
+                candidates: null,
+                onProgress: p =>
+                {
+                    // Nothing else writes to this connection — it is not a
+                    // subscriber — so the lock is here to make that fact local
+                    // rather than something a reader has to go and verify.
+                    lock (writeLock)
+                    {
+                        writer.WriteLine(Protocol.Encode(new Response { Ok = true, Progress = p }));
+                    }
+                },
+                cancellationToken: token), token);
+
+            foreach (var failed in profile.Table.Where(r => r.Failed))
+                notes.Add($"{failed.Label} threads could not be measured: {failed.Error}");
+
+            bool saved = BenchmarkStore.TrySave(_config.DataDir, profile, out string path, out string? saveError);
+            if (!saved)
+                notes.Add($"could not save the profile to {path}: {saveError}. " +
+                          "The measurement above is still correct; it just will not survive a restart.");
+
+            bool appliesNow =
+                profile.Threads == _cpuProfile.Threads &&
+                string.Equals(profile.Provider, _cpuProfile.Provider, StringComparison.Ordinal);
+
+            if (!appliesNow)
+                notes.Add(
+                    $"the running daemon is using {Describe(_cpuProfile.Threads)} ({_cpuProfile.Reason}). " +
+                    "ORT sizes its thread pool when the session is built, so this profile applies " +
+                    "the next time the daemon starts.");
+
+            Log($"benchmark: picked {Describe(profile.Threads)}" +
+                $"{(saved ? $", saved to {path}" : ", not saved")}");
+
+            await WriteAsync(writer, new Response
+            {
+                Ok = true,
+                Benchmark = new BenchmarkPayload(
+                    profile, saved, saved ? path : null, appliesNow, notes),
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down mid-sweep. The client's connection is going away with
+            // us, so there is nobody left to tell.
+        }
+        catch (Exception ex)
+        {
+            Log($"benchmark failed: {ex.GetType().Name}: {ex.Message}");
+            await WriteAsync(writer, Response.Fail($"benchmark failed: {ex.Message}"));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _benchmarking, 0);
+        }
+    }
+
+    /// <summary>
+    /// Busy-percentage at or above which a sweep refuses to run unaided.
+    ///
+    /// <para>15 rather than something tighter: a desktop with a browser open is
+    /// never at zero, and a guard that fires on an idle machine would be turned
+    /// off with <c>--force</c> permanently, which is worse than not having it.</para>
+    /// </summary>
+    private const double LoadGuardPercent = 15;
+
+    private static string Describe(int threads) =>
+        threads == CpuBudget.Auto ? "auto threads" : $"{threads} threads";
 
     private StatusPayload Snapshot()
     {

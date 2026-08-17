@@ -1,10 +1,9 @@
 # VibeSuperTonic on Mint — port plan
 
-Status: **Phases 0–5 done, the five seam fixes that stood before Phase 6 are
-done, and a field defect that made the daemon go permanently silent is fixed —
-2026-08-16.** Phases 6–8 are what is left. 844 Core tests. Next is
-**[8a, the benchmark verb](#phase-8)**, then [Phase 6](#phase-6) — see
-[What to do next](#next).
+Status: **Phases 0–5 done, the five seam fixes are done, the silent-daemon defect
+is fixed, and [8a — `vst-ctl benchmark`](#phase-8a) landed 2026-08-16.** Phases
+6, 7 and 8b are what is left. 881 Core tests. Next is
+**[Phase 6](#phase-6)** — see [What to do next](#next).
 
 The completed record — build notes, every measurement, the defect accounts, the
 full review write-ups — is in
@@ -46,11 +45,11 @@ before changing it.
 | **Configuration is a file, not a verb** | There is deliberately no `config set`: the UI writes `settings.json`, the daemon only reads it, so there is exactly one writer and no concurrency story. The CLI equivalent is editing the file — the daemon picks it up on mtime with nothing sent. Parity above is about *actions*, and this is the one stated exception |
 | **First Linux release is 0.3.0** — 2026-08-16 | `<VstVersion>` is shared so one number produces both artifacts, so the next Windows ZIP is 0.3.0 too — a deliberate jump from 0.2.7.5. Bumped *after* the release ships, per [CLAUDE.md](../CLAUDE.md) |
 | **`InterChunkSilenceMs` is implemented, not dropped** — 2026-08-16 | Windows parity. It changes chunk timing and therefore boundary scheduling, so it landed *before* Phase 6 and the highlight is verified once, not twice. **Built the same day**; the gap is written through the same paced, cancellable, clocked path as speech, and counted into the stream position before the next chunk is planned — which is the half that would otherwise have made every boundary early |
-| **The benchmark is a verb first, a button later** — 2026-08-16 | `vst-ctl benchmark` lands before Phase 6 so it works headless. The Tune tab ships the control disabled with a note, and wiring it is a [Phase 8](#phase-8) exit criterion — the parity rule does not allow a dead button to ship in v1 |
+| **The benchmark is a verb first, a button later** — 2026-08-16 | **The verb shipped 2026-08-16** and works headless. The Tune tab ships the control disabled with a note, and wiring it to this same verb is an [8b](#phase-8) exit criterion — the parity rule does not allow a dead button to ship in v1 |
 | **Core takes zero `PackageReference`s** | The DirectML and CPU builds of ORT ship the same managed assembly name with different managed API surfaces. A hard constraint, not a preference — [R-13](#constraints) |
 | **Way 2 is the shipping shape** | Its [gate](#the-gate) opened 2026-08-16 and is deliberately not taken until after v1 |
 | **Lazy model load is the default**, `--preload` is a flag | The daemon acknowledges in 28 ms either way, so the tray has something to react to immediately |
-| **Linux never writes — or reads — `UseDirectML`, `DirectMLDeviceId`, `OnnxThreads`** | Phase 0 measured any manual thread value as ~2x worse on Linux. The Tune tab must not offer threads as a knob. Superseded in part by [Phase 8](#phase-8), which replaces the guess with a measurement |
+| **Linux never writes — or reads — `UseDirectML`, `DirectMLDeviceId`, `OnnxThreads`** | Phase 0 measured any manual thread value as ~2x worse on Linux. The Tune tab must not offer threads as a knob. **Superseded 2026-08-16 by [8a](#phase-8a)**, which replaced the guess with a per-machine measurement in `data/benchmark.json` — still not a knob, and now not a guess either |
 
 ---
 
@@ -71,9 +70,10 @@ before changing it.
 | 5 · Hotkeys | **Done 2026-08-15, in daily use.** `build/keybindings.sh`; bind / re-bind / conflict / unbind verified against Cinnamon 6.6.9. [Record](LINUX-PORT-ARCHIVE.md#phase-5-built) |
 | — · Audio-device loss | **Fixed 2026-08-16.** A daemon whose audio server restarted stayed silent forever, invisibly. Detected, recovered and logged. [The record](#audio-loss) |
 | — · Seam fixes before 6 | **Done 2026-08-16.** All five: notice on the stream, `[JsonExtensionData]`, the daemon log, the PRIMARY measurement (**R-6 does not fire**), `InterChunkSilenceMs`. Plus one crash found while verifying. [The record](#seam-fixes) |
-| 6 · App + tray | **Next after 8a.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
+| 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
+| 6 · App + tray | **Next.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
 | 7 · Packaging | Not started. Ships as 0.3.0, and carries a hole worth knowing now: **nothing on Linux can download the models** |
-| 8 · Fit the machine | Not started. Its `benchmark` verb comes *before* Phase 6 — see the decisions table |
+| 8b · Fit the machine, the rest | Not started. Battery rule, the gated GPU spike, wiring Phase 6's Tune control — see [Phase 8](#phase-8) |
 
 <a name="next"></a>
 
@@ -163,11 +163,72 @@ cause and the fix, logged, exit 1. Same shape as the missing models and the
 unreachable audio server, and the same lesson: the daemon has one honest way to
 fail and everything should use it.
 
-**2 · `vst-ctl benchmark` — this is now next.** [Phase 8](#phase-8)'s core,
-~1 day, ahead of Phase 6 by decision. Headless, works on a server, and Phase 6's
-Tune tab then has something real to be disabled *against*.
+<a name="phase-8a"></a>
 
-**3 · [Phase 6](#phase-6) — app and tray.** The only remaining phase with a
+**2 · ~~`vst-ctl benchmark`.~~ Done 2026-08-16, on its one-day estimate.** The
+sweep and its pick rule are in Core (`BenchmarkSweep`, `BenchmarkProfile`), the
+machine facts are in the daemon where platform paths belong ([R-12](#constraints)),
+the profile is `data/benchmark.json`, and the daemon applies it at startup in
+preference to `MaxCpuPercent` whenever it still describes the machine.
+
+**It reproduced the premise of the phase independently**, which is the first
+thing worth saying about it. Swept on the i7-12800H against 5.8 s of audio per
+run:
+
+```
+  threads   median      RTF   cores   core-s
+  1          2.28 s  0.394     1.0      2.3
+  2          1.19 s  0.206     2.2      2.6   <- picked
+  3          1.22 s  0.212     3.3      4.0
+  4          1.20 s  0.208     4.4      5.2
+  6          1.65 s  0.286     6.6     10.9
+  8          3.06 s  0.529     8.4     25.8
+  auto       1.95 s  0.337    14.7     28.6
+```
+
+**Eight threads is slower than one.** `auto` spends 28.6 core-seconds to finish
+1.6x *later* than two threads spending 2.6 — eleven times the machine for a worse
+answer. This is the same shape the 2026-08-16 CPU work found at a different
+sample length, measured by the product on itself rather than by hand.
+
+**Two guards were wrong on first contact with a real machine.** Both had passed
+every test, because both were wrong about the world rather than about the code:
+
+| Guard | What happened | Fix |
+| --- | --- | --- |
+| The tie band | Two consecutive sweeps of an idle machine picked **2 threads, then 3**. Both applied the rule correctly. Rows 2/3/4 sat within 2% of each other while the same rows moved **15–18% between runs** — so a 5% band was *narrower than the measurement error* and was discriminating on noise | Band widened to 15%, at or above the measured noise. Pinned by a test that asserts the *relationship*, not the number, and by a second test carrying both real tables |
+| The load window | `/proc/stat` sampled over 300 ms read **15% then 24%** on a desktop that 1 s windows measured at a steady 5–9%. It refused two legitimate sweeps before the first one ran | Window widened to 1 s. A guard that fires on an idle desktop gets `--force` typed permanently, which is worse than not having one |
+
+The lesson generalises and is worth carrying into Phase 6: **a threshold is a
+claim about the world, and the only place to check it is the world.** Neither of
+these could have been found by reading the code, and both were found in the first
+five minutes of running it.
+
+**One criterion was measurable and wrong, in [trap 13](#traps)'s exact shape.**
+"Completes in under a minute" — measured at **52, 53, 56, 58 and 61 s** across
+five sweeps. It is *about* a minute, and the minute is nearly all inference:
+7 configurations x (1 warm-up + 3 timed) x ~1.5 s. The options were to shorten
+the sample, which raises the noise the tie band just had to be widened to absorb,
+or to drop candidates, which assumes the answer this phase exists to measure. So
+**the criterion is restated as "about a minute, measured 52–61 s"** rather than
+met by making the measurement worse.
+
+Verified end to end against the real daemon, on an isolated socket so the daily
+install was never touched: three consecutive sweeps agree on 2 threads; a
+restart applies the profile and logs *"inference CPU, 2 threads (benchmark
+2026-08-17)"*; editing `TotalStep` to 6 makes `config` report *"measured at
+TotalStep 8, this daemon runs 6"* and the next start fall back to the percentage
+with the reason attached; a profile edited to carry another machine's identity is
+refused with *"measured on a different machine"*.
+
+**Phase 8's note 2 is discharged**: `config` now reports `Provider`,
+`IntraOpThreads`, `ThreadsReason` and a `Benchmark` block carrying the stored
+profile, whether it is applied, and why not. The reason travels with the number,
+which is the whole point — *"CPU, 2 threads (benchmark 2026-08-17)"* and
+*"CPU, 4 threads (20% of 20 logical processors, never benchmarked)"* are the
+same field answered two different ways and only one of them is a measurement.
+
+**3 · [Phase 6](#phase-6) — app and tray. This is now next.** The only remaining phase with a
 contingency ladder and the only one whose output a person uses directly — the two
 properties that made Phase 1 overrun. Budget the top of **3–4 days**
 ([R-10](#constraints)); it grew on 2026-08-16 and [Effort](#effort) says where.
@@ -195,7 +256,14 @@ vst-ctl read                    # read the selection now
 vst-ctl toggle                  # press: speak, or stop if speaking
 vst-ctl seek 42                 # start again from character 42
 vst-ctl config                  # which folder is this instance actually using
+vst-ctl benchmark               # measure this machine; ~1 min, writes data/benchmark.json
+vst-ctl benchmark --force       # ... even if the machine is busy (worth less)
 ```
+
+`benchmark` prints its table and progress on **stderr** and the profile as one
+JSON line on **stdout**, the same split `status` and `config` already use, so
+`vst-ctl benchmark | jq .Threads` works while a human watching sees the rows
+arrive. It is the only verb that answers more than once.
 
 **Nothing is bound on this machine by the repository** —
 [build/keybindings.sh](../build/keybindings.sh) is Phase 5's deliverable and the
@@ -212,7 +280,7 @@ resolves directly to the folder with no walk-up.
 
 ```bash
 dotnet build VibeSuperTonic.linux.slnx -c Release       # Linux half
-dotnet test  VibeSuperTonic.linux.slnx -c Release       # 844 tests, ~0.7 s
+dotnet test  VibeSuperTonic.linux.slnx -c Release       # 881 tests, ~0.7 s
 
 # Windows half — builds from Linux, but the RID is NOT optional (see trap 2)
 dotnet build src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj  -c Release -r win-x64
@@ -326,12 +394,25 @@ Each of these has already cost time.
     written as one number, and the fix was to measure, split them, and restate.
     When a criterion is missed, check whether it was *measurable and wrong*
     before treating it as work outstanding. Phase 4's application criteria were
-    since measured and passed (2026-08-16). **Phase 6's "the tray shows
-    Preparing within 150 ms of a press" is the last unmeasured one, and it has
-    the same smell**: nothing in the product can currently observe it — the
-    press happens in one process and the icon repaints in another — so the
-    criterion needs an instrument before it can be met or restated. See
-    [Phase 6 pass 2](#phase-6-pass2).
+    since measured and passed (2026-08-16). **8a's "completes in under a minute"
+    was the second one to fall** — measured 52–61 s, where the only ways to buy
+    those seconds were to shorten the sample (raising the noise the tie band had
+    just been widened to absorb) or to drop candidates (assuming the answer the
+    sweep exists to measure), so it was restated with the measurement attached.
+    **Phase 6's "the tray shows Preparing within 150 ms of a press" is the last
+    unmeasured one, and it has the same smell**: nothing in the product can
+    currently observe it — the press happens in one process and the icon repaints
+    in another — so the criterion needs an instrument before it can be met or
+    restated. See [Phase 6 pass 2](#phase-6-pass2).
+
+15. **A threshold is a claim about the world, and only the world can check it.**
+    New with 8a, where both guards shipped correct-looking and wrong: a 5% tie
+    band that was narrower than the 15–18% run-to-run noise it had to see
+    through, and a 300 ms load sample that read 15% and 24% off a desktop
+    measuring a steady 5–9% over 1 s. Every test passed both times, because the
+    code did exactly what it said. Run anything with a threshold in it against
+    the real machine before believing it, and prefer a threshold derived from a
+    measurement you took to one that looks reasonable.
 14. **DirectML is unexercised everywhere.** The Win11 VM has no GPU
     (`C0262002 Specified display adapter handle is invalid`), so every harness
     run silently takes the CPU branch. The ~600 lines of device-loss recovery in
@@ -1284,6 +1365,14 @@ a failure means.
 > **Split by decision, 2026-08-16.** The `vst-ctl benchmark` verb and its profile
 > (~1 day) run **before** Phase 6; the battery rule, the GPU spike and wiring
 > Phase 6's Tune control stay here. See note 1 below.
+>
+> **8a is done — 2026-08-16, on estimate.** The sweep, the profile, the verb and
+> `config`'s provenance all landed; [the record](#phase-8a) carries the resulting
+> table, the two guards that were wrong on real hardware, and the one exit
+> criterion that was restated rather than met. **What is left in this phase is
+> 8b**: the battery rule, the gated GPU spike, and wiring Phase 6's Tune control.
+> The sections below are unchanged except where they say otherwise, because they
+> are what 8b still has to satisfy.
 
 Everything above assumes one execution profile for every machine. The CPU work
 on 2026-08-16 showed that assumption is wrong, and wrong in a way no amount of
@@ -1446,16 +1535,24 @@ what [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) did with the same shape of questio
 
 #### Exit criteria
 
-- `vst-ctl benchmark` completes in under a minute on the development machine and
-  writes a profile that reproduces its own measurement when re-run.
+- ~~`vst-ctl benchmark` completes in under a minute~~ **in about a minute —
+  measured 52–61 s over five sweeps, restated rather than met; see
+  [the record](#phase-8a)** — and writes a profile that reproduces its own
+  measurement when re-run. **Done: three consecutive sweeps agree**, which they
+  did not before the tie band was widened past the noise floor.
 - A machine with no GPU, and a machine with a GPU whose driver is broken, both
-  benchmark cleanly to a CPU profile without erroring.
+  benchmark cleanly to a CPU profile without erroring. **Half done**: the no-GPU
+  path is the only path 8a has, and it is what was measured. The broken-driver
+  half cannot be tested until 8b's spike puts a GPU provider behind it.
 - Unplugging the power lead changes the provider on the next utterance and is
   visible in `status`, with no gap or glitch in the utterance in progress.
 - The profile survives a portable-folder copy to another machine as a *stale*
   profile that is detected as such — the recorded machine identity is what makes
   that possible, and a profile measured on someone else's hardware is exactly the
-  guess this phase exists to remove.
+  guess this phase exists to remove. **Done, and it caught more than the copy:**
+  the model set and `TotalStep` are staleness triggers too, so the purely local
+  case — a user editing `settings.json` — invalidates a profile that no machine
+  check would have questioned.
 - **The Tune tab's benchmark control is enabled and calls the verb**, and
   `config` reports the resulting profile with its reason attached. Until both
   hold, the [parity rule](#decisions) is broken and v1 cannot ship.
@@ -1504,11 +1601,11 @@ phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
 | 4b · Linux host config | 0.5–1 | **done** | pronunciation parity, the settings verb, portable data layout |
 | 5 · Hotkeys | 0.25 | **done** | R-4 (toggle), R-11 |
 | — · Seam fixes, before 6 | 0.5 | **done, on estimate** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the record](#seam-fixes) |
-| 8a · `vst-ctl benchmark`, before 6 | 1 | **next** | the sweep, the profile format, the verb. Split out by decision |
-| 6 · App + tray | 3–4 | not started | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip. **Less R-6**, which measured away |
+| 8a · `vst-ctl benchmark`, before 6 | 1 | **done, on estimate** | the sweep, the profile format, the verb, `config` provenance. Split out by decision — [the record](#phase-8a) |
+| 6 · App + tray | 3–4 | **next** | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip. **Less R-6**, which measured away |
 | 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, three binaries |
 | 8b · Fit the machine, the rest | 0.5 + spike | not started | battery rule, wiring the Tune control; GPU is a gated spike, not in the estimate |
-| **Remaining** | **6–7.5** | | |
+| **Remaining** | **5–6.5** | | |
 
 **The seam fixes came in on their half day**, and the reason is the one Phases 2
 and 3 already demonstrated: new code against interfaces that already existed,
@@ -1516,6 +1613,15 @@ with nothing to discover about someone else's machine. The one surprise was not
 in the fixes but in verifying them — a crash reachable through
 `$XDG_RUNTIME_DIR`, found because a scratch directory happened to have a long
 path, which is the shape of thing no amount of reading the code produces.
+
+**8a came in on its day**, for the third time in a row for the same reason: new
+code against interfaces that already existed. `ISynthesizer` was the whole seam —
+Core takes a factory and never learns what a session is — so the sweep was
+testable with a scripted fake before any model was loaded. What time it took
+beyond the writing went where it now always goes: **two thresholds that were
+wrong about the machine rather than about the code**, both found in the first
+five minutes of running it against the real daemon and neither findable any other
+way. Budget that, not the code, for anything with a number in it.
 
 **Phase 1 ran well past the top of its range**, and it is worth knowing where the
 time went: not the extraction, which was mostly mechanical, but four Windows

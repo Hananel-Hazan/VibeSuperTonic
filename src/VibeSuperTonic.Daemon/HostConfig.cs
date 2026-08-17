@@ -105,6 +105,14 @@ public sealed class LinuxSettings
     /// <para>Read at startup, not per utterance: ORT sizes its thread pool when
     /// the session is created, so changing this needs a daemon restart. The
     /// <c>reload</c> verb will not move it.</para>
+    ///
+    /// <para><b>Only consulted when there is no usable measurement.</b>
+    /// <c>vst-ctl benchmark</c> writes <c>data/benchmark.json</c>, and a profile
+    /// that still describes this machine wins over this percentage — see
+    /// <see cref="VibeSuperTonic.Core.Synthesis.CpuProfileDecision"/>. This
+    /// remains the answer for a machine that has never been swept, and the
+    /// fallback for one whose profile no longer applies. <c>vst-ctl config</c>
+    /// reports which of the two is in force and why.</para>
     /// </summary>
     public int MaxCpuPercent { get; set; } = 20;
 

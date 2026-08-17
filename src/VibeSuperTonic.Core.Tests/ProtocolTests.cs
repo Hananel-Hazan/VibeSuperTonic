@@ -1,5 +1,6 @@
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
+using VibeSuperTonic.Core.Synthesis;
 using Xunit;
 
 namespace VibeSuperTonic.Core.Tests;
@@ -243,11 +244,90 @@ public class ProtocolTests
     {
         // Enums cross the wire as names so reordering the enum cannot silently
         // change what a client asked for.
-        foreach (var verb in new[] { RequestVerb.Reload, RequestVerb.Config, RequestVerb.Read })
+        foreach (var verb in new[]
+                 { RequestVerb.Reload, RequestVerb.Config, RequestVerb.Read, RequestVerb.Benchmark })
         {
             string line = Protocol.Encode(new Request { Verb = verb });
             Assert.Contains(verb.ToString(), line, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(verb, Protocol.TryDecode<Request>(line)!.Verb);
         }
+    }
+
+    [Fact]
+    public void The_benchmark_payloads_reach_the_source_generated_serializer()
+    {
+        // Phase 8a's addition, and the worst case for this trap so far: one reply
+        // nests four types the context has never seen — BenchmarkPayload holds a
+        // BenchmarkProfile, which holds a BenchmarkMachine and a list of
+        // BenchmarkRow. The generator walks that graph, so registering only the
+        // outermost type compiles, tests green, and throws NotSupportedException
+        // on the shipped NativeAOT client and nowhere else.
+        var profile = new BenchmarkProfile(
+            Threads: 4, Provider: "cpu", MeasuredUtc: "2026-08-16T10:00:00.0000000Z",
+            Machine: new BenchmarkMachine("abc123", "Test CPU", 20, "models-a", 8, "M1", "en", "ac", 2.0),
+            Table: [new BenchmarkRow("4", 4, "cpu", 5080, 0.179, 4.3, 22)],
+            NotVaried: ["inter-op threads (held at 1)"],
+            SampleSeconds: 5.0);
+
+        string reply = Protocol.Encode(new Response
+        {
+            Ok = true,
+            Benchmark = new BenchmarkPayload(profile, Saved: true, Path: "/opt/vst/data/benchmark.json",
+                AppliesNow: false, Notes: ["applies at next start"]),
+        });
+
+        Assert.Contains("Test CPU", reply, StringComparison.Ordinal);
+        Assert.Contains("benchmark.json", reply, StringComparison.Ordinal);
+        Assert.Contains("applies at next start", reply, StringComparison.Ordinal);
+
+        var back = Protocol.TryDecode<Response>(reply);
+        Assert.Equal(4, back!.Benchmark!.Profile.Threads);
+        Assert.Equal(20, back.Benchmark.Profile.Machine.LogicalProcessors);
+        Assert.Equal("4", Assert.Single(back.Benchmark.Profile.Table).Label);
+        Assert.False(back.Benchmark.AppliesNow);
+
+        // The progress line is a separate shape on the same connection, and it is
+        // what a client uses to tell "still working" from "finished".
+        string progress = Protocol.Encode(new Response
+        {
+            Ok = true,
+            Progress = new BenchmarkProgress(2, 7, new BenchmarkRow("2", 2, "cpu", 5210, 0.184, 2.1, 11)),
+        });
+
+        var midway = Protocol.TryDecode<Response>(progress);
+        Assert.Equal(7, midway!.Progress!.Total);
+        Assert.Null(midway.Benchmark);
+    }
+
+    [Fact]
+    public void Config_reports_the_thread_count_in_force_and_where_it_came_from()
+    {
+        // Phase 8a note 2: a number in a settings file with no provenance is a
+        // number nobody dares change. The reason travels with the number.
+        string line = Protocol.Encode(new Response
+        {
+            Ok = true,
+            Config = new ConfigPayload(
+                BaseDir: "/opt/vst", DataDir: "/opt/vst/data", ModelsRoot: "/opt/vst/models",
+                DataDirWritable: true, SettingsFound: true, PronunciationsFound: false,
+                RuleCount: 0, RulesEnabled: true, Voice: "M1", Language: "en",
+                TotalStep: 8, MaxChunkChars: 200, MinChunkChars: 100, InterChunkSilenceMs: 200,
+                Notes: [],
+                Provider: "cpu", IntraOpThreads: 4, ThreadsReason: "benchmark 2026-08-16",
+                Benchmark: new BenchmarkSummary("2026-08-16T10:00:00.0000000Z", 4, "cpu",
+                    Applied: true, Staleness: [])),
+        });
+
+        var back = Protocol.TryDecode<Response>(line)!.Config!;
+        Assert.Equal(4, back.IntraOpThreads);
+        Assert.Equal("benchmark 2026-08-16", back.ThreadsReason);
+        Assert.True(back.Benchmark!.Applied);
+
+        // The defaults keep the payload constructible by a caller that has not
+        // benchmarked, which is every fresh install.
+        var bare = new ConfigPayload("/o", "/o/data", "/o/models", true, false, false, 0, true,
+            "M1", "en", 8, 200, 100, 200, []);
+        Assert.Null(bare.Benchmark);
+        Assert.Equal(CpuBudget.Auto, bare.IntraOpThreads);
     }
 }

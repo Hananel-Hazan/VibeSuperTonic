@@ -117,11 +117,29 @@ var options = new DaemonOptions(voice, language, Version: version);
 
 // Capped rather than left to ORT, which sizes its pool to every core and makes
 // the desktop stutter for the length of each read. Startup-only: ORT builds the
-// thread pool with the session, so `reload` cannot move it.
-int intraOp = CpuBudget.IntraOpThreads(config.Settings.MaxCpuPercent, Environment.ProcessorCount);
-DaemonLog.Write(
-    $"version {version}, inference threads {(intraOp == CpuBudget.Auto ? "auto" : intraOp.ToString())} " +
-    $"of {Environment.ProcessorCount} ({config.Settings.MaxCpuPercent}% budget)");
+// thread pool with the session, so `reload` cannot move it — which is also why a
+// benchmark run at 11:00 governs the daemon started at 12:00 and not the one
+// that measured it.
+//
+// A stored measurement beats the percentage whenever it still describes this
+// machine, because the percentage is a guess and this is not: the cost curve is
+// not monotonic, so a share of the machine cannot be turned into the right
+// thread count by arithmetic. `vst-ctl benchmark` is what writes the profile and
+// `vst-ctl config` reports which of the two is in force, with its reason.
+var storedProfile = BenchmarkStore.Load(dataDir);
+var cpuProfile = CpuProfileDecision.Decide(
+    storedProfile,
+    MachineFacts.Current(modelsRoot, config.Settings.TotalStep,
+        voice ?? config.Settings.DefaultVoice, language ?? config.Settings.Language),
+    config.Settings.MaxCpuPercent,
+    Environment.ProcessorCount);
+
+int intraOp = cpuProfile.Threads;
+DaemonLog.Write($"version {version}, inference {cpuProfile.Describe()} of {Environment.ProcessorCount} logical processors");
+
+// The factory the benchmark verb sweeps with — the same constructor the daemon's
+// own session uses, so a row measures what a restart would actually get.
+Func<int, ISynthesizer> synthesizerFor = threads => new CpuSynthesizer(modelsRoot, intraOpThreads: threads);
 
 using ISynthesizer synth = new CpuSynthesizer(modelsRoot, intraOpThreads: intraOp);
 
@@ -139,7 +157,8 @@ var session = new SpeechSession(synth, sink, config.SessionOptions);
 // a restart to pick the setting up. Noted in the setting's own documentation.
 using var server = new DaemonServer(
     options, config, synth, session,
-    new X11SelectionSource(config.Settings.ClipboardFallback), sink);
+    new X11SelectionSource(config.Settings.ClipboardFallback), sink,
+    synthesizerFor, cpuProfile);
 
 using var lifetime = new CancellationTokenSource();
 
