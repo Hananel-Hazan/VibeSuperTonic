@@ -38,6 +38,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      The daemon's FIRST PackageReference, and it is allowed: the zero-packages
+      rule is R-13 and it binds Core, not the hosts. It buys the tray, which is
+      rung 1 of Phase 6's ladder — StatusNotifierItem is pure D-Bus, so a daemon
+      with no display can legitimately own a tray icon, and the alternative rungs
+      put GTK in this process instead.
+
+      0.21.3 is the version Avalonia.FreeDesktop already resolves, so the two
+      halves of the product share one D-Bus stack and one cached package. It is
+      also the AOT-friendly low-level API rather than the reflection-based
+      Tmds.DBus, which matters if this daemon is ever published NativeAOT.
+    -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
     <ProjectReference Include="..\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
     <ProjectReference Include="..\VibeSuperTonic.Onnx.Cpu\VibeSuperTonic.Onnx.Cpu.csproj" />

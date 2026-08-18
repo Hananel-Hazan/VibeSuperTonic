@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using VibeSuperTonic.Daemon.Tray;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
@@ -184,6 +185,23 @@ foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGINT, PosixSig
         lifetime.Cancel();
     }));
 }
+
+// The tray. Built after the server because it is a client of it — its menu rows
+// call the same verbs vst-ctl does — and started before the accept loop so the
+// icon is there by the time anything can ask about it.
+//
+// It is handed a subscription and an invoker, never the session: R-1's hazard is
+// tray code reading pipeline state directly because it happens to be in the same
+// process, and the cheapest defence is not giving it the reference.
+//
+// StartAsync never throws. A tray that cannot be built is a cosmetic loss; a
+// daemon that refuses to start is a hotkey that silently does nothing, and that
+// trade is the whole reason `status` carries a Tray field.
+using var tray = new TrayIcon(server.Invoke, () => server.UiAttached, DaemonLog.Write);
+server.TrayStatus = () => tray.Status;
+session.Emitted += tray.OnSessionEvent;
+server.UiAttachedChanged += tray.OnUiAttachedChanged;
+await tray.StartAsync();
 
 if (preload) await server.PreloadAsync(lifetime.Token);
 
