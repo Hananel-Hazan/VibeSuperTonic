@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    vibesupertonic-ui — the window you open to follow along and change knobs.
+
+    Its own process, decided 2026-08-16 (docs/LINUX-PORT-PLAN.md, Phase 6
+    conflict 2) and it is the Linux convention: PipeWire has pavucontrol,
+    NetworkManager has nm-applet, CUPS has its applet. Three things depended on
+    the answer and none was taste — the daemon must start headless, Xlib's error
+    handler is process-global and Avalonia installs its own, and R-1 is enforced
+    by a process boundary here instead of by discipline.
+
+    So: this project may reference Core, and talks to the daemon over the same
+    socket and the same verbs any external client uses. It has no privileged
+    path, and adding the speech-dispatcher front-end later costs nothing because
+    of it.
+
+    Avalonia lives HERE and nowhere else — never in Core, and never in the
+    daemon, which would pull a GUI toolkit into a process that has to run without
+    a display. 11.3.20 is the same pin the two spikes carry.
+
+    Not VstPortable: it links a GUI toolkit and is built for the Linux product.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vibesupertonic-ui</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Ui</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <VstPortable>false</VstPortable>
+    <Version>$(VstVersion)</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>
