@@ -136,13 +136,13 @@ internal sealed class StatusNotifierItem : IMethodHandler
 
         switch (name)
         {
-            case "Category": writer.WriteVariant((Variant)"ApplicationStatus"); break;
-            case "Id": writer.WriteVariant((Variant)"vibesupertonic"); break;
-            case "Title": writer.WriteVariant((Variant)"VibeSuperTonic"); break;
-            case "Status": writer.WriteVariant((Variant)"Active"); break;
-            case "IconName": writer.WriteVariant((Variant)""); break;
-            case "ItemIsMenu": writer.WriteVariant((Variant)false); break;
-            case "Menu": writer.WriteVariant((Variant)new ObjectPath(TrayMenu.MenuPath)); break;
+            case "Category": writer.WriteVariant(VariantValue.String("ApplicationStatus")); break;
+            case "Id": writer.WriteVariant(VariantValue.String("vibesupertonic")); break;
+            case "Title": writer.WriteVariant(VariantValue.String("VibeSuperTonic")); break;
+            case "Status": writer.WriteVariant(VariantValue.String("Active")); break;
+            case "IconName": writer.WriteVariant(VariantValue.String("")); break;
+            case "ItemIsMenu": writer.WriteVariant(VariantValue.Bool(false)); break;
+            case "Menu": writer.WriteVariant(VariantValue.ObjectPath(new ObjectPath(TrayMenu.MenuPath))); break;
 
             case "IconPixmap":
                 writer.WriteVariant(PixmapVariant(view));
@@ -172,7 +172,7 @@ internal sealed class StatusNotifierItem : IMethodHandler
     /// </summary>
     private static void WriteProperties(ref MessageWriter writer, TrayView view)
     {
-        var all = new Dictionary<string, Variant>
+        var all = new Dictionary<string, VariantValue>
         {
             ["Category"] = "ApplicationStatus",
             ["Id"] = "vibesupertonic",
@@ -196,22 +196,22 @@ internal sealed class StatusNotifierItem : IMethodHandler
     }
 
     /// <summary><c>a(iiay)</c> — width, height, ARGB32 bytes, once per size.</summary>
-    private static Variant PixmapVariant(TrayView view)
+    private static VariantValue PixmapVariant(TrayView view)
     {
         var images = new Array<Struct<int, int, Array<byte>>>();
         foreach (var (width, height, argb) in TrayPixmap.For(view.State, view.UiAttached))
             images.Add(new Struct<int, int, Array<byte>>(width, height, new Array<byte>(argb)));
 
-        return images.AsVariant();
+        return images.AsVariantValue();
     }
 
     /// <summary><c>(sa(iiay)ss)</c> — icon name, icon pixmaps, title, description.</summary>
-    private static Variant ToolTipVariant(TrayView view) =>
-        Variant.FromStruct(new Struct<string, Array<Struct<int, int, Array<byte>>>, string, string>(
+    private static VariantValue ToolTipVariant(TrayView view) =>
+        new Struct<string, Array<Struct<int, int, Array<byte>>>, string, string>(
             "",
             new Array<Struct<int, int, Array<byte>>>(),
             "VibeSuperTonic",
-            view.ToolTip));
+            view.ToolTip).AsVariantValue();
 
     private static readonly ReadOnlyMemory<byte> IntrospectXml = System.Text.Encoding.UTF8.GetBytes(
         """

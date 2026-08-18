@@ -152,7 +152,7 @@ internal sealed class TrayMenu : IMethodHandler
         context.Reply(writer.CreateMessage());
     }
 
-    private static Dictionary<string, Variant> Properties() => new()
+    private static Dictionary<string, VariantValue> Properties() => new()
     {
         ["Version"] = (uint)3,
         ["TextDirection"] = "ltr",
@@ -171,7 +171,7 @@ internal sealed class TrayMenu : IMethodHandler
 
         writer.WriteStructureStart();
         writer.WriteInt32(0);
-        writer.WriteDictionary(new Dictionary<string, Variant> { ["children-display"] = "submenu" });
+        writer.WriteDictionary(new Dictionary<string, VariantValue> { ["children-display"] = "submenu" });
 
         var children = writer.WriteArrayStart(DBusType.Variant);
         foreach (var row in _rows)
@@ -202,15 +202,15 @@ internal sealed class TrayMenu : IMethodHandler
         context.Reply(writer.CreateMessage());
     }
 
-    private static Variant Node(MenuRow row) =>
-        Variant.FromStruct(new Struct<int, Dict<string, Variant>, Array<Variant>>(
+    private static VariantValue Node(MenuRow row) =>
+        new Struct<int, Dict<string, VariantValue>, Array<VariantValue>>(
             row.Id,
-            new Dict<string, Variant>(RowProperties(row)),
-            new Array<Variant>()));
+            new Dict<string, VariantValue>(RowProperties(row)),
+            new Array<VariantValue>()).AsVariantValue();
 
-    private static Dictionary<string, Variant> RowProperties(MenuRow row) => row.IsSeparator
-        ? new Dictionary<string, Variant> { ["type"] = "separator" }
-        : new Dictionary<string, Variant>
+    private static Dictionary<string, VariantValue> RowProperties(MenuRow row) => row.IsSeparator
+        ? new Dictionary<string, VariantValue> { ["type"] = "separator" }
+        : new Dictionary<string, VariantValue>
         {
             ["label"] = row.Label(),
             ["enabled"] = true,
