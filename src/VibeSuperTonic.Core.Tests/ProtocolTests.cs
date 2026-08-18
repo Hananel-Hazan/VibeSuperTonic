@@ -237,6 +237,43 @@ public class ProtocolTests
         // the stream readable with jq.
         Assert.DoesNotContain("Notice",
             Protocol.Encode(SessionEvent.Preparing("Hello.", 0)), StringComparison.OrdinalIgnoreCase);
+
+        // Phase 6's hello, and the same quiet half of the trap once more: two
+        // properties on a type the context already knows. Dropped silently, the
+        // daemon would see every subscriber as anonymous and the tray would
+        // never notice the window — with nothing anywhere reporting a fault.
+        string hello = Protocol.Encode(new Request
+        {
+            Verb = RequestVerb.Subscribe,
+            ClientKind = Request.ClientKindUi,
+            ClientPid = 4242,
+        });
+        Assert.Contains("ClientKind", hello, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("4242", hello, StringComparison.Ordinal);
+
+        var greeted = Protocol.TryDecode<Request>(hello);
+        Assert.Equal(Request.ClientKindUi, greeted!.ClientKind);
+        Assert.Equal(4242, greeted.ClientPid);
+
+        // An anonymous subscriber says nothing, and says it in no bytes.
+        Assert.DoesNotContain("ClientKind",
+            Protocol.Encode(new Request { Verb = RequestVerb.Subscribe }),
+            StringComparison.OrdinalIgnoreCase);
+
+        // StatusPayload.Tray. The daemon may have no session bus and therefore no
+        // tray icon, and the whole point of reporting it is that the alternative
+        // — an icon that silently never appears — is indistinguishable from a
+        // tray that is merely broken. Dropped on the wire, `status` would answer
+        // the question by omission.
+        string tray = Protocol.Encode(new Response
+        {
+            Ok = true,
+            Status = new StatusPayload(
+                SpeechState.Idle, false, true, "M1", "en", "9.9.9",
+                Tray: "no tray icon: DBUS_SESSION_BUS_ADDRESS is not set"),
+        });
+        Assert.Contains("Tray", tray, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DBUS_SESSION_BUS_ADDRESS", tray, StringComparison.Ordinal);
     }
 
     [Fact]

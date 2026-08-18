@@ -89,8 +89,44 @@ public sealed class DaemonServer : IDisposable
     private sealed class Subscriber
     {
         public required StreamWriter Writer { get; init; }
+
+        /// <summary>What connected, from the subscribe request's hello. Null for
+        /// an anonymous subscriber, which is what `vst-ctl subscribe` is.</summary>
+        public string? Kind { get; init; }
+        public int? Pid { get; init; }
+
         public object Lock { get; } = new();
     }
+
+    /// <summary>
+    /// Is a window attached? The tray icon's answer — it shows a different state
+    /// when the Reader is open, and the daemon owns the icon while the UI comes
+    /// and goes.
+    /// </summary>
+    public bool UiAttached =>
+        _subscribers.Values.Any(s => s.Kind == Request.ClientKindUi);
+
+    /// <summary>Raised when that answer changes, so the tray icon can redraw.</summary>
+    public event Action? UiAttachedChanged;
+
+    /// <summary>
+    /// What the tray is doing, for <c>status</c>. A function rather than a value
+    /// because the tray is built after this server — it needs a way to invoke
+    /// verbs — and because the honest answer changes while the daemon runs.
+    ///
+    /// <para>It is reported at all because the alternative is the failure mode
+    /// the plan names: a daemon with no session bus presents as a tray that
+    /// silently never appears, with nothing anywhere saying why.</para>
+    /// </summary>
+    public Func<string>? TrayStatus { get; set; }
+
+    /// <summary>
+    /// Run a verb as though it had arrived on the socket. The tray's only way in
+    /// — it is a client that happens to share a process, and parity says its
+    /// menu rows call the same verbs <c>vst-ctl</c> does rather than reaching
+    /// past them into the session.
+    /// </summary>
+    public Response Invoke(Request request) => Handle(request);
 
     // --------------------------------------------------------------- listening
 
@@ -283,7 +319,23 @@ public sealed class DaemonServer : IDisposable
                     // the next boundary arrived. Holding the lock makes any
                     // concurrent event queue behind the snapshot instead, so the
                     // stream is both ordered and gapless.
-                    var subscriber = new Subscriber { Writer = writer };
+                    var subscriber = new Subscriber
+                    {
+                        Writer = writer,
+                        Kind = request.ClientKind,
+                        Pid = request.ClientPid,
+                    };
+
+                    // Only identified clients are logged. An anonymous subscriber
+                    // is someone running `vst-ctl subscribe | jq`, and a line per
+                    // debugging session is noise in the file that exists to make
+                    // a silent press explainable.
+                    if (subscriber.Kind is { } kind)
+                    {
+                        Log($"{kind} attached (pid {subscriber.Pid?.ToString() ?? "unknown"})");
+                        if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
+                    }
+
                     lock (subscriber.Lock)
                     {
                         _subscribers[id] = subscriber;
@@ -328,7 +380,11 @@ public sealed class DaemonServer : IDisposable
         catch (Exception ex) { Log($"connection error: {ex.GetType().Name}: {ex.Message}"); }
         finally
         {
-            _subscribers.TryRemove(id, out _);
+            if (_subscribers.TryRemove(id, out var gone) && gone.Kind is { } kind)
+            {
+                Log($"{kind} detached (pid {gone.Pid?.ToString() ?? "unknown"})");
+                if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
+            }
         }
     }
 
@@ -642,7 +698,8 @@ public sealed class DaemonServer : IDisposable
         return new StatusPayload(
             _session.State, _session.IsPaused, _modelLoaded,
             EffectiveVoice, EffectiveLanguage, _options.Version,
-            _session.CurrentText, at?.SourceOffset, at?.SourceLength);
+            _session.CurrentText, at?.SourceOffset, at?.SourceLength,
+            TrayStatus?.Invoke());
     }
 
     /// <summary>

@@ -137,6 +137,13 @@ public enum RequestVerb
 /// </summary>
 public sealed record Request
 {
+    /// <summary>
+    /// The <see cref="ClientKind"/> the daemon recognises. A constant rather than
+    /// a literal in each process, because the string is a contract between two
+    /// binaries and a typo would present as a tray that never noticed the window.
+    /// </summary>
+    public const string ClientKindUi = "ui";
+
     public required RequestVerb Verb { get; init; }
     public string? Text { get; init; }
 
@@ -166,6 +173,29 @@ public sealed record Request
     /// string on a socket that is already 0600 and owned by the same user.</para>
     /// </summary>
     public string? Display { get; init; }
+
+    /// <summary>
+    /// Who is subscribing, and as what — <c>hello</c>, sent on
+    /// <see cref="RequestVerb.Subscribe"/> and ignored by every other verb.
+    ///
+    /// <para>Exists for exactly one customer, and is deliberately no larger than
+    /// that customer needs: the tray icon changes appearance while a window is
+    /// attached, and <c>_subscribers</c> used to hold nothing but a writer, so
+    /// "is a UI attached" was unanswerable and <c>vst-ctl subscribe | jq</c>
+    /// looked identical to the Reader.</para>
+    ///
+    /// <para>Two fields on the subscribe request rather than a verb of its own:
+    /// a subscriber already sends exactly one request and then reads forever, so
+    /// a separate greeting would either precede the snapshot — adding a round
+    /// trip to the one path Phase 3 made gapless on purpose — or follow it, and
+    /// arrive after the icon had already decided. <see cref="ClientKindUi"/> is
+    /// the only value the daemon acts on; anything else, including nothing at
+    /// all, is an anonymous subscriber and stays that way.</para>
+    /// </summary>
+    public string? ClientKind { get; init; }
+
+    /// <inheritdoc cref="ClientKind"/>
+    public int? ClientPid { get; init; }
 
     /// <summary>
     /// Proceed despite a guard that would otherwise refuse. Only
@@ -270,7 +300,8 @@ public sealed record StatusPayload(
     string Version,
     string? Text = null,
     int? SourceOffset = null,
-    int? SourceLength = null);
+    int? SourceLength = null,
+    string? Tray = null);
 
 /// <summary>
 /// Where this instance reads its configuration, and what it made of it.
