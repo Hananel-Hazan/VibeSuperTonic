@@ -32,33 +32,26 @@ const int AutoStartBudgetMs = 5000;
 
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
-    Console.WriteLine("""
-        vst-ctl <verb> [text]
-
-          read         read the selection, interrupting anything playing
-          toggle       speak the selection, or stop if already speaking
-          speak TEXT   speak TEXT
-          seek N       start again from character N of the current text
-          stop         stop speaking
-          pause        stop feeding the device; buffered audio plays out
-          resume       continue
-          status       print the daemon's state as one JSON line
-          subscribe    print the event stream until interrupted
-          reload       re-read settings.json and pronunciations.json
-          config       print the effective configuration and its paths
-          benchmark    measure this machine's best thread count and record it
-          shutdown     stop the daemon; the next hotkey press starts it again
-
-        Options:
-          --no-start   fail instead of starting a daemon that is not running
-          --force      benchmark even on a busy machine (the result is worth less)
-        """);
+    PrintUsage();
     return args.Length == 0 ? 2 : 0;
 }
 
 bool noStart = args.Contains("--no-start");
 bool force = args.Contains("--force");
 var positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+
+// Every argument was an option, so there is no verb to run. This is checked
+// rather than left to positional[0]: an IndexOutOfRangeException out of a
+// NativeAOT binary is SIGABRT, a core file and exit 134 — which is what
+// `vst-ctl --version`, or one mistyped flag, produced before this line existed.
+// Same shape as the daemon's over-long socket path, and the same conclusion:
+// a refusal a person can read beats a crash a person has to interpret.
+if (positional.Length == 0)
+{
+    Console.Error.WriteLine($"no verb in: {string.Join(' ', args)}");
+    PrintUsage();
+    return 2;
+}
 
 if (!Enum.TryParse<RequestVerb>(positional[0], ignoreCase: true, out var verb))
 {
@@ -257,6 +250,34 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
 }
 
 // ---------------------------------------------------------------------- helpers
+
+/// <summary>
+/// What this program accepts. Printed on <c>--help</c>, on no arguments at all,
+/// and on options with no verb behind them — the three ways of arriving here
+/// without having said what to do.
+/// </summary>
+static void PrintUsage() =>
+    Console.WriteLine("""
+        vst-ctl <verb> [text]
+
+          read         read the selection, interrupting anything playing
+          toggle       speak the selection, or stop if already speaking
+          speak TEXT   speak TEXT
+          seek N       start again from character N of the current text
+          stop         stop speaking
+          pause        stop feeding the device; buffered audio plays out
+          resume       continue
+          status       print the daemon's state as one JSON line
+          subscribe    print the event stream until interrupted
+          reload       re-read settings.json and pronunciations.json
+          config       print the effective configuration and its paths
+          benchmark    measure this machine's best thread count and record it
+          shutdown     stop the daemon; the next hotkey press starts it again
+
+        Options:
+          --no-start   fail instead of starting a daemon that is not running
+          --force      benchmark even on a busy machine (the result is worth less)
+        """);
 
 /// <summary>
 /// Read the sweep: a row at a time on stderr, then the table and the verdict,
