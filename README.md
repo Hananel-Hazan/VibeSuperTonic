@@ -317,11 +317,11 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 - [ ] Phase 5: signed binaries (avoids SmartScreen prompt on first run)
 - [x] **Phase 6: shared `VibeSuperTonic.Core`** *(0.2.7)* — the text pipeline, DSP, model manifest/downloader and telemetry contract extracted into one platform-neutral assembly with 187 tests, so the engine and the Control Panel stop keeping duplicate copies of the same logic in sync by hand. Fixed two live word-boundary offset bugs on the way out.
 - [x] **Phase 6: verification harness in the box** *(0.2.7.4)* — `tools\VibeSuperTonic.TestHarness.exe`, which drives the engine through a real SAPI client and checks the offsets a highlight depends on. It found a bug on its first run that five releases had shipped.
-- [ ] Phase 6: Linux port — background daemon, global hotkey, reads the highlighted text. Design and feasibility work is done (`docs/LINUX-PORT-PLAN.md`); the model renders ~25% faster on Linux than on Windows on the same machine.
+- [ ] Phase 6: Linux port — background daemon, global hotkey, reads the highlighted text. **Working end to end on Mint** (`docs/LINUX-PORT-PLAN.md`): daemon, `vst-ctl` client, selection capture, hotkeys, per-machine benchmark, a Reader window with a live highlight and click-a-word-to-jump, a tray icon, and a first-run screen that downloads the voices. Packaging is the remaining phase, so there is no Linux release to download yet. The model renders ~25% faster on Linux than on Windows on the same machine.
 
 ## Contributing
 
-Issues and PRs welcome. The engine intentionally avoids dependencies beyond Supertonic and ONNX Runtime — keep it that way unless there's a strong reason. Test changes with the harness:
+Issues and PRs welcome. The engine intentionally avoids dependencies beyond Supertonic and ONNX Runtime — keep it that way unless there's a strong reason. The Linux port adds exactly one: Avalonia, in the `vibesupertonic-ui` window and nowhere else — not in `VibeSuperTonic.Core`, and not in the daemon, which has to start on a machine with no display. The Windows engine is unaffected and ships no new dependency. Test changes with the harness:
 
 ```powershell
 dotnet build src\VibeSuperTonic.TestHarness\VibeSuperTonic.TestHarness.csproj -c Release

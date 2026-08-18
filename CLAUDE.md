@@ -49,7 +49,12 @@ What it must do when it is written, all of it settled in the port plan:
   beside them. No `engine/` split: Linux has no COM bitness problem.
 - Generate `LICENSE-MODELS.txt` and `INSTALL.txt`, and ship **no models**. They
   download on first run, because the OpenRAIL-M acceptance has to be a human
-  agreeing to something.
+  agreeing to something — that screen exists as of Phase 6 and works.
+- **Copy `models-manifest.json` to the root of the layout**, as
+  [build/pack-zip.ps1](build/pack-zip.ps1) already does for Windows. It is what
+  the first-run download reads; without it a release cannot fetch anything and
+  says so, which is correct behaviour for a broken archive and a silly way to
+  ship one.
 - **Stop the daemon before replacing anything**, in `install.sh` and in the
   `INSTALL.txt` instructions for a hand-untar. Added 2026-08-17 from trap 16 in
   the port plan: `vibesupertonicd` is long-lived by design, Linux lets you

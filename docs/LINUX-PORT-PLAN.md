@@ -1,9 +1,14 @@
 # VibeSuperTonic on Mint — port plan
 
 Status: **Phases 0–5 done, the five seam fixes are done, the silent-daemon defect
-is fixed, and [8a — `vst-ctl benchmark`](#phase-8a) landed 2026-08-16.** Phases
-6, 7 and 8b are what is left. 881 Core tests. Next is
-**[Phase 6](#phase-6)** — see [What to do next](#next).
+is fixed, and [8a — `vst-ctl benchmark`](#phase-8a) landed 2026-08-16.**
+**[Phase 6](#phase-6) is done — 2026-08-18.** The `vibesupertonic-ui` window,
+the Reader, the tray icon on rung 1, both settings writers and the first-run
+screen, with every exit criterion verified on hardware
+([the record](#phase-6-landed)). It also closed the hole Phase 7 was carrying:
+**the models download on Linux now**, through Core's own downloader, behind the
+licence acceptance. Next is [Phase 7](#phase-7); 8b has not started.
+881 Core tests. See [What to do next](#next).
 
 **The Windows product was re-verified on real hardware 2026-08-17 and nothing the
 Mint work did has reached it** — build, both RID publishes, 881 Core tests and all
@@ -80,9 +85,10 @@ before changing it.
 | — · Audio-device loss | **Fixed 2026-08-16.** A daemon whose audio server restarted stayed silent forever, invisibly. Detected, recovered and logged. [The record](#audio-loss) |
 | — · Seam fixes before 6 | **Done 2026-08-16.** All five: notice on the stream, `[JsonExtensionData]`, the daemon log, the PRIMARY measurement (**R-6 does not fire**), `InterChunkSilenceMs`. Plus one crash found while verifying. [The record](#seam-fixes) |
 | — · Windows regression check | **Clean 2026-08-17**, on physical Windows for the first time. No Linux change reaches the Windows product; **x86 engine executed at last** and green; DirectML exercised at last; one upgrade gap found. [The record](#windows-check) |
+| — · `vst-ctl` crashed on a flag with no verb | **Fixed 2026-08-18.** `vst-ctl --version` — or any mistyped flag — indexed an empty array after the options were filtered out, and a NativeAOT binary turns that into SIGABRT, a core file and exit 134. Now one sentence on stderr, the usage, and exit 2: the same refusal shape the daemon's over-long socket path was given |
 | 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
-| 6 · App + tray | **Next.** Two seams prepared 2026-08-15, six more findings 2026-08-16 — three seam fixes (now landed), one topology decision (taken), two criteria nothing could measure. See [Phase 6](#phase-6) |
-| 7 · Packaging | Not started. Ships as 0.3.0, and carries a hole worth knowing now: **nothing on Linux can download the models** |
+| 6 · App + tray | **Done 2026-08-18.** Window, Reader, tray (rung 1 held), Tune and Pronunciations as writers, and the first-run screen — which downloads the models. Every exit criterion verified on hardware; one D-Bus trap cost most of a day. [The record](#phase-6-landed) |
+| 7 · Packaging | **Next.** Ships as 0.3.0. The hole this row used to carry — *nothing on Linux can download the models* — **was closed by Phase 6**: the first-run screen fetches them through Core's downloader and verifies the pinned hashes. What is left for the packer is to *ship* `models-manifest.json` beside the binaries, since that file is what the download reads |
 | 8b · Fit the machine, the rest | Not started. Battery rule, the gated GPU spike, wiring Phase 6's Tune control — see [Phase 8](#phase-8) |
 
 <a name="windows-check"></a>
@@ -347,18 +353,19 @@ which is the whole point — *"CPU, 2 threads (benchmark 2026-08-17)"* and
 *"CPU, 4 threads (20% of 20 logical processors, never benchmarked)"* are the
 same field answered two different ways and only one of them is a measurement.
 
-**3 · [Phase 6](#phase-6) — app and tray. This is now next.** The only remaining phase with a
-contingency ladder and the only one whose output a person uses directly — the two
-properties that made Phase 1 overrun. Budget the top of **3–4 days**
-([R-10](#constraints)); it grew on 2026-08-16 and [Effort](#effort) says where.
+**3 · ~~[Phase 6](#phase-6) — app and tray.~~ Done 2026-08-18**, on the top of
+its 3–4 day estimate. [The record](#phase-6-landed) has the measurements, the
+verification and the one trap that cost most of a day.
 
-Two things confirmed on this machine 2026-08-16 that remove most of the risk:
-Avalonia **11.3.20** is in the local NuGet cache and restores offline, which is
-the window; and **the tray's rung 1 has a watcher to register with** —
-`org.kde.StatusNotifierWatcher` *and* `org.x.StatusNotifierWatcher` are both on
-the session bus, owned by `xapp-sn-watcher`, with
-`libayatana-appindicator3.so.1` present as rung 2 if the D-Bus surface
-disappoints.
+Two corrections it produced, both found by doing the work:
+
+- **"Avalonia 11.3.20 restores offline" was true only of the core packages.**
+  `Avalonia.Themes.Fluent` was not in the local cache and downloaded on first
+  build. The tray's rung-1 claim held exactly as recorded.
+- **"Nothing on Linux can download the models" is no longer true.** Core has had
+  a downloader since 0.2.7 — the Windows launcher's — and the first-run screen
+  uses it. Measured: 383 MB fetched and hash-verified in about two minutes, and
+  a daemon that started with no models loaded them afterwards without a restart.
 
 **4 · [Phase 7](#phase-7) — packaging**, then **the rest of
 [Phase 8](#phase-8)**: the GPU spike behind its gate, the battery rule, and
@@ -378,6 +385,9 @@ vst-ctl config                  # which folder is this instance actually using
 vst-ctl benchmark               # measure this machine; ~1 min, writes data/benchmark.json
 vst-ctl benchmark --force       # ... even if the machine is busy (worth less)
 vst-ctl shutdown                # stop the daemon; the next press starts it again
+
+vibesupertonic-ui &             # the window. Starts a daemon if none is running,
+                                # exactly once — a reconnect never does
 ```
 
 **`benchmark && shutdown` is how a measurement takes effect.** ORT sizes its
@@ -486,7 +496,37 @@ verification path needs it, but a script that assumes it will fail here.
 Shipping is `build/pack-zip.ps1` only — never a hand-rolled `dotnet publish`. Ask
 the user for the version first; see [CLAUDE.md](../CLAUDE.md).
 
+
+```bash
+# Phase 6: the window, against a daemon that is not your daily one. $XDG_RUNTIME_DIR
+# selects the socket, and it must be SHORT — the 108-byte cap is real and the
+# daemon refuses with one sentence when it is exceeded. PULSE_SERVER has to be set
+# back to the real session, because overriding XDG_RUNTIME_DIR also hides Pulse.
+export XDG_RUNTIME_DIR=/tmp/vstrig PULSE_SERVER=unix:/run/user/$(id -u)/pulse/native
+./vibesupertonic-ui &
+
+# Phase 6, finding 5: what a highlight costs at the R-9 cap. Opens a window,
+# prints a table, exits.
+./spike/avalonia-bigtext/bin/Release/net10.0/bigtext --moves 60
+./spike/avalonia-bigtext/bin/Release/net10.0/bigtext --strategy selectable --still --noscroll
+```
+
+**Kill test processes by `/proc/<pid>/exe`, never `pkill -f`.** The pattern
+matches the shell running the test as readily as the binary under test — during
+this phase it killed the harness shell outright, and during the audio-loss fix it
+nearly certified a build that did not contain the fix. The [audio-loss
+record](#audio-loss) says the same thing from the other direction.
+
 ### Traps
+
+**The D-Bus writer is a struct, and passing it anywhere loses the bytes.** Added
+2026-08-18. `Tmds.DBus.Protocol.MessageWriter` is a mutable struct: hand it to a
+helper or a callback and everything written lands in a copy, so the message goes
+out declaring a signature over an empty body. The bus does not reply with an
+error — it disconnects the sender — so the symptom is a tray icon that registers
+and vanishes, with success reported at every layer above the socket. Write the
+body where the writer is declared, or take it `ref`. [The full
+account](#ref-struct-trap), including the three tools that found it.
 
 Each of these has already cost time.
 
@@ -1325,6 +1365,228 @@ report press → ack (already 28 ms, measured) plus ack → icon separately. Two
 numbers that can each be wrong on their own beat one number that cannot be
 checked.
 
+<a name="phase-6-landed"></a>
+
+#### What landed — 2026-08-18
+
+The window, the Reader tab, and the two seams the tab needed. Built in the order
+the phase prescribes — the Reader against the `subscribe` stream *before* any
+tray — so the coupling R-1 warns about never had a chance to form.
+
+**Finding 5 is measured, and it changed the design.** `spike/avalonia-bigtext`
+moves a highlight through 102,338 characters — the truncation Phase 4 recorded,
+not a round number — and times each move two ways: UI-thread milliseconds to
+apply and lay out, and the interval between composited frames. Per move, at the
+cap:
+
+```
+  strategy      first frame    apply p50    apply p95    apply max   new document
+  inlines            456 ms      94.6 ms     168.8 ms     206.2 ms        64.0 ms
+  selectable         610 ms     109.5 ms     191.2 ms     347.0 ms        69.0 ms
+  windowed           230 ms      10.4 ms      39.4 ms      45.2 ms         4.3 ms
+```
+
+**The clever option is not better than the naive one.** `selectable` holds the
+whole document and only moves `SelectionStart`, so layout should happen once —
+and it does. It buys nothing: a selection change invalidates a visual the size of
+the document, which costs 64 ms on its own (measured with `--noscroll`) and
+109 ms with the scroll that keeping the word on screen requires. Rebuilding
+`Inlines` from scratch, which throws the whole layout away, is *cheaper*. Both
+sit at three quarters of a 250 ms budget for one word, and both look perfect on a
+test paragraph — exactly the trap the finding predicted.
+
+**What the daemon holds costs nothing; what changes costs everything.** With
+`--still` — same offset re-applied, nothing actually different — the 100 KB
+control reports **0.0 ms p50**. There is no per-frame document tax. The whole
+cost is invalidation, which is why bounding what can be invalidated is the fix
+and bounding what is loaded is not.
+
+So the Reader gives the control a **12,000-character slice** around the offset
+and nothing else. The slice size is a knob with a measured shape — 3,000 →
+17 ms p95, 12,000 → 84 ms, 25,000 → 155 ms, 50,000 → 159 ms with a 301 ms tail —
+and 12,000 is the largest that keeps 3x headroom while still being three or four
+screenfuls, so scrolling around the word being read stays inside it. The shipped
+control re-cuts only when the offset comes within 3,000 characters of an edge,
+which the measurement did not assume, so the real thing is cheaper than the
+table.
+
+**A second thing the spike had to be corrected about**, and it is the same
+lesson as 8a's two guards: the first "new document" column read **0.1 ms** for
+`selectable`, which would have been a remarkable result. Avalonia compares `Text`
+by value, so handing a control a fresh instance of an identical string changes
+nothing and measures nothing. With genuinely different content it is 69 ms. A
+measurement that reports the number you hoped for is the one to distrust.
+
+**Finding 6 now has an instrument and a number.** The UI stamps a monotonic
+timestamp when `StateChanged(Preparing)` arrives and reads it back inside
+`RequestAnimationFrame` — the frame that actually showed it, not the line after
+the property was set. Measured **1.3–12.5 ms** across utterances. With Phase 3's
+28 ms press → acknowledge, the criterion is met at roughly 40 ms against 150 ms,
+as two numbers that can each be checked rather than one that cannot.
+
+**`hello` landed** (conflict 3): `ClientKind` and `ClientPid` on the subscribe
+request rather than a verb of its own — a subscriber sends exactly one request
+and then reads forever, so a separate greeting would either precede the snapshot
+and add a round trip to the one path Phase 3 made gapless, or follow it and
+arrive after the icon had decided. Verified in the daemon log: *"ui attached
+(pid 116566)"*, and *"ui detached"* when the window closes. `ProtocolTests` pins
+both fields through the source-generated context.
+
+**Verified end to end on this machine**, against a daemon on an isolated socket
+so the daily install was never touched:
+
+| Exit criterion | Result |
+| --- | --- |
+| Open the window mid-read and the highlight snaps to the correct word | **Yes.** Killed the window mid-utterance, reopened it: the highlight came back on "here" in *Marker 0006 is here*, offset 411 — the daemon's own reported offset, from the snapshot line alone |
+| Killing the UI leaves speech running | **Yes.** Daemon stayed `Speaking` at offset 323 with no window attached |
+| ~~Killing the daemon takes both down~~ → the window stays, visibly disconnected | **Yes.** Window stayed open showing *"not connected — the next hotkey press starts the engine again"*, with the text still on screen. It did **not** resurrect the daemon, which is the point: a reconnect is not a person asking for the product, and the tray's shutdown item would otherwise be undone a second later |
+| The tray shows Preparing within 150 ms | **UI side measured: 1.3–12.5 ms** from the event arriving to the frame that showed it, on top of Phase 3's 28 ms press → acknowledge. The **tray** side emits `NewIcon`/`NewToolTip` on that same `StateChanged`, so its own cost is a socket write — but the repaint after it belongs to `xapp-sn-watcher` and the applet, in two other processes, and is **not instrumentable from here**. Observed to track state correctly; not timed, and not claimed |
+| Every control has a verb | **Walked, both surfaces.** Window: Read, Stop, Pause, Resume, Reload, and Seek behind a click in the text. Tray: `toggle` (labelled for what the next click does) and `shutdown`. The two known exceptions stand and are both deliberate — the benchmark button ships disabled with a note ([Phase 8](#phase-8) wires it), and the tray's "Open the window" launches a process, which is not a thing a daemon can be asked for over a socket |
+
+**Click-a-word-to-jump works, including across a slice boundary.** Driven with
+`xdotool` at 60,000 characters into an 85,800-character document — where the
+slice base is ~54,000 and the local-to-whole-text conversion is doing real work —
+a click produced a `seek` to the word actually clicked, with the daemon snapping
+to the word start.
+
+<a name="tray-landed"></a>
+
+**The tray — rung 1, and it held.** StatusNotifierItem over D-Bus, served by the
+daemon, which owns the icon because it has to exist while the window is closed.
+`Tmds.DBus.Protocol` 0.21.3 is the daemon's first `PackageReference` — allowed,
+since [R-13](#constraints) binds Core rather than the hosts — and it is the
+version Avalonia.FreeDesktop already resolves, so both halves of the product
+share one D-Bus stack and one cached package.
+
+What it does, all verified against the live `xapp-sn-watcher`:
+
+| Behaviour | Verified |
+| --- | --- |
+| The icon appears in the panel | `xapp-sn-watcher` converts it to an XApp status icon: `Name: vibesupertonic`, `Visible: true`, with the tooltip rendered |
+| State is legible without a window | Idle is a ring, preparing adds the centre, speaking fills it — a progression rather than three unrelated pictures. **Drawn in code**, no icon files: the product is a folder you copy, and a themed icon name needs an install step this product does not have |
+| A window being attached changes the icon | A thin outer ring. Confirmed by the pixmap bytes changing when the Reader opens and again when it closes |
+| The tooltip carries R-9's answer | `speaking 3 sentences` while reading, back to `idle — press the hotkey…` after `stop`, and the panel's own copy tracked both |
+| Menu, over `com.canonical.dbusmenu` | Four rows. `GetLayout` returns them correctly and `Event(clicked)` runs them |
+| Every row is a verb | `toggle`, `shutdown`, and the labels change with state. "Open the window" is the one row that is not a verb, because launching a process is not something a daemon can be asked to do over a socket |
+| The fourth row is not Quit | *"Stop the engine (the next press starts it again)"* — clicked it, the daemon exited, and [R-5](LINUX-PORT-ARCHIVE.md#r-5) brings it back |
+| No session bus is not fatal | The daemon starts, `status` reports `Tray: no tray icon: DBUS_SESSION_BUS_ADDRESS is not set…`, and the hotkey works |
+| A panel restart does not lose the icon | **Added after seeing it happen.** The watcher's bus name is polled every 15 s; when the owner changes the item re-registers itself. Killed `xapp-sn-watcher` and restarted it — the icon came back by itself, exactly one of it |
+
+<a name="ref-struct-trap"></a>
+
+**The trap that cost most of the day, and it is worth the space.** The icon
+registered successfully and then vanished about 15 ms later, every time. The
+daemon's log said it had registered; `status` said it had registered; nothing
+threw; the watcher's list showed us and then did not.
+
+The cause: `MessageWriter` in `Tmds.DBus.Protocol` is a **mutable struct**, and
+the property dictionary was written by a helper that took it *by value*. Every
+byte landed in a copy. What went on the wire was a reply whose header declared
+`a{sv}` over a body of length **zero** — and a D-Bus daemon does not answer a
+malformed message with an error, it **disconnects the sender**. So a
+serialization bug presented as a tray icon with a fifteen-millisecond lifetime,
+and every layer above the socket reported success.
+
+Three things made it findable, and they are the transferable part:
+
+- **`Connection.DisconnectedAsync()`**, hooked and logged. It is what turned "the
+  icon is not there" into *"lost the session bus: Connection closed by peer"* —
+  the same lesson as the audio-device loss, in a quieter register: the failure
+  has to reach somewhere a person will look. It stays in the code.
+- **A reproducer that did not need the desktop.** `busctl --user call … GetAll`
+  kills the connection exactly as the panel did, which took the panel's timing
+  and the watcher's own health out of the loop.
+- **`strace` on the outgoing bytes.** `body length 0` under `signature a{sv}` is
+  unambiguous, and it is the only place the truth was visible. Note
+  `ptrace_scope=1` on this machine: trace by *launching* the process under
+  strace, not by attaching.
+
+The same mistake was then found a second time, in the signal path — a
+`MessageWriter` handed to an `Action<MessageWriter>` for the body — where the
+symptom was different and worse: the icon survived registration and disappeared
+**the first time the daemon spoke**, because that is when `LayoutUpdated` is
+first emitted. Both sites now say why they are shaped as they are.
+
+**The general rule for this library: never pass a `MessageWriter` anywhere.**
+Write the body where the writer is declared, or take it `ref` — and a `using var`
+cannot be passed `ref`, which is why one call site uses an explicit
+`try`/`finally`.
+
+**Two smaller things learned by running it.** `xapp-sn-watcher` *crashes* when it
+reads a malformed item, taking the whole session's tray with it — the user's
+other five icons disappeared and came back when it restarted; and republishing
+over a running daemon makes `/proc/<pid>/exe` read `…(deleted)`, so a kill loop
+matching the exe path silently stops matching the process it is trying to stop.
+That is [trap 16](#traps) arriving from a direction the plan had not written
+down, and it is why an old tray-less daemon held the socket for three
+"restarts".
+
+<a name="writers-landed"></a>
+
+**The writers, and the screen a fresh install opens on — the last of the phase.**
+
+**Configuration is written as a JSON tree, not as a typed object.** The Tune tab
+is the second writer of a file that crosses platforms, which is the whole reason
+`[JsonExtensionData]` went onto `LinuxSettings` before any writer existed. A tree
+goes further than that attribute: it also preserves keys the type does not
+declare, and it cannot lose a value by failing to model it. Verified against a
+`settings.json` carrying `UseDirectML`, `DirectMLDeviceId` and `PerVoice` — the
+tab changed `TotalStep` from 8 to 6, the daemon reported 6, and all three Windows
+keys were still there afterwards.
+
+Written **atomically**, beside the file and renamed. A settings file
+half-replaced when a laptop suspends is a daemon that will not start.
+
+**Blank means "not in the file", and the placeholder shows what the daemon is
+using instead.** An empty box that silently meant 8 would make "clear it to get
+the default" indistinguishable from "it is 8" — and the two are different things
+in a file people also edit by hand. The save re-reads immediately before writing
+for the same reason: a save that silently reverts a hand edit made five minutes
+ago is the worst kind of correct.
+
+**The pronunciation editor previews with the product's own code** —
+`PronunciationsConfig.Compile` and `.Apply`, the methods the daemon calls — so
+the sample cannot disagree with what will be spoken. That is what Core is for,
+and it is the mistake the Windows side made once and fixed. Verified end to end
+through the GUI: a rule typed in the window (`Tcl` → `tickle`) reached
+`pronunciations.json`, the daemon reported one rule loaded, and the preview
+turned *"Dr. Tcl weighs 40 kg"* into *"Dr. tickle weighs 40 kg"*.
+
+**A bug worth recording, because it is a UI-shaped one and this repository has
+few:** rebuilding the rule list on every keystroke reset `SelectedIndex` to -1 on
+the way through, which fired `SelectionChanged`, which cleared and disabled the
+very text box being typed into — so every character after the first was eaten.
+Labels now refresh when a field loses focus, and the rebuild guards its own
+transient selection. It was found by driving the real window with `xdotool`
+rather than by reading the code, which is the only way this class of defect
+shows up.
+
+<a name="download-landed"></a>
+
+**The first-run screen downloads the models, which Phase 7 was carrying as a
+hole.** *"Nothing on Linux can download the models"* was true of
+`fetch-models.ps1` — Windows-shaped, `$env:USERPROFILE`, backslash joins — and
+false of the product: **Core has had a downloader since 0.2.7**, the one the
+Windows launcher uses, with mirrors, resume and pinned sha256 hashes. The screen
+calls it.
+
+| Measured on this machine | |
+| --- | --- |
+| Trigger | Models absent → the screen replaces the tabs. On "no models present", never a marker file: self-healing when the folder is copied, and it needs no write, which matters because Phase 4b measured a legitimate read-only data directory |
+| Licence | The download button is disabled until the OpenRAIL-M box is ticked. The acceptance is a human agreeing to something, which is the entire reason this is a screen and not a step in a script |
+| Download | **383 MB, 16 files, about two minutes**, each verified against its hash as it lands |
+| Handover | The window swapped itself to the Reader when the last file verified |
+| A daemon that started with no models | Loaded them afterwards **without a restart** — it loads lazily on the first utterance, and it spoke |
+
+**What Phase 7 still has to do about it:** ship `models-manifest.json` beside the
+binaries. The download reads that file, and a release without it shows *"this
+folder is not a complete release"* rather than fetching anything — which is the
+right message, and is why the packer's list now names it.
+
+**Still no headless path.** `vst-ctl` has no download verb, so a server or ssh
+install has no way to fetch models; the first-run screen needs a display. That is
+a real gap, it is small, and it belongs to Phase 7 rather than here.
+
 **Exit criteria** — restated 2026-08-16, because two of the three were written
 for a single process and one of those is now false:
 
@@ -1343,8 +1605,10 @@ for a single process and one of those is now false:
   [parity](#decisions) break, and the two already known are the benchmark button
   ([Phase 8](#phase-8)'s to wire) and Quit ([conflict 2](#phase-6-pass2)).
 
-**Contingencies** — tray, in descending preference. **Revised 2026-08-16: the
-old rung 1 is gone.** It was Avalonia's `TrayIcon`, and Avalonia now lives in the
+**Contingencies** — tray, in descending preference. **Spent 2026-08-18: rung 1
+held and nothing below it was needed** ([the record](#tray-landed)). Kept as
+written, because the reasoning is what would matter if a different desktop ever
+disappoints. **Revised 2026-08-16: the old rung 1 is gone.** It was Avalonia's `TrayIcon`, and Avalonia now lives in the
 UI process — reaching for it would pull a GUI toolkit into the daemon and undo
 the entire reason for splitting them.
 
@@ -1842,10 +2106,10 @@ phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
 | 5 · Hotkeys | 0.25 | **done** | R-4 (toggle), R-11 |
 | — · Seam fixes, before 6 | 0.5 | **done, on estimate** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the record](#seam-fixes) |
 | 8a · `vst-ctl benchmark`, before 6 | 1 | **done, on estimate** | the sweep, the profile format, the verb, `config` provenance. Split out by decision — [the record](#phase-8a) |
-| 6 · App + tray | 3–4 | **next** | a second binary, the tray in the daemon over D-Bus, `hello`, the first-run window, R-1 enforcement, R-9 tooltip. **Less R-6**, which measured away |
+| 6 · App + tray | 3–4 | **done** | The second binary, the Reader against the stream, `hello`, R-1 by process boundary, finding 5 measured, finding 6 instrumented, the tray on rung 1, both settings writers, and the first-run screen with the model download |
 | 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, three binaries |
 | 8b · Fit the machine, the rest | 0.5 + spike | not started | battery rule, wiring the Tune control; GPU is a gated spike, not in the estimate |
-| **Remaining** | **5–6.5** | | |
+| **Remaining** | **2–2.5** | | Phase 7 and the rest of 8b. Every contingency ladder in the plan is now spent |
 
 **The seam fixes came in on their half day**, and the reason is the one Phases 2
 and 3 already demonstrated: new code against interfaces that already existed,
@@ -1862,6 +2126,20 @@ beyond the writing went where it now always goes: **two thresholds that were
 wrong about the machine rather than about the code**, both found in the first
 five minutes of running it against the real daemon and neither findable any other
 way. Budget that, not the code, for anything with a number in it.
+
+**Phase 6's Reader half came in without surprises**, and the reason is worth
+separating from the reason the seam fixes and 8a did: this was not new code
+against interfaces that already existed — it was new code against a *toolkit*
+nobody here had used. What kept it cheap was measuring the one thing that could
+have invalidated the design before building anything on it. The control choice
+was a 45-minute spike; had it been a guess, the discovery would have arrived as
+"the highlight stutters on long selections" after the tab was written around the
+wrong control.
+
+**The remaining risk is all in the tray**, which is where the contingency ladder
+is and which nothing has touched. Rung 1 is D-Bus code in a process that has
+never linked a package, and the ladder exists precisely because the rungs are not
+interchangeable.
 
 **Phase 1 ran well past the top of its range**, and it is worth knowing where the
 time went: not the extraction, which was mostly mechanical, but four Windows
