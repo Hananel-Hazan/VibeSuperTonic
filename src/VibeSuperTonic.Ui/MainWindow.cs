@@ -28,6 +28,11 @@ public sealed class MainWindow : Window
     private readonly StatusTab _status;
     private readonly TextBlock _connection = new() { VerticalAlignment = VerticalAlignment.Center, Opacity = 0.75 };
 
+    /// <summary>The window's normal content, set aside while the first-run screen is up.</summary>
+    private readonly Control _shell;
+
+    private bool _firstRunDecided;
+
     public MainWindow(DaemonClient client)
     {
         _client = client;
@@ -52,7 +57,7 @@ public sealed class MainWindow : Window
             },
         };
 
-        Content = new DockPanel
+        _shell = new DockPanel
         {
             Children =
             {
@@ -78,10 +83,23 @@ public sealed class MainWindow : Window
             },
         };
 
-        client.Snapshotted += status => Dispatcher.UIThread.Post(() =>
+        Content = _shell;
+
+        // Deliberately after the window exists: a fresh install has no models,
+        // and the screen that fixes that is the first thing it should show.
+        AttachedToVisualTree += async (_, _) => await ShowFirstRunIfNeededAsync();
+
+        client.Snapshotted += status => Dispatcher.UIThread.Post(async () =>
         {
             _connection.Text = $"connected — daemon {status.Version}";
             _reader.ApplySnapshot(status);
+
+            // The check also runs on connect, because the window opens before
+            // the daemon it just started is answering — and a fresh install is
+            // exactly the case where that race is guaranteed: no models means a
+            // daemon that has nothing to preload and a window with nothing to
+            // ask until the socket exists.
+            await ShowFirstRunIfNeededAsync();
         });
 
         client.Received += evt => Dispatcher.UIThread.Post(() => _reader.Apply(evt));
@@ -92,6 +110,29 @@ public sealed class MainWindow : Window
             _connection.Text = "not connected";
             _reader.ShowDisconnected();
         });
+    }
+
+    /// <summary>
+    /// A fresh install opens on the licence, the download and the two keys —
+    /// see <see cref="FirstRunView"/>. Decided by asking whether the models are
+    /// there, which is the same check the daemon makes and needs no marker file
+    /// and no write.
+    /// </summary>
+    private async Task ShowFirstRunIfNeededAsync()
+    {
+        // Once. The screen swaps itself away when the download finishes, and a
+        // reconnect afterwards must not bring it back over a working window.
+        if (_firstRunDecided) return;
+
+        var config = await _client.SendAsync(new Request { Verb = RequestVerb.Config });
+        if (config?.Config is not { } c) return;              // no daemon yet; the toolbar says so
+
+        _firstRunDecided = true;
+        if (Directory.Exists(Path.Combine(c.ModelsRoot, "onnx"))) return;
+
+        var first = new FirstRunView(c.BaseDir, c.ModelsRoot);
+        first.Completed += () => Content = _shell;
+        Content = first;
     }
 
     /// <summary>
