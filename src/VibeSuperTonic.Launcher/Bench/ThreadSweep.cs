@@ -236,21 +236,38 @@ internal static class ThreadSweep
 
         var rows = new List<BenchmarkRow>(candidates.Count);
         double sampleSeconds = 0;
+        bool anyPacedRow = false;
 
         for (int i = 0; i < candidates.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
 
-            var (row, seconds) = await Task.Run(
+            var (row, seconds, unpaced) = await Task.Run(
                 () => Measure(candidates[i], voiceId, log, ct), ct);
 
             rows.Add(row);
             if (seconds > 0) sampleSeconds = seconds;
+            if (unpaced == false) anyPacedRow = true;
             onRow?.Report(new BenchmarkProgress(i + 1, candidates.Count, row));
         }
 
         foreach (var failed in rows.Where(r => r.Failed))
             notes.Add($"{failed.Label}: {failed.Error}");
+
+        // Noted, not failed — and the distinction is the point. A row measured
+        // through the pacing is still a real measurement of a real
+        // configuration; it is just slower to take and noisier than it needed to
+        // be. That is not the same class of problem as a thread count that never
+        // reached ORT, which produces numbers describing a configuration nobody
+        // asked for, and which is discarded above. Refuse what is fictional;
+        // annotate what is merely worse.
+        if (anyPacedRow)
+            notes.Add(
+                "The engine rendered these rows paced to real time — it is older than the Control Panel " +
+                "and does not know how to skip the pacing. The sweep is valid, but each row cost about " +
+                "five times the wall clock it needed to and carries more run-to-run noise as a result. " +
+                "Close every SAPI client (readers, dictionaries, the browser) and re-extract the release " +
+                "so the engine is replaced too, then re-run for a tighter answer.");
 
         var pick = BenchmarkSweep.Pick(rows, machine.LogicalProcessors);
         if (pick is null)
@@ -297,7 +314,12 @@ internal static class ThreadSweep
     /// <summary>
     /// One configuration, measured in its own render-helper process.
     /// </summary>
-    private static (BenchmarkRow Row, double SampleSeconds) Measure(
+    /// <returns>
+    /// The row, the sample's audio duration, and whether the engine confirmed it
+    /// rendered unpaced — <c>null</c> where the run never got far enough to say,
+    /// which is a different thing from saying no.
+    /// </returns>
+    private static (BenchmarkRow Row, double SampleSeconds, bool? Unpaced) Measure(
         SweepCandidate candidate, string voiceId, IProgress<string>? log, CancellationToken ct)
     {
         log?.Report($"— {candidate.Label} ({candidate.Provider}) …");
@@ -342,6 +364,20 @@ internal static class ThreadSweep
                     "--telemetry", DataPaths.SessionsDir,
                     "--runs", RunsPerCandidate.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     "--warmups", WarmupsPerCandidate.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    // Measure the machine, not the sample's playing time. The
+                    // engine paces its writes to real time and cannot tell a
+                    // file from a speaker, so a paced row spends ~6 s of wall
+                    // clock on ~1.2 s of compute — and the sweep's own duration
+                    // is what lets the machine's load drift underneath it
+                    // between the first row and the last.
+                    "--unpaced",
+                    // Measure the configuration asked for, not the one the last
+                    // sweep saved. The "auto" candidate is selected by writing
+                    // OnnxThreads = 0, which is the same value that tells the
+                    // engine to apply benchmark.json — so without this the sweep's
+                    // baseline row is its own previous output, and no two sweeps
+                    // can agree.
+                    "--no-profile",
                 },
                 BenchmarkSweep.SampleText, log, ct, progress: null, onLine: OnLine);
         }
@@ -352,11 +388,23 @@ internal static class ThreadSweep
             // cannot build a session at 8 threads still deserves an answer about
             // the counts that worked, and the row records why rather than
             // vanishing — a gap in the table reads as "not tried".
-            return (Failed(candidate, $"{ex.GetType().Name}: {ex.Message}"), 0);
+            return (Failed(candidate, $"{ex.GetType().Name}: {ex.Message}"), 0, null);
         }
 
+        // Did the engine actually honour --unpaced? An engine built before the
+        // unpaced path existed ignores the request and renders paced: same rows,
+        // same shape, six times the wall clock and the old noise. Since the
+        // engine is precisely the binary a half-finished upgrade leaves behind
+        // (trap 16 — a running reader holds engine\x64 or engine\x86 open and
+        // the copy fails there alone), the sweep asks rather than assumes.
+        //
+        // No line at all means the RENDER HELPER is the old one, which is the
+        // same diagnosis from the other end.
+        var unpacedReports = metrics.GetAll("unpaced");
+        bool? unpaced = unpacedReports.Count == 0 ? null : unpacedReports.All(v => v > 0);
+
         if (candidate.IsGpu && !dmlAppended)
-            return (Failed(candidate, dmlFailure ?? "DirectML did not initialise on this machine, so the run fell back to the CPU. Nothing was measured about the GPU."), 0);
+            return (Failed(candidate, dmlFailure ?? "DirectML did not initialise on this machine, so the run fell back to the CPU. Nothing was measured about the GPU."), 0, unpaced);
 
         var rtfs = metrics.GetAll("engineRtf").Where(v => v > 0).ToList();
         var cpuSeconds = metrics.GetAll("cpuSeconds").ToList();
@@ -365,7 +413,7 @@ internal static class ThreadSweep
         if (rtfs.Count == 0)
             return (Failed(candidate,
                 "the engine reported no synthesis rate — its telemetry was unreadable, " +
-                "so this configuration produced audio but no measurement"), audioSeconds);
+                "so this configuration produced audio but no measurement"), audioSeconds, unpaced);
 
         // A row with no audio behind it would compute a cost of zero, and zero is
         // the fastest number there is. Pick already refuses rows at zero, but a
@@ -373,18 +421,32 @@ internal static class ThreadSweep
         // showing as the failure it is.
         if (audioSeconds <= 0)
             return (Failed(candidate,
-                "the rendered sample had no audio in it, so there is nothing to have been fast at"), 0);
+                "the rendered sample had no audio in it, so there is nothing to have been fast at"), 0, unpaced);
+
+        // The guard that covers the row the thread check cannot. A profile
+        // substituted for the settings replaces the whole configuration —
+        // threads AND provider — and the "auto" candidate is the one it targets,
+        // because auto is spelled with the same 0 that asks for the profile.
+        // Discarded rather than recorded: a baseline that is really the previous
+        // sweep's answer is the reason no two sweeps agreed.
+        if (metrics.GetAll("profileApplied").Any(v => v > 0))
+            return (Failed(candidate,
+                "the engine built this session from the stored benchmark profile instead of the settings " +
+                "under test, so this row describes the last sweep's answer rather than this configuration. " +
+                "The engine is older than the Control Panel — re-extract the release with every SAPI client closed."),
+                audioSeconds, unpaced);
 
         // The guard against the shared-session trap. Every way in which the
         // requested thread count could fail to reach ORT has the same symptom: a
         // full table whose rows all describe one configuration. Auto is exempt
-        // because the engine reports the count ORT chose, not the 0 we asked for.
+        // because the engine reports the count ORT chose, not the 0 we asked for
+        // — which is precisely why the profile check above exists.
         double reported = metrics.Get("onnxThreads");
         if (!candidate.IsGpu && candidate.Threads != CpuBudget.Auto && reported > 0 && (int)reported != candidate.Threads)
             return (Failed(candidate,
                 $"asked the engine for {candidate.Threads} threads and it reported building with {reported:F0}. " +
                 "The row is discarded rather than recorded, because a sweep that measures the same " +
-                "configuration repeatedly looks exactly like a sweep that worked."), audioSeconds);
+                "configuration repeatedly looks exactly like a sweep that worked."), audioSeconds, unpaced);
 
         // Cost of the sample, from the engine's own rate rather than from a wall
         // clock the pacing has flattened. Same units as the Linux table so the two
@@ -403,7 +465,7 @@ internal static class ThreadSweep
             Rtf: Measurement.Median(rtfs),
             AvgCores: computeSeconds > 0 ? medianCpu / computeSeconds : 0,
             CoreSeconds: medianCpu,
-            Spread: Measurement.Spread(computeMs)), audioSeconds);
+            Spread: Measurement.Spread(computeMs)), audioSeconds, unpaced);
     }
 
     private static BenchmarkRow Failed(SweepCandidate candidate, string error) =>

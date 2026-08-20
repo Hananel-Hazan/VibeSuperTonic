@@ -202,7 +202,22 @@ internal sealed class SupertonicAdapter
         // A non-zero OnnxThreads is left alone on purpose. That is a person who
         // opened the Advanced tab and typed a number, and a knob that silently
         // loses to a measurement is a knob that generates bug reports.
-        if (intraOp == CpuBudget.Auto)
+        //
+        // ...unless this process is MEASURING the engine rather than speaking.
+        // The thread sweep selects its "auto" candidate by writing OnnxThreads = 0
+        // — the same value that means "apply the profile" — so without this it
+        // measures the profile the last sweep saved instead of ORT's own pick.
+        // Self-referential, and silent: the thread read-back below exempts auto by
+        // design. Measured 2026-08-20, same machine twenty minutes apart: the
+        // contaminated row read 0.69 cores at RTF 0.25, the clean one 13.2 at 0.35.
+        bool noProfile = BenchSwitches.IsAuthorised(
+            Environment.GetEnvironmentVariable(BenchSwitches.NoProfileVariable), Environment.ProcessId);
+
+        // Cleared per session build, not once per process: a session rebuilt after
+        // a reset must not keep reporting the previous one's provenance.
+        ProfileApplied = false;
+
+        if (intraOp == CpuBudget.Auto && !noProfile)
         {
             var applied = BenchmarkProfileCache.Applicable(baseDir, onnxDir);
             if (applied is not null)
@@ -213,6 +228,7 @@ internal sealed class SupertonicAdapter
                 // a profile that liked DirectML cannot override a driver that has
                 // failed twice in this process.
                 useDml = applied.Provider == "directml";
+                ProfileApplied = true;
             }
         }
 
@@ -255,6 +271,21 @@ internal sealed class SupertonicAdapter
     /// when DirectML genuinely appended, never merely because it was requested.
     /// </summary>
     internal static string EffectiveProvider { get; private set; } = "";
+
+    /// <summary>
+    /// Whether the live shared session was built from a stored benchmark profile
+    /// rather than from the settings as written.
+    ///
+    /// <para>Published so a sweep can <em>verify</em> that its
+    /// <c>VIBESUPERTONIC_NO_PROFILE</c> request took effect, rather than trusting
+    /// that it did. This closes the one hole in the read-back guard: a numbered
+    /// candidate is checked by comparing the thread count it asked for against
+    /// the count the engine reports, but the <c>auto</c> candidate asks for 0 and
+    /// is therefore exempt — which is exactly the row a profile substitutes
+    /// itself into. Without this flag the sweep has no way to tell "ORT picked
+    /// this" from "the last sweep did".</para>
+    /// </summary>
+    internal static bool ProfileApplied { get; private set; }
 
     /// <summary>
     /// Is this ONNX Runtime's native DLL failing to load, in any of the shapes

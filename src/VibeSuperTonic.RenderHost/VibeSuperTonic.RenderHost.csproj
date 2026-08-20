@@ -32,6 +32,20 @@
     <Compile Include="..\VibeSuperTonic.Launcher\Export\MfApi.cs" Link="Shared\MfApi.cs" />
     <Compile Include="..\VibeSuperTonic.Launcher\Export\MfAudioEncoder.cs" Link="Shared\MfAudioEncoder.cs" />
     <Compile Include="..\VibeSuperTonic.Launcher\Export\ExportRequest.cs" Link="Shared\ExportRequest.cs" />
+
+    <!--
+      The unpaced-bench switch, linked from Core for the same reason as the
+      encoder above: this helper sets the variable and the engine reads it, so
+      the two agreeing about its NAME and its VALUE is the whole contract. A
+      copied constant that drifted would not fail the build or any test — the
+      engine would simply keep pacing, the bench would keep taking six seconds
+      per run, and the only symptom would be a sweep that stayed noisy.
+
+      A ProjectReference to Core would also work and is deliberately not taken:
+      it would put another assembly in render\ for one file with no
+      dependencies, and this helper is kept minimal on purpose (see above).
+    -->
+    <Compile Include="..\VibeSuperTonic.Core\Synthesis\BenchSwitches.cs" Link="Shared\BenchSwitches.cs" />
   </ItemGroup>
 
 </Project>

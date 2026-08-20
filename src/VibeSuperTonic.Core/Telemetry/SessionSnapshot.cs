@@ -41,6 +41,35 @@ public sealed class SessionSnapshot
     public int UnderrunCount { get; set; }
     public int DeviceLossCount { get; set; }
     public bool DmlLatchedOff { get; set; }
+
+    /// <summary>
+    /// Whether this Speak ran with real-time write pacing disabled — see
+    /// <see cref="Synthesis.UnpacedBench"/>. False for every ordinary SAPI host,
+    /// and true only inside a benchmark helper that asked for it.
+    ///
+    /// Published rather than assumed for the same reason
+    /// <see cref="OnnxThreads"/> is: the benchmark asks for unpaced rendering by
+    /// setting an environment variable before it loads the engine, and an engine
+    /// too old to know about the variable ignores it and produces a full set of
+    /// perfectly plausible numbers six times more slowly. Reading it back is how
+    /// the caller can tell "the engine did what I asked" from "the engine is the
+    /// one left behind by a half-finished upgrade" — trap 16's symptom.
+    /// </summary>
+    public bool Unpaced { get; set; }
+
+    /// <summary>
+    /// Whether the session was built from a stored benchmark profile rather than
+    /// from the settings as written — see
+    /// <see cref="Synthesis.BenchSwitches.NoProfileVariable"/>.
+    ///
+    /// <para>The sweep asserts this is false on every row. It is the only way to
+    /// verify the <c>auto</c> candidate, which the thread read-back exempts by
+    /// design because it asks for 0 and the engine answers with what ORT chose.
+    /// It is also the honest answer to "why this thread count" for
+    /// <see cref="OnnxThreads"/>, which W2 has to report.</para>
+    /// </summary>
+    public bool ProfileApplied { get; set; }
+
     public DateTime SampleTimeUtc { get; set; }
 
     /// <summary>

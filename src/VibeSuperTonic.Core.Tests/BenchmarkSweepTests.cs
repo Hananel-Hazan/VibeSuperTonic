@@ -47,6 +47,44 @@ public class BenchmarkSweepTests
         Assert.Equal(2, BenchmarkSweep.Pick(rows, 20)!.Threads);
     }
 
+    /// <summary>
+    /// A GPU row carries <c>Threads = 0</c> because ORT's intra-op count is
+    /// meaningless for it — the same spelling CPU "auto" uses, and the two mean
+    /// opposite things about cost.
+    ///
+    /// <para>Measured on a quiet i7-12800H, 2026-08-20: DirectML finished in
+    /// 1159 ms using 0.6 cores while six threads took 1201 ms using 6.1 — and
+    /// DirectML lost, because the tie-break mapped its 0 to the processor count
+    /// and sorted the cheapest row on the board as the most expensive. The
+    /// fastest and cheapest row must win.</para>
+    /// </summary>
+    [Fact]
+    public void A_gpu_row_is_ranked_by_what_it_costs_not_by_its_thread_count()
+    {
+        var directml = new BenchmarkRow("DirectML", 0, "directml", 1159, 0.24, AvgCores: 0.6, CoreSeconds: 0.7);
+        var sixThreads = new BenchmarkRow("6", 6, "cpu", 1201, 0.25, AvgCores: 6.1, CoreSeconds: 7.3);
+
+        var pick = BenchmarkSweep.Pick(new[] { sixThreads, directml }, 20);
+
+        Assert.Equal("directml", pick!.Provider);
+    }
+
+    /// <summary>
+    /// The other half of the same rule, and the reason it cannot simply be
+    /// "prefer the GPU": CPU auto also spells its thread count 0, and it really
+    /// does occupy the machine. It must still sort last among equals.
+    /// </summary>
+    [Fact]
+    public void Cpu_auto_still_sorts_last_among_equals()
+    {
+        var auto = new BenchmarkRow("auto", 0, "cpu", 5080, 1.0, AvgCores: 12.9, CoreSeconds: 65);
+        var four = new BenchmarkRow("4", 4, "cpu", 5180, 1.0, AvgCores: 3.7, CoreSeconds: 19);
+
+        var pick = BenchmarkSweep.Pick(new[] { auto, four }, 20);
+
+        Assert.Equal("4", pick!.Label);
+    }
+
     [Fact]
     public void Outside_the_tie_band_speed_still_decides()
     {

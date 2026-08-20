@@ -183,6 +183,16 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         Trace("Speak", $"flags={dwSpeakFlags:X}, fragList={pTextFragList:X}, formatId={rguidFormatId}, pWfx={pWaveFormatEx:X}");
         _firstWriteTickMs = 0; // reset; StreamPcm will set on first successful Write
         _bytesWrittenThisSpeak = 0;
+        // Re-read per Speak rather than caching at type load. The value cannot
+        // change within a process, but the ORDER in which it is first read can:
+        // the benchmark helper sets the variable and then activates the COM
+        // engine, and a static initialiser that happened to run earlier — for
+        // any reason, in any future refactor — would cache "paced" and silently
+        // measure the thing this exists to stop measuring. A dictionary lookup
+        // per utterance is not worth defending against that.
+        UnpacedActive = BenchSwitches.IsAuthorised(
+            Environment.GetEnvironmentVariable(BenchSwitches.UnpacedVariable), Environment.ProcessId);
+        if (UnpacedActive) Trace("Speak", "real-time pacing and drain disabled for this process (benchmark)");
         if (pWaveFormatEx != IntPtr.Zero)
         {
             var wfx = Marshal.PtrToStructure<WAVEFORMATEX>(pWaveFormatEx);
@@ -225,7 +235,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             var planItems = BuildSpeakPlan(pTextFragList, defaultLang);
             Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
 
-            // Telemetry: announce we're starting work.
+            // Telemetry: announce we're starting work. BeginUtterance first, so
+            // the figures MarkIdle publishes at the end belong to THIS utterance
+            // and cannot be the previous one's left in a latch.
+            try { TelemetryWriter.BeginUtterance(); } catch { /* swallow */ }
             try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ""); }
             catch { /* swallow */ }
 
@@ -575,6 +588,14 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             // Cap, don't skip: a pathological drainMs >= 60000 used to skip the drain
             // entirely, letting SAPI cut trailing audio. Clamp to the ceiling instead.
             if (drainMs > 60000) drainMs = 60000;
+            // The one legitimate reason to skip it: a benchmark render, where the
+            // sink is a file and there is no hardware buffer to wait for. This is
+            // the half that dominates. With the write pacing gone the writes
+            // finish in compute time, so elapsedSinceFirstWriteMs collapses to
+            // almost nothing and drainMs grows to very nearly the full audio
+            // duration — gating the pacing alone would just move the same six
+            // seconds from one loop to the other and change no measurement at all.
+            if (UnpacedActive) drainMs = 0;
             if (drainMs > 0)
             {
                 int sleptMs = 0;
@@ -907,6 +928,26 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     private const int LookaheadMs = 100;
     private const int LookaheadBytes = (BytesPerSecond * LookaheadMs) / 1000;
 
+    /// <summary>
+    /// Whether this process is rendering for a benchmark and has asked for the
+    /// real-time pacing and the end-of-Speak drain to be skipped — see
+    /// <see cref="BenchSwitches"/> for the switch and for why it is pid-keyed.
+    ///
+    /// <para>Process-wide rather than per-instance because the thing it reflects
+    /// is a property of the process, not of a voice: the environment variable is
+    /// read from the process block and every engine instance in the process gets
+    /// the same answer. Concurrent Speaks therefore write the same value and
+    /// cannot race to a different one.</para>
+    ///
+    /// <para><b>False for every real SAPI host, always.</b> Nothing sets the
+    /// variable except the benchmark helper, and the helper can only set it for
+    /// itself. If this is ever observed true in Balabolka, NVDA or Lingoes then
+    /// the guard has failed and R-14 is back — which is why
+    /// <see cref="Telemetry.TelemetryWriter"/> publishes it rather than leaving
+    /// it to be inferred from a log line nobody reads.</para>
+    /// </summary>
+    internal static volatile bool UnpacedActive;
+
     private unsafe int StreamPcm(short[] pcm, IntPtr sitePtr,
         delegate* unmanaged[Stdcall]<IntPtr, uint> getActions,
         delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint*, int> write)
@@ -941,10 +982,15 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 // when Speak returns — losing the trailing word(s). With pacing,
                 // SAPI's buffer is at most LookaheadMs full at any time, so the
                 // device drains within a similar window of our last write.
+                //
+                // Skipped entirely for a benchmark render (UnpacedActive): there
+                // is no device pulling at 44.1 kHz on the other end, only a file,
+                // so every millisecond spent here is measurement time bought for
+                // nothing. See the drain below — both halves go together.
                 long elapsedMs = Environment.TickCount64 - _firstWriteTickMs;
                 long expectedBytes = (BytesPerSecond * elapsedMs) / 1000;
                 long aheadBytes = _bytesWrittenThisSpeak - expectedBytes;
-                if (aheadBytes > LookaheadBytes)
+                if (!UnpacedActive && aheadBytes > LookaheadBytes)
                 {
                     int sleepMs = (int)((aheadBytes - LookaheadBytes) * 1000 / BytesPerSecond);
                     if (sleepMs > 0)

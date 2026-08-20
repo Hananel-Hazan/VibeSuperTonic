@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using VibeSuperTonic.Core.Synthesis; // BenchSwitches (linked source)
 using VibeSuperTonic.Launcher.Export; // ExportFormat + MfAudioEncoder (linked sources)
 
 namespace VibeSuperTonic.RenderHost;
@@ -25,7 +26,7 @@ namespace VibeSuperTonic.RenderHost;
 /// the machine a breather. Cancellation is the parent killing this process.
 ///
 /// Args: --mode &lt;render|speak|bench&gt; --voice &lt;id&gt; --text &lt;utf8 file&gt;
-///       bench:  [--telemetry &lt;sessions dir&gt;] [--runs N] [--warmups N]
+///       bench:  [--telemetry &lt;sessions dir&gt;] [--runs N] [--warmups N] [--unpaced] [--no-profile]
 ///       render: --out &lt;path&gt; --format &lt;wav|mp3|aac&gt; [--bitrate &lt;bps&gt;]
 ///       any:    [--control &lt;file&gt;]
 /// --mode defaults to "render" so pre-0.3 callers keep working unchanged.
@@ -158,6 +159,37 @@ internal static class Program
         // words, and warming with that would double a run that is already long.
         int warmups = int.TryParse(GetArg(args, "--warmups"), out int w) ? Math.Clamp(w, 0, 5) : 0;
 
+        // Opt in to unpaced rendering, BEFORE the first COM activation loads the
+        // engine into this process — the engine reads the variable at Speak, but
+        // setting it after the helper had already started speaking would leave
+        // some runs paced and some not, which is worse than either.
+        //
+        // Opt-IN rather than always-on for --mode bench, because the two callers
+        // want different things. The thread sweep wants the machine measured as
+        // fast as it can be measured. The preset Benchmark tab reports
+        // cpuPercent as "will this bog my box down while it reads to me", and
+        // that question is only meaningful about a run that is paced the way
+        // playback is — unpaced, the same field becomes "CPU while sprinting",
+        // near 100% for every preset. Changing that surface is W3's call to
+        // make deliberately, not this change's to make as a side effect.
+        if (HasFlag(args, "--unpaced"))
+        {
+            Environment.SetEnvironmentVariable(
+                BenchSwitches.UnpacedVariable, BenchSwitches.TokenFor(Environment.ProcessId));
+            Console.Out.WriteLine("RenderHost: requesting unpaced render (real-time write pacing off).");
+        }
+
+        // Measure the settings as written. Separate from --unpaced because the
+        // preset benchmark wants the profile applied — it answers "what will my
+        // machine do for me", and the profile is part of that answer — while the
+        // thread sweep must not measure its own previous output.
+        if (HasFlag(args, "--no-profile"))
+        {
+            Environment.SetEnvironmentVariable(
+                BenchSwitches.NoProfileVariable, BenchSwitches.TokenFor(Environment.ProcessId));
+            Console.Out.WriteLine("RenderHost: ignoring any stored benchmark profile.");
+        }
+
         // Render to a throwaway WAV rather than to the speakers. A benchmark that
         // waits on an audio device measures the device — playback runs at 1.0x
         // real time by definition, so every preset would score RTF ≈ 1.00 and the
@@ -227,6 +259,11 @@ internal static class Program
                 // effect produces a full, plausible, entirely fictional table. See
                 // the shared-session note in SupertonicAdapter.
                 Emit("onnxThreads", probe.OnnxThreads);
+                // Only meaningful when we asked; emitted unconditionally so the
+                // caller never has to distinguish "did not ask" from "asked and
+                // the line is missing because the engine is old".
+                Emit("unpaced", probe.Unpaced ? 1 : 0);
+                Emit("profileApplied", probe.ProfileApplied ? 1 : 0);
 
                 if (runs > 1) Console.Out.WriteLine($"PROGRESS {run * 100 / runs}");
             }
@@ -294,6 +331,8 @@ internal static class Program
             TimeSpan cpuAtStart = proc.TotalProcessorTime;
 
             Console.Out.WriteLine("RenderHost: calling Speak (async)…");
+            // Everything the engine has written so far belongs to a previous run.
+            probe?.Arm();
             voice.Speak(text, SVSFlagsAsync);
 
             int total = Math.Max(1, text.Length);
@@ -332,6 +371,23 @@ internal static class Program
                 catch { done = true; }
                 if (done && !paused) break; // while paused, WaitUntilDone times out — keep polling for resume
             }
+
+            // One more, AFTER the loop — and it is the reading that matters.
+            //
+            // The in-loop sample runs on a 200 ms cadence and exists to catch the
+            // worst rate during a long render. It cannot catch a short one: the
+            // engine publishes its rate when a chunk completes, and the sweep's
+            // sample is 85 characters, which is below minChunkChars and therefore
+            // ONE chunk. Paced, the ~5 s of real-time writing after that publish
+            // gave the loop twenty-odd chances to read it. Unpaced, the writes and
+            // the drain take no time at all, so Speak returns within milliseconds
+            // of the only publish there will ever be and the loop breaks having
+            // seen nothing but idle.
+            //
+            // This is safe to read late because the engine leaves its last
+            // snapshot on disk — the heartbeat timer only touches the mtime — and
+            // safe against reading the PREVIOUS run's because of Arm().
+            probe?.Sample();
 
             long t2 = Stopwatch.GetTimestamp();
             proc.Refresh();
@@ -430,6 +486,54 @@ internal static class Program
         /// </summary>
         public double OnnxThreads { get; private set; }
 
+        /// <summary>
+        /// Whether the engine reported actually rendering unpaced.
+        ///
+        /// <para>Read back for the same reason as <see cref="OnnxThreads"/>, and
+        /// against a specific failure: an engine from before the unpaced path
+        /// existed ignores the environment variable entirely. It then produces a
+        /// complete, correct, six-times-slower set of numbers with the old
+        /// noise — no error, no missing field, nothing to notice. Since the
+        /// binary that gets left behind by a half-finished upgrade is exactly
+        /// the engine (trap 16), this is the read-back that catches it.</para>
+        ///
+        /// <para>Latches true: the engine publishes its snapshot throughout the
+        /// run and idles back to a quiet state, so "did it ever say yes" is the
+        /// question, not "what does it say now".</para>
+        /// </summary>
+        public bool Unpaced { get; private set; }
+
+        /// <summary>
+        /// Whether the engine built this session from a stored benchmark profile.
+        ///
+        /// <para>Latches true, and the caller treats true as a failed row: it
+        /// means the configuration under test was replaced by whatever the last
+        /// sweep saved. This is the only check that covers the <c>auto</c>
+        /// candidate — the thread read-back cannot, because auto asks for 0 and
+        /// the engine truthfully answers with the count ORT chose.</para>
+        /// </summary>
+        public bool ProfileApplied { get; private set; }
+
+        /// <summary>
+        /// When this run started speaking. Snapshots older than this belong to a
+        /// PREVIOUS run in the same process and must not be counted.
+        ///
+        /// <para>The engine leaves its last snapshot on disk — the 1 Hz
+        /// heartbeat only touches the file's mtime — so at the moment run 2
+        /// begins, the file still holds run 1's rate. Without this cutoff the
+        /// <see cref="Rtf"/> maximum would carry the fastest reading of any run
+        /// into all the others, and three runs that agree by construction have a
+        /// spread of zero: the sweep would report its best-ever noise figure and
+        /// look more trustworthy the more wrong it was.</para>
+        /// </summary>
+        private DateTime _liveFromUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// Draw the line just before Speak, so everything already on disk is
+        /// treated as history.
+        /// </summary>
+        public void Arm() => _liveFromUtc = DateTime.UtcNow;
+
         public void Sample()
         {
             if (_path is null || !File.Exists(_path)) return;
@@ -439,6 +543,8 @@ internal static class Program
                     FileShare.ReadWrite | FileShare.Delete);
                 using var doc = JsonDocument.Parse(fs);
                 var root = doc.RootElement;
+
+                if (StampUtc(root) < _liveFromUtc) return;
 
                 double rtf = Num(root, "RollingRtf");
                 if (rtf > 0)
@@ -456,12 +562,40 @@ internal static class Program
                 // session exists, and taking the last reading would report 0 for a
                 // run that had just been measured at four threads.
                 OnnxThreads = Math.Max(OnnxThreads, Num(root, "OnnxThreads"));
+
+                if (Bool(root, "Unpaced")) Unpaced = true;
+                if (Bool(root, "ProfileApplied")) ProfileApplied = true;
             }
             catch { /* snapshot mid-rename or malformed — try again next tick */ }
         }
 
         private static double Num(JsonElement e, string name) =>
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
+
+        /// <summary>
+        /// Absent reads as false — which is precisely the answer wanted from an
+        /// engine too old to publish the field at all.
+        /// </summary>
+        private static bool Bool(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
+
+        /// <summary>
+        /// The snapshot's own timestamp. Written by the engine in THIS process,
+        /// so it is the same clock and needs no skew allowance.
+        ///
+        /// <para>Missing or unparseable reads as "now", which accepts the
+        /// sample. Deliberate: an engine that does not stamp its snapshots
+        /// should degrade to the older, cross-run-contaminated behaviour rather
+        /// than to measuring nothing at all — a sweep that reports numbers it
+        /// should not have trusted is recoverable, and one that reports no
+        /// numbers is just broken.</para>
+        /// </summary>
+        private static DateTime StampUtc(JsonElement e) =>
+            e.TryGetProperty("SampleTimeUtc", out var v)
+            && v.ValueKind == JsonValueKind.String
+            && v.TryGetDateTime(out var dt)
+                ? dt.ToUniversalTime()
+                : DateTime.UtcNow;
     }
 
     // ----------------------------------------------------------------- helpers
@@ -547,7 +681,11 @@ internal static class Program
             "       bench:  renders to a temp WAV, metrics on stdout as 'BENCH key=value'\n" +
             "               [--telemetry <sessions dir>] adds the engine's own RTF\n" +
             "               [--runs N] emits one set of metrics per timed run (default 1)\n" +
-            "               [--warmups N] untimed renders of the text before timing (default 0)");
+            "               [--warmups N] untimed renders of the text before timing (default 0)\n" +
+            "               [--unpaced] render at hardware speed, not real time\n" +
+            "                           (BENCH unpaced=1 confirms the engine honoured it)\n" +
+            "               [--no-profile] build from settings, ignoring benchmark.json\n" +
+            "                           (BENCH profileApplied=0 confirms it)");
         return 2;
     }
 
@@ -557,6 +695,17 @@ internal static class Program
             if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
                 return args[i + 1];
         return null;
+    }
+
+    /// <summary>
+    /// A valueless switch. Scans the whole array, unlike <see cref="GetArg"/>
+    /// which stops one short because it needs a following value.
+    /// </summary>
+    private static bool HasFlag(string[] args, string name)
+    {
+        foreach (string a in args)
+            if (string.Equals(a, name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static string ReadControl(string path)

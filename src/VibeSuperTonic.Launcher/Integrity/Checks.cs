@@ -1,5 +1,7 @@
 using Microsoft.Win32;
 using VibeSuperTonic.Core.Models;
+using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Launcher.Bench;
 
 namespace VibeSuperTonic.Launcher.Integrity;
 
@@ -41,7 +43,129 @@ internal static class Checks
         results.Add(ModelsCheck(state));
         results.Add(VoiceStylesCheck(state));
         results.Add(EngineDllWritableCheck(state));
+        // LAST, and the position is the point. "Repair all" walks this list in
+        // order, and a sweep cannot run until the voices are registered and the
+        // models are on disk — both of which are repairs earlier in this list.
+        // Put it anywhere else and a fresh install measures nothing, reports a
+        // failure, and blames the machine.
+        results.Add(BenchmarkCheck());
         return results;
+    }
+
+    /// <summary>
+    /// Has this machine ever measured itself?
+    ///
+    /// <para>A fresh install runs at ONNX Runtime's own thread pick, which on the
+    /// machine that motivated this work was the <em>worst</em> configuration
+    /// available: eleven times the cores to finish later than two threads. That
+    /// is not a defect the user can see — everything works, it is merely slower
+    /// and noisier than the same hardware can be — so it has to be something the
+    /// install asks about rather than something the user discovers.</para>
+    ///
+    /// <para>It is a Warning, not an Error: an unmeasured install speaks
+    /// perfectly well. What it must not be is silent.</para>
+    /// </summary>
+    private static CheckResult BenchmarkCheck()
+    {
+        const string title = "Machine benchmark";
+
+        EngineSettings settings;
+        try { settings = EngineSettingsRegistry.Load(); }
+        catch (Exception ex)
+        {
+            return new(title, CheckSeverity.Info, true, $"settings unreadable ({ex.Message})", null, null);
+        }
+
+        // A hand-set thread count beats any measurement by design — see the
+        // precedence note in SupertonicAdapter. There is nothing for a profile to
+        // change here, so "never measured" is not a finding.
+        if (settings.OnnxThreads != CpuBudget.Auto)
+            return new(title, CheckSeverity.Info, true,
+                $"not used — ONNX threads is set to {settings.OnnxThreads} by hand on the Advanced tab",
+                null, null);
+
+        BenchmarkProfile? stored = null;
+        try { stored = BenchmarkStore.Load(DataPaths.BenchmarkFilePath); }
+        catch { /* a damaged file is "no profile", never a broken Status tab */ }
+
+        if (stored is null)
+            return new(title, CheckSeverity.Warning, Ok: false,
+                "never measured — the engine is using ONNX Runtime's own thread pick, "
+              + "which measured as the worst configuration on the machine that motivated this feature",
+                "Double-click to measure this machine (about a minute and a half). "
+              + "Best done while the machine is otherwise idle.",
+                Repair: MeasureThisMachineAsync);
+
+        IReadOnlyList<string> stale;
+        try
+        {
+            var now = MachineFacts.Current(
+                MachineFacts.ModelsRoot, settings.TotalStep, Voices.All[0].Id, settings.Language);
+            stale = stored.StalenessAgainst(now);
+        }
+        catch (Exception ex)
+        {
+            return new(title, CheckSeverity.Info, true,
+                $"a profile exists but this machine could not be described to compare it against ({ex.Message})",
+                null, null);
+        }
+
+        string measured = stored.MeasuredUtc.Length >= 10 ? stored.MeasuredUtc[..10] : stored.MeasuredUtc;
+        string pick = stored.Threads == CpuBudget.Auto ? "auto threads" : $"{stored.Threads} threads";
+
+        if (stale.Count > 0)
+            return new(title, CheckSeverity.Warning, Ok: false,
+                $"the stored profile ({stored.Provider.ToUpperInvariant()}, {pick}, {measured}) "
+              + $"does not apply here — {string.Join("; ", stale)}",
+                "Double-click to measure this machine again. A profile is never scaled to fit: "
+              + "the cost curve is not monotonic, so another machine's thread count cannot be converted into this one's.",
+                Repair: MeasureThisMachineAsync);
+
+        return new(title, CheckSeverity.Info, true,
+            $"{stored.Provider.ToUpperInvariant()}, {pick}, measured {measured}",
+            null, null);
+    }
+
+    /// <summary>
+    /// Measure this machine and store the profile. Used as the repair for
+    /// <see cref="BenchmarkCheck"/>, so it must return false rather than throw:
+    /// a refused or failed sweep is one unfixed row, not a failed install.
+    /// </summary>
+    private static async Task<bool> MeasureThisMachineAsync(IProgress<string>? log, CancellationToken ct)
+    {
+        try
+        {
+            // The sweep writes a thread count into settings.json for EVERY SAPI
+            // client on the machine while it runs. The scope puts them back on
+            // dispose and leaves a sidecar the next launch reconciles if this
+            // process dies first — not a nicety, and not optional here just
+            // because the caller is an installer rather than a tab.
+            using var restore = EngineSettingsRegistry.BeginTemporaryChange(log);
+
+            var outcome = await ThreadSweep.RunAsync(
+                Voices.All[0].Id, includeGpu: true, force: false, log, onRow: null, ct);
+
+            // Refusal is the load guard: the machine was too busy for the answer
+            // to mean anything. Deliberately NOT forced. A measurement taken
+            // through someone else's build gets saved with a timestamp and looks
+            // exactly as authoritative as a good one, and this is an unattended
+            // caller with nobody watching to discount it.
+            if (outcome.Refusal is not null)
+            {
+                log?.Report(outcome.Refusal);
+                log?.Report("Nothing was saved. Re-run the benchmark from the Status tab, or Benchmark → This machine, when the machine is quiet.");
+                return false;
+            }
+
+            foreach (var note in outcome.Notes) log?.Report(note);
+            return outcome.Profile is not null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            log?.Report($"The benchmark could not run: {ex.Message}");
+            return false;
+        }
     }
 
     private static CheckResult BaseDirCheck(Registration.State s) => new(

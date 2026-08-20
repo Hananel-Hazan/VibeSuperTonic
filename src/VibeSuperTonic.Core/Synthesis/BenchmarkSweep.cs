@@ -188,9 +188,25 @@ public static class BenchmarkSweep
 
         return usable
             .Where(r => r.MedianWallMs <= band)
-            // Auto is "every core" as far as the desktop is concerned, so it
-            // sorts last among equals rather than winning by having no number.
-            .OrderBy(r => r.Threads == CpuBudget.Auto ? processorCount : r.Threads)
+            // "Least of the machine", MEASURED rather than assumed.
+            //
+            // This used to sort on the requested thread count, with Auto mapped to
+            // the processor count so it could not win by having no number. That was
+            // right about CPU auto and wrong about everything else with Threads = 0
+            // — which is every DirectML row. Measured 2026-08-20 on a quiet
+            // i7-12800H: DirectML was the FASTEST row on the board (1159 ms against
+            // 6 threads at 1201) using 0.6 cores against 6.1, and lost, because a
+            // rule about CPU auto sorted it as though it had occupied twenty.
+            //
+            // AvgCores is what the old key was a proxy for, and it gets both cases
+            // right without a special case: CPU auto measures ~13 cores here and
+            // still sorts last, a GPU row measures ~0.6 and sorts first. Falls back
+            // to the old proxy when a row carries no core figure — a profile stored
+            // before this field meant anything, or a scripted synthesizer in a test
+            // that never burned any CPU.
+            .OrderBy(r => r.AvgCores > 0
+                ? r.AvgCores
+                : (r.Threads == CpuBudget.Auto ? processorCount : r.Threads))
             .ThenBy(r => r.MedianWallMs)
             .First();
     }

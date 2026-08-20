@@ -148,16 +148,49 @@ public sealed record BenchmarkProfile(
         Table.FirstOrDefault(r => !r.Failed && r.Threads == Threads && r.Provider == Provider);
 
     /// <summary>
-    /// The noisiest row's spread — the floor any threshold applied to this table
-    /// has to clear.
+    /// The noisiest row's spread among the rows the tie band actually
+    /// adjudicates — the floor the band has to clear.
     ///
     /// <para>Reported so the comparison that 8a got wrong can be made by looking
     /// rather than by remembering: if this exceeds <see cref="TieBand"/>, the band
     /// is discriminating on noise and the pick is a coin toss between the rows
     /// inside it. Zero when nothing measurable was recorded.</para>
+    ///
+    /// <para><b>Contenders only, and the restriction is the point.</b> This used
+    /// to take the worst spread on the whole board, which made the check answer a
+    /// question nobody asked: a row that finished 69% behind cannot be picked no
+    /// matter how much it wobbles, so its noise says nothing about whether the
+    /// band is choosing on signal. Measured 2026-08-20, three sweeps on a rested
+    /// i7-12800H: the contending rows sat at 1–11% while <c>auto</c> — 69% off the
+    /// pace and never a candidate — swung 18%, and dragged the whole table into
+    /// "band narrower than the noise" on its own.</para>
+    ///
+    /// <para>A contender is a row inside the band, or one its own spread could
+    /// carry into the band on another run. That second clause matters: a row
+    /// sitting just outside is exactly the one that flips a pick between sweeps,
+    /// so excluding it would hide the instability this property exists to
+    /// expose.</para>
     /// </summary>
-    public double MaxSpread =>
-        Table.Where(r => !r.Failed).Select(r => r.Spread).DefaultIfEmpty(0).Max();
+    public double MaxSpread
+    {
+        get
+        {
+            var usable = Table.Where(r => !r.Failed && r.MedianWallMs > 0).ToList();
+            if (usable.Count == 0) return 0;
+
+            double band = usable.Min(r => r.MedianWallMs) * (1 + TieBand);
+            var contenders = usable
+                .Where(r => r.MedianWallMs * (1 - r.Spread) <= band)
+                .Select(r => r.Spread)
+                .ToList();
+
+            // No contender can only happen when the band is degenerate; fall back
+            // to the whole board rather than reporting a reassuring zero.
+            return contenders.Count > 0
+                ? contenders.Max()
+                : usable.Select(r => r.Spread).Max();
+        }
+    }
 
     /// <summary>
     /// True when the tie band is at or above the worst row's spread — i.e. when

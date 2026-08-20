@@ -31,7 +31,12 @@ namespace VibeSuperTonic.Engine.Telemetry;
 /// </summary>
 internal static class TelemetryWriter
 {
-    public const int SchemaVersion = 2;
+    // 3 as of the unpaced bench render: the snapshot gained Unpaced. Nothing
+    // gates on this number — the Monitor tab reads fields it knows and ignores
+    // the rest, which is why adding one is safe — but a number that stops
+    // tracking the format it describes is worse than no number, and a field
+    // report carrying two snapshots is exactly where someone will want to know.
+    public const int SchemaVersion = 3;
 
     private static readonly object _gate = new();
     private static readonly int _pid = Environment.ProcessId;
@@ -111,6 +116,16 @@ internal static class TelemetryWriter
             string errToReport = lastError ?? "";
             if (errToReport.Length == 0) errToReport = SupertonicAdapter.LastDeviceEvent;
 
+            // Latch what this utterance achieved, so MarkIdle can publish it
+            // rather than erase it. Only while active: MarkIdle calls back into
+            // here, and latching its own zeroes would defeat the whole point.
+            if (isActive)
+            {
+                if (double.IsFinite(rollingRtf) && rollingRtf > 0) _lastRollingRtf = rollingRtf;
+                if (double.IsFinite(firstByteLatencyMs) && firstByteLatencyMs > 0) _lastFirstByteMs = firstByteLatencyMs;
+                if (onnxThreads > 0) _lastOnnxThreads = onnxThreads;
+            }
+
             var snap = new SessionSnapshot
             {
                 SchemaVersion = SchemaVersion,
@@ -139,6 +154,12 @@ internal static class TelemetryWriter
                 UnderrunCount = underrunCount,
                 DeviceLossCount = SupertonicAdapter.DeviceLossCount,
                 DmlLatchedOff = SupertonicAdapter.DmlLatchedOff,
+                // Read off the engine rather than passed in, same as the two
+                // above: it is a property of the process, and threading it
+                // through a thirteen-parameter call at every site would be noise
+                // for a field only the benchmark reads.
+                Unpaced = SapiEngine.UnpacedActive,
+                ProfileApplied = SupertonicAdapter.ProfileApplied,
                 SampleTimeUtc = DateTime.UtcNow,
             };
 
@@ -159,14 +180,63 @@ internal static class TelemetryWriter
         }
     }
 
+    /// <summary>
+    /// What the utterance that just finished achieved. Latched so that going
+    /// idle does not destroy it — see <see cref="MarkIdle"/>.
+    /// </summary>
+    private static double _lastRollingRtf;
+    private static double _lastFirstByteMs;
+    private static int _lastOnnxThreads;
+
+    /// <summary>
+    /// Start of a new utterance: forget the previous one's figures.
+    ///
+    /// <para>Without this the latch below would mean "the last rate this process
+    /// ever measured", and a Speak that produced no audio at all would report
+    /// the previous one's number as though it were its own. For the benchmark
+    /// that is the worst failure available — three runs agreeing perfectly
+    /// because they are all the same reading.</para>
+    /// </summary>
+    public static void BeginUtterance()
+    {
+        _lastRollingRtf = 0;
+        _lastFirstByteMs = 0;
+        _lastOnnxThreads = 0;
+    }
+
+    /// <summary>
+    /// Mark the engine idle, keeping the figures the finished utterance earned.
+    ///
+    /// <para><b>Why it no longer zeroes the rate.</b> The engine publishes a
+    /// chunk's rate when the chunk completes, and this runs in Speak's
+    /// <c>finally</c>. Measured 2026-08-20: with the write pacing off, those two
+    /// moments are <b>7 ms apart</b> — the chunk rate landed at 11:49:24.974 and
+    /// Speak returned at .981 — so the only snapshot that ever carried the
+    /// measurement was overwritten with zeros before any reader could poll it.
+    /// The benchmark read zero from eight configurations in a row and reported
+    /// "telemetry unreadable" for every one of them.</para>
+    ///
+    /// <para>Paced, the same code appeared to work only because ~5 s of
+    /// real-time writing sat between the publish and this call, which gave a
+    /// polling reader twenty-odd chances to catch it. That is a measurement
+    /// depending on the slowness of the thing it measures, and it stopped being
+    /// true the moment the slowness was removed.</para>
+    ///
+    /// <para>Idle means "not speaking", which is why <c>IsActive</c> and
+    /// <c>CurrentText</c> are still cleared — a Monitor row stranded on the last
+    /// chunk forever is the bug this method was written for. The rate, the
+    /// first-byte latency and the thread count are facts about an utterance that
+    /// happened; they do not stop being true because it finished.</para>
+    /// </summary>
     public static void MarkIdle()
     {
         Update(
             isActive: false, voiceId: "", textSnippet: "",
             totalStep: 0, engineSpeed: 0, dspRate: 0,
-            firstByteLatencyMs: 0, rollingRtf: double.NaN,
+            firstByteLatencyMs: _lastFirstByteMs,
+            rollingRtf: _lastRollingRtf > 0 ? _lastRollingRtf : double.NaN,
             pipelineDepth: 0, interChunkGapMs: 0,
-            onnxThreads: 0, underrunCount: 0, lastError: "");
+            onnxThreads: _lastOnnxThreads, underrunCount: 0, lastError: "");
     }
 
     private static void EnsureInitialized(string sessionsDir, string resetMarker)

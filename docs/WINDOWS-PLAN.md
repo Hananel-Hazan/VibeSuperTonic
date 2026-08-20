@@ -1,10 +1,13 @@
 # VibeSuperTonic on Windows — convergence plan
 
-Status: **W0 done 2026-08-19** — one version, stamped on every assembly and read
-back off the shipped binaries. **[W1](#w1) is built and has been run on hardware
-the same day**: it works end to end, it answered the DirectML question, and it
-**fails its reproducibility criterion on the CPU rows** for a reason it diagnoses
-itself. 914 Core tests pass. Nothing else has started.
+Status: **W0 and [W1](#w1) are done** — W0 on 2026-08-19, W1 on 2026-08-20.
+Windows now measures the machine it runs on, applies the answer, and a fresh
+install does it unprompted. Getting there needed the unpaced bench render (a
+sweep went from **327 s to 60 s**) and cost four defects in the measurement path
+that no amount of reading the code would have found — all four fixed, all four
+[written up](#w1-closed). **940 Core tests pass, TestHarness green in both
+bitnesses on a real install, and three consecutive sweeps agree.** W2 onward have
+not started.
 
 Written 2026-08-19, from an audit of what the Linux port built that the shipping
 Windows product does not have.
@@ -183,7 +186,162 @@ to measure ~1.2 s of compute. An unpaced bench path would buy fifteen runs in le
 time than three cost here, and shrink the window over which the machine can change
 its mind. That is engine work on the shipping platform and it belongs in its own
 change — **it is now the first thing W1 needs, ahead of anything else in this
-document.**
+document.** *Built 2026-08-20; see below.*
+
+<a name="w1-unpaced"></a>
+
+#### The unpaced bench render · **DONE 2026-08-20**
+
+| Piece | Where |
+| --- | --- |
+| The switch: an environment variable whose value must be the reading process's **own pid**, so it cannot be set machine-wide and mean anything | [UnpacedBench.cs](../src/VibeSuperTonic.Core/Synthesis/UnpacedBench.cs) |
+| Engine skips the write throttle **and** the end-of-Speak drain | [SapiEngine.cs](../src/VibeSuperTonic.Engine/SapiEngine.cs) |
+| `--unpaced` on `--mode bench`, opt-in per caller; `BENCH unpaced=1` reads back whether the engine honoured it | [RenderHost/Program.cs](../src/VibeSuperTonic.RenderHost/Program.cs) |
+| Sweep passes it and **notes** — does not fail — a run the engine rendered paced anyway | [ThreadSweep.cs](../src/VibeSuperTonic.Launcher/Bench/ThreadSweep.cs) |
+| 21 new Core tests, all on the guard rather than the switch | Core.Tests, 914 → 935 |
+
+**Both halves or neither.** The drain is computed as *audio duration minus how
+long we have already been writing*, so gating only the pacing moves the same six
+seconds into the drain and changes no measurement at all. A change that did half
+of this would look exactly like one that worked.
+
+**Why the pid.** Unpaced writes in a real SAPI host are R-14 — SAPI's buffer runs
+deep and clients that close their output when Speak returns lose the trailing
+words. A machine-wide `=1` would reintroduce that in every reader on the box,
+silently. Requiring the value to be the reader's own process id means the only
+thing that can enable it is a process naming itself, so setting it globally
+enables it nowhere rather than everywhere. The telemetry publishes `Unpaced` so
+it can never be quietly true.
+
+**Measured, not promised** — i7-12800H, 2026-08-20:
+
+| | Paced (2026-08-19) | Unpaced (2026-08-20) |
+| --- | --- | --- |
+| One timed run of the 4.9 s sample | ~6 s wall clock | **~1.2 s** |
+| Whole 8-configuration sweep | 327 s | **78–91 s** |
+
+**And running it found two defects, which is [trap 15](LINUX-PORT-PLAN.md#traps)
+doing its job for the fourth time.** Both were invisible to 935 green tests
+because both live at the seam between the engine and the thing measuring it.
+
+**1 · The measurement existed for seven milliseconds, and the engine erased it.
+Fixed.** The engine publishes a chunk's rate when the chunk completes;
+`TelemetryWriter.MarkIdle()` runs in Speak's `finally` and rewrote the snapshot
+with `rollingRtf: NaN`, `firstByteLatencyMs: 0`, `onnxThreads: 0`. Unpaced, those
+two moments are **7 ms apart** — the trace reads `11:49:24.974 chunk 1 … rtf=0.28`
+and `11:49:24.981 complete`. Every configuration reported *"the engine reported no
+synthesis rate"*, eight rows out of eight, and the whole sweep saved nothing.
+
+The old code only ever worked because ~5 s of paced writing sat between the
+publish and the erase, giving a 200 ms polling reader twenty-odd chances to catch
+it. **That is a measurement relying on the slowness of the thing it measures**, and
+it stopped being true the moment the slowness was removed. `MarkIdle` now clears
+what becomes misleading — `IsActive`, `CurrentText` — and keeps what stays true:
+the rate, the first-byte latency and the thread count are facts about an utterance
+that happened and do not stop being true because it finished. `BeginUtterance()`
+resets the latch at Speak entry so a Speak that produces nothing cannot report the
+previous one's number as its own.
+
+<a name="w1-profile-contamination"></a>
+
+**2 · The `auto` row measures the profile the last sweep saved. NOT FIXED, and it
+is the more serious of the two.**
+[SupertonicAdapter.cs:205](../src/VibeSuperTonic.Engine/Synth/SupertonicAdapter.cs#L205)
+substitutes the stored `benchmark.json` profile — threads **and provider** —
+whenever `OnnxThreads == 0`. That is correct and deliberate behaviour for a SAPI
+host. The sweep's `auto` candidate sets exactly `OnnxThreads = 0`, so it inherits
+it too:
+
+- Sweep 3 on 2026-08-20 measured `auto` at RTF 0.25 using **0.69 cores** on a
+  20-logical-processor machine, which is not a shape twenty CPU threads can make.
+  The engine log for that row reads *"DirectML provider appended (device 0)"*.
+- It was then written to `benchmark.json` as the winner, `Provider: "cpu"`. **The
+  file on the development machine currently claims a CPU profile whose number was
+  produced on the GPU.**
+
+Two things make this worse than a wrong row. It is **self-referential** — sweep N's
+baseline is sweep N-1's output, so the auto row cannot be reproduced across sweeps
+even on a perfectly quiet machine, and *that is the exit criterion W1 fails*. And
+it is **silent**: the thread read-back guard that catches every other way a
+configuration fails to reach ORT exempts `auto` by design, because the engine
+reports the count ORT chose rather than the 0 it was asked for.
+
+**Fixed 2026-08-20 with a second, separate switch** —
+`VIBESUPERTONIC_NO_PROFILE`, pid-keyed exactly like the unpaced one. Deliberately
+*not* folded into the same flag: the preset Benchmark tab in [W3](#w3) answers
+"what will my machine do for me", and the honest answer to that includes the
+profile the engine will really apply, so a tab made faster tomorrow must not
+silently stop measuring it. One value meaning two things is what caused this
+defect; the fix does not repeat it, and
+[a test pins the two names apart](../src/VibeSuperTonic.Core.Tests/BenchSwitchesTests.cs).
+
+**And the sweep now verifies it rather than trusting it.** The engine publishes
+`ProfileApplied`, the helper emits it, and a row where it is true is **discarded**
+with its reason. This closes the one hole in the read-back guard: numbered
+candidates were checked by comparing requested threads against reported threads,
+but `auto` asks for 0 and is exempt — and `auto` is the row a profile substitutes
+itself into.
+
+<a name="w1-first-run"></a>
+
+#### The first run measures the machine · **DONE 2026-08-20**
+
+`benchmark.json` was something a user had to know existed, open a tab, and ask
+for. A fresh install therefore ran at ORT's own pick — the row measured below at
+**13.2 cores for RTF 0.35**, beaten by six threads at 0.22 — and nothing said so.
+
+`Checks.RunAll()` gained a **Machine benchmark** row, added **last on purpose**:
+"Repair all" walks the list in order and a sweep needs registered voices and
+models on disk, both of which are repairs earlier in that list. So `--repair` on
+a fresh install now registers, fetches, and then measures, in that order.
+
+- Absent or stale profile → Warning, with the staleness reasons spelled out, and
+  a repair that runs the sweep. A profile that still applies → Info, stating the
+  provider, the pick and the date.
+- **Not** `NeedsConsent`: it writes `data\benchmark.json` inside the install and
+  nothing outside it, which is exactly the line that flag draws.
+- Ok, not a finding, when `OnnxThreads` is set by hand — a measurement it would
+  refuse to apply is not a thing to nag about.
+- **The load guard is not forced.** An unattended caller has nobody watching to
+  discount a number taken through someone else's build, so a refusal stays a
+  refusal and says where to re-run it.
+
+Verified 2026-08-20: `--repair` 69.9 s on a fresh profile, exit 0, sweep saved; a
+second `--repair` is 0.2 s and reports "All checks passed."
+
+<a name="w1-clean-table"></a>
+
+#### The first uncontaminated table — 2026-08-20
+
+Taken by that first-run sweep with no stored profile to inherit, so `auto` is
+genuinely ORT's own pick for the first time:
+
+| Row | RTF | Cores | Spread |
+| --- | --- | --- | --- |
+| 1 | 0.45 | 0.9 | 13% |
+| 2 | 0.30 | 1.9 | 7% |
+| 3 | 0.32 | 2.9 | 11% |
+| 4 | 0.41 | 3.8 | 49% |
+| **6** | **0.22** | **6.2** | **3%** |
+| 8 | 0.27 | 8.0 | 8% |
+| auto | 0.35 | **13.2** | 26% |
+| DirectML | 0.23 | **0.6** | 2% |
+
+**The non-monotonic curve this whole phase rests on, measured on one board at
+last**: 0.45 → 0.30 → 0.32 → 0.41 → **0.22** → 0.27, with ORT's own pick at 0.35
+for thirteen cores. No formula over a core count produces that shape.
+
+**It also settles the contamination question by contrast.** The previous sweep's
+`auto` row read 0.69 cores at RTF 0.25 — GPU-shaped, and the engine log said so.
+With no profile to inherit it reads 13.2 cores at 0.35. Same machine, same
+binary, twenty minutes apart.
+
+**And it re-opens the DirectML question rather than closing it.** Six threads is
+*faster* than DirectML here (0.22 against 0.23) — but DirectML spends **0.6 cores
+against 6.2** and is the steadiest row on the board at 2%. On this machine the
+honest summary is no longer "DirectML wins": it is *"CPU at the knee is
+marginally faster, DirectML is ten times cheaper and the calmest thing here"*,
+which is exactly the trade [W4](#w4)'s battery rule exists to make.
 
 **What is honestly true today:** the sweep is trustworthy about the provider and
 is not trustworthy about the thread count, on a machine in use. It says so itself
@@ -295,6 +453,65 @@ wants the user's agreement before it is built:
 Reading `benchmark.json` happens inside every SAPI host, so it is cached on mtime
 exactly like `settings.json` and parsed once per session build — not per
 utterance.
+
+<a name="w1-closed"></a>
+
+#### Closing W1 — 2026-08-20
+
+Two more defects surfaced while testing the fixes above, both found by running
+sweeps rather than by reading code.
+
+**3 · The tie-break sorted the GPU row as the most expensive thing on the board.**
+`Pick` broke ties on the *requested* thread count, mapping `Auto` to the processor
+count so CPU-auto could not win "by having no number". Every DirectML row also
+carries `Threads = 0`, so the same rule sorted it as though it had occupied twenty
+cores. Measured on a quiet machine: **DirectML finished fastest at 1136 ms using
+0.6 cores, and lost to six threads at 1201 ms using 6.1.** The key is now the
+measured `AvgCores`, which is what the old one was a proxy for and which gets both
+cases right with no special case — CPU auto measures ~13 cores and still sorts
+last, a GPU row measures ~0.6 and sorts first.
+
+**4 · `MaxSpread` was answering a question nobody asks.** It took the worst spread
+on the whole board, including rows that finished 69% off the pace and could never
+be picked. One such row swinging 18% dragged an otherwise clean table into "band
+narrower than the noise" on its own. It now considers **contenders** — rows inside
+the band, or whose own spread could carry them in on another run. The second
+clause is deliberate: a row sitting just outside is exactly the one that flips a
+pick between sweeps, and excluding it would hide the instability the property
+exists to expose.
+
+**The measurement is reproducible; the machine is not.** Three consecutive sweeps
+on a rested machine, 150 s apart, with the profile retained between them:
+
+| | Run 1 | Run 2 | Run 3 |
+| --- | --- | --- | --- |
+| **Winner** | **DirectML** | **DirectML** | **DirectML** |
+| 2 threads | 1048 ms | 1389 ms | 1695 ms |
+| DirectML | 1136 ms | 1242 ms | 1241 ms |
+| Reported spread | 17% | 24% | 42% |
+
+**The pick agreed three times out of three — criterion 1, met.** And the reason
+the spreads climb is now visible rather than mysterious: across the session the
+CPU rows degraded **62%** while DirectML moved **9%**. That is an i7-12800H — a
+45 W laptop part — losing sustained all-core clock, and the sweep is itself the
+load that heats it. Earlier, back-to-back sweeps with no cooldown produced 65%
+spreads and a row that went 1201 ms → 3027 ms; spacing them fixed the *ranking*
+and cannot fix the thermals.
+
+**So criterion 2 is met conditionally and the condition is stated rather than
+hidden.** On a cold machine the contending rows sit at 2–9% and the 15% band
+clears them. Across repeated sweeps on a hot one they reach 42% and the sweep
+**says so** — "the runs varied by up to N% while the tie band is 15%" — and
+refuses to present a close result as a finding. Widening the band to 42% would
+make it clear the noise by swallowing nearly every row, which is the same mistake
+8a made in the other direction. **The band is right; the laptop is the variable,
+and the warning firing is the design working.** What has changed since 2026-08-19
+is that it no longer fires every time.
+
+Worth building next, and not a blocker: the sweep could **re-measure its first
+candidate last** and compare. If the machine slowed by more than the tie band
+during the run, the table is not internally comparable and should say that
+directly, instead of leaving the user to infer it from inflated spreads.
 
 #### Exit criteria
 
@@ -497,8 +714,11 @@ already has detection, a CPU retry, a watchdog and a latch, all exercised by
 | Phase | Days | State |
 | --- | --- | --- |
 | W0 · One version, visible | 0.25 | **done, 2026-08-19** |
-| W1 · Measure this machine | 1.5–2 | **built and run 2026-08-19, on estimate; the unpaced bench render is what is left** |
-| — · Unpaced bench render (engine) | 0.5 + a harness run | not started, and it now gates W1 — [why](#w1-hardware) |
+| W1 · Measure this machine | 1.5–2 | **DONE 2026-08-20** — [how it closed](#w1-closed) |
+| — · Unpaced bench render (engine) | 0.5 + a harness run | **done 2026-08-20**, on estimate — [what it cost and what it found](#w1-unpaced) |
+| — · First run measures the machine | 0.25 | **done 2026-08-20** — [what it does](#w1-first-run) |
+| — · Auto row inherits the stored profile | 0.25 + a harness run | **done 2026-08-20** — a second, separate pid-keyed switch |
+| — · GPU row ranked as the most expensive row | 0.25 | **done 2026-08-20** — tie-break now uses measured cores |
 | W2 · Provenance | 0.5 | not started |
 | W3 · Preset benchmark, made trustworthy | 0.5 | not started |
 | W4 · Provider policy + battery | 1 | not started |
@@ -546,8 +766,14 @@ standing evidence that those are the ones that surprise you.
   working desktop nothing else is competing for. One machine is not a
   generalisation — but the shipping default of `UseDirectML: true` now has a
   measurement under it rather than nothing. [The record](#w1-hardware).
-- **New, and it now blocks W1: the bench render is paced to real time.** ~6 s of
-  wall clock to measure ~1.2 s of compute, which is why the sweep takes minutes
-  and why its own duration lets the machine's load drift underneath it. An
-  unpaced path in the engine is the fix; it is shipping-platform engine work and
-  needs its own change with a TestHarness run either side.
+- ~~**the bench render is paced to real time**~~ **Fixed 2026-08-20** — 327 s of
+  sweep became 78 s, measured. [The record](#w1-unpaced).
+- ~~**does the bench switch also suppress the stored profile?**~~ **Settled
+  2026-08-20: a separate switch**, so [W3](#w3) stays free to run the preset tab
+  unpaced *with* the profile applied. [The record](#w1-profile-contamination).
+- **New: is the tie band still 15% on a thermally-limited laptop?** Kept, on
+  evidence — contending rows sit at 2–9% on a cold machine, and the 42% seen
+  across repeated sweeps is the machine losing clock, not the measurement being
+  noisy. Widening the band to swallow that would repeat 8a's mistake in the other
+  direction. Revisit if a desktop shows the same spread, which would mean the
+  cause is not thermal. [The record](#w1-closed).

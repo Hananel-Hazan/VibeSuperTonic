@@ -68,8 +68,39 @@ public class BenchmarkStoreTests : IDisposable
         var read = BenchmarkStore.Load(Path_)!;
 
         Assert.Equal(0.08, read.Table[0].Spread, 4);
-        Assert.Equal(0.11, read.MaxSpread, 4);
         Assert.True(read.BandClearsNoise);
+
+        // 0.08 (the 2-thread row), NOT 0.11 (the 8-thread row). The 8 row
+        // finished 3060 ms against 1194 — two and a half times off the pace, so
+        // no tie band can ever put it in contention and its wobble is not
+        // evidence about whether the band is choosing on signal. Reporting the
+        // worst row on the whole board was the old behaviour and it answered a
+        // question nobody asks.
+        Assert.Equal(0.08, read.MaxSpread, 4);
+    }
+
+    /// <summary>
+    /// The clause that stops the previous test's restriction from becoming a way
+    /// to look good: a row sitting just OUTSIDE the band is precisely the one that
+    /// flips a pick between sweeps, so its noise still counts.
+    /// </summary>
+    [Fact]
+    public void A_row_just_outside_the_band_still_counts_toward_the_noise_floor()
+    {
+        var profile = new BenchmarkProfile(
+            Threads: 2, Provider: "cpu", MeasuredUtc: "2026-08-20T10:00:00.0000000Z",
+            Machine: new BenchmarkMachine("machine-a", "Test CPU", 20, "models-a", 8, "M1", "en", "ac", 4.5),
+            Table:
+            [
+                new BenchmarkRow("2", 2, "cpu", 1000, 0.2, 2.0, 2.0, Spread: 0.02),
+                // 1160 is outside a 15% band (1150) by 10 ms, and a 9% spread
+                // would carry it inside on another run. That is the definition of
+                // a row whose noise decides the answer.
+                new BenchmarkRow("DirectML", 0, "directml", 1160, 0.24, 0.6, 0.7, Spread: 0.09),
+            ],
+            NotVaried: BenchmarkSweep.NotVaried, SampleSeconds: 5.0, TieBand: 0.15);
+
+        Assert.Equal(0.09, profile.MaxSpread, 4);
     }
 
     [Fact]
