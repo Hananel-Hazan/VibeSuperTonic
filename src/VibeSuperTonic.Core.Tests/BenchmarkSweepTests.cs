@@ -289,11 +289,88 @@ public class BenchmarkSweepTests
         Assert.True((DateTime.UtcNow - parsed).Duration() < TimeSpan.FromMinutes(1));
     }
 
+    // -------------------------------------------------- what the row has to carry
+
+    [Fact]
+    public void A_row_records_the_spread_of_its_own_runs()
+    {
+        // The number whose absence let a 5% tie band ship against 15-18% noise.
+        // Without it nothing on screen or on disk could say that two rows 2% apart
+        // were separated by luck, and the sweep picked the lucky one twice.
+        //
+        // Coarse bounds on purpose: this asserts that variance reaches the field at
+        // all, not any particular value, because the value is the scheduler's.
+        var profile = BenchmarkSweep.Run(
+            Machine(), _ => new ScriptedSynthesizer(1, 0, delays: [0, 60, 0]),
+            Options, candidates: [1]);
+
+        Assert.True(profile.Table[0].Spread > 0.5,
+            $"a row whose runs differed sixfold reported a spread of {profile.Table[0].Spread}");
+    }
+
+    [Fact]
+    public void Runs_that_agree_report_almost_no_spread()
+    {
+        var profile = BenchmarkSweep.Run(
+            Machine(), _ => new ScriptedSynthesizer(1, 40), Options, candidates: [1]);
+
+        Assert.True(profile.Table[0].Spread < 0.5);
+    }
+
+    [Fact]
+    public void The_profile_records_the_band_it_was_picked_under()
+    {
+        // The band is not a constant of nature. It is derived from measured noise,
+        // it has been changed once already, and a profile that does not say which
+        // rule chose it cannot be re-argued a year later.
+        var profile = BenchmarkSweep.Run(
+            Machine(), threads => new ScriptedSynthesizer(threads, 0), Options, candidates: [1, 2]);
+
+        Assert.Equal(BenchmarkSweep.TieBandFraction, profile.TieBand);
+    }
+
+    [Fact]
+    public void A_band_narrower_than_the_noise_is_reported_as_such()
+    {
+        // The self-check 8a could not make, because neither number was recorded.
+        // Both directions matter: a profile must not cry wolf on a clean sweep, and
+        // must not stay quiet on a noisy one.
+        var clean = new BenchmarkProfile(4, "cpu", "2026-08-19T00:00:00.0000000Z", Machine(),
+            [Row("4", 4, 5000) with { Spread = 0.05 }], BenchmarkSweep.NotVaried, 5.0, TieBand: 0.15);
+        var noisy = new BenchmarkProfile(4, "cpu", "2026-08-19T00:00:00.0000000Z", Machine(),
+            [Row("4", 4, 5000) with { Spread = 0.40 }], BenchmarkSweep.NotVaried, 5.0, TieBand: 0.15);
+
+        Assert.True(clean.BandClearsNoise);
+        Assert.False(noisy.BandClearsNoise);
+        Assert.Equal(0.40, noisy.MaxSpread, 3);
+    }
+
+    [Fact]
+    public void A_failed_row_does_not_drag_the_reported_noise_down()
+    {
+        // A failed row has a spread of 0 because it has no runs. Averaging it in,
+        // or letting it participate in the maximum, would make a sweep look
+        // steadier the more of it broke.
+        var profile = new BenchmarkProfile(4, "cpu", "2026-08-19T00:00:00.0000000Z", Machine(),
+            [
+                Row("4", 4, 5000) with { Spread = 0.30 },
+                Row("8", 8, 0, failed: true),
+            ],
+            BenchmarkSweep.NotVaried, 5.0, TieBand: 0.15);
+
+        Assert.Equal(0.30, profile.MaxSpread, 3);
+    }
+
     /// <summary>
     /// A synthesizer that takes a scripted number of milliseconds, so a sweep can
     /// be run without a model.
     /// </summary>
-    private sealed class ScriptedSynthesizer(int threads, int millisecondsPerRender, int framesPerRender = 44100)
+    /// <param name="delays">
+    /// Per-call delays, cycled. Lets a test script a row whose runs disagree, which
+    /// is the only way to exercise the spread without a real machine.
+    /// </param>
+    private sealed class ScriptedSynthesizer(
+        int threads, int millisecondsPerRender, int framesPerRender = 44100, int[]? delays = null)
         : ISynthesizer
     {
         public int Threads { get; } = threads;
@@ -305,8 +382,15 @@ public class BenchmarkSweepTests
         public short[] Synthesize(string text, SynthesisOptions options, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // The warm-up is call 1 and is not timed, so the scripted delays start
+            // with the first measured run.
+            int delay = delays is { Length: > 0 } && Calls > 0
+                ? delays[(Calls - 1) % delays.Length]
+                : millisecondsPerRender;
+
             Calls++;
-            if (millisecondsPerRender > 0) Thread.Sleep(millisecondsPerRender);
+            if (delay > 0) Thread.Sleep(delay);
             return new short[framesPerRender];
         }
 

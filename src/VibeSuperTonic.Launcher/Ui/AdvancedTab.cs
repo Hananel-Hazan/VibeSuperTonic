@@ -39,8 +39,15 @@ internal sealed class AdvancedTab : UserControl
         _rateClamp         = AddNumeric(grid, row++, "Rate clamp ceiling",        11, 15, 1,
             "Hard upper limit on the speed sent to the model. Above ~1.34× the model starts dropping syllables.");
         _rateClamp.DecimalPlaces = 2; _rateClamp.Increment = 0.05m; _rateClamp.Minimum = 1.10m; _rateClamp.Maximum = 1.50m;
-        _onnxThreads       = AddNumeric(grid, row++, "ONNX intra-op threads (0 = auto)",   0,  64, 1,
-            "Threads ORT uses inside a single op (e.g. inside one matmul). 0 = auto (cores/2). For these small TTS models, 1–4 often beats auto because cache locality matters more than parallelism.");
+        _onnxThreads       = AddNumeric(grid, row++, "ONNX intra-op threads (0 = measured)",   0,  64, 1,
+            "Threads ORT uses inside a single op (e.g. inside one matmul).\n\n" +
+            "0 means \"use what this machine measured about itself\" — Benchmark → This machine — " +
+            "and falls back to ONNX Runtime's own pick if it has never been measured.\n\n" +
+            "Any other value is yours and wins over the measurement.\n\n" +
+            "Worth knowing before you type one: the cost curve is not monotonic. Measured on a " +
+            "20-thread i7-12800H, 4 threads BEAT ORT's auto pick on speed while using a quarter of " +
+            "the machine, and 8 threads was the slowest row of all — slower than 2. The knee is a " +
+            "property of your hardware, which is why there is a button that finds it.");
         _onnxInterOpThreads = AddNumeric(grid, row++, "ONNX inter-op threads",   1,  16, 1,
             "Threads ORT uses across ops. We run one model at a time, so 1 is correct for almost everyone. Raising it adds scheduler overhead with no benefit for our pipeline.");
 

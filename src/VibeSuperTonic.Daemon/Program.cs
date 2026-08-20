@@ -127,7 +127,7 @@ var options = new DaemonOptions(voice, language, Version: version);
 // not monotonic, so a share of the machine cannot be turned into the right
 // thread count by arithmetic. `vst-ctl benchmark` is what writes the profile and
 // `vst-ctl config` reports which of the two is in force, with its reason.
-var storedProfile = BenchmarkStore.Load(dataDir);
+var storedProfile = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(dataDir));
 var cpuProfile = CpuProfileDecision.Decide(
     storedProfile,
     MachineFacts.Current(modelsRoot, config.Settings.TotalStep,

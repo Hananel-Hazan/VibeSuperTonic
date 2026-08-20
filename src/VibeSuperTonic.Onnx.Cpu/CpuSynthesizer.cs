@@ -157,8 +157,13 @@ public sealed class CpuSynthesizer : ISynthesizer
             throw new DirectoryNotFoundException(
                 $"ONNX model directory not found: {_onnxDir}. Models download on first run.");
 
+        // gpuActive is discarded here and always false: this is the CPU-only
+        // backend, built against the ORT package that has no DirectML in it at
+        // all (R-13), so there is no answer for it to carry. The out parameter
+        // exists for the Windows engine, where "GPU requested" and "GPU actually
+        // appended" are genuinely different answers.
         _tts = Helper.LoadTextToSpeech(
-            _onnxDir, useGpu: false,
+            _onnxDir, out _, useGpu: false,
             intraOpThreads: _intraOpThreads, interOpThreads: _interOpThreads);
         return _tts;
     }

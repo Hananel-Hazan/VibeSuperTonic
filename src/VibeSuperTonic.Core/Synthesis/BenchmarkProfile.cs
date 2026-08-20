@@ -16,6 +16,13 @@ namespace VibeSuperTonic.Core.Synthesis;
 /// <param name="Rtf">Wall time over audio produced. Below 1.0 is faster than real time.</param>
 /// <param name="AvgCores">Process CPU time over wall time: how much of the machine this row occupied.</param>
 /// <param name="CoreSeconds">Total CPU consumed for one sample. The cost the rest of the desktop pays.</param>
+/// <param name="Spread">
+/// How far the timed runs of this row spanned, as a fraction of its own median —
+/// the noise this row was measured through. Added 2026-08-19 and it is the number
+/// that makes the rest of the row auditable: a 2% difference between two rows
+/// whose spreads are 18% is not a difference, and until this was recorded nothing
+/// on screen or on disk said so. See <see cref="Measurement.Spread"/>.
+/// </param>
 /// <param name="Failed">True when this configuration could not be measured at all.</param>
 /// <param name="Error">Why, when <paramref name="Failed"/>.</param>
 public sealed record BenchmarkRow(
@@ -26,6 +33,7 @@ public sealed record BenchmarkRow(
     double Rtf,
     double AvgCores,
     double CoreSeconds,
+    double Spread = 0,
     bool Failed = false,
     string? Error = null);
 
@@ -86,6 +94,13 @@ public sealed record BenchmarkMachine(
 /// might actually care about.
 /// </param>
 /// <param name="SampleSeconds">Audio produced per timed run, so the sample size is on the record.</param>
+/// <param name="TieBand">
+/// The tie band this pick was made under, as a fraction. Recorded 2026-08-19 for
+/// the same reason the table is: the band is not a constant of nature but a number
+/// derived from measured noise, it has already been changed once, and a profile
+/// that does not say which rule chose it cannot be re-argued a year later. Zero on
+/// profiles written before it was recorded.
+/// </param>
 public sealed record BenchmarkProfile(
     int Threads,
     string Provider,
@@ -93,7 +108,8 @@ public sealed record BenchmarkProfile(
     BenchmarkMachine Machine,
     IReadOnlyList<BenchmarkRow> Table,
     IReadOnlyList<string> NotVaried,
-    double SampleSeconds)
+    double SampleSeconds,
+    double TieBand = 0)
 {
     /// <summary>
     /// Why this profile does not describe <paramref name="now"/>, or empty when
@@ -130,6 +146,29 @@ public sealed record BenchmarkProfile(
     /// <summary>The winning row, for reporting alongside the pick.</summary>
     public BenchmarkRow? Winner =>
         Table.FirstOrDefault(r => !r.Failed && r.Threads == Threads && r.Provider == Provider);
+
+    /// <summary>
+    /// The noisiest row's spread — the floor any threshold applied to this table
+    /// has to clear.
+    ///
+    /// <para>Reported so the comparison that 8a got wrong can be made by looking
+    /// rather than by remembering: if this exceeds <see cref="TieBand"/>, the band
+    /// is discriminating on noise and the pick is a coin toss between the rows
+    /// inside it. Zero when nothing measurable was recorded.</para>
+    /// </summary>
+    public double MaxSpread =>
+        Table.Where(r => !r.Failed).Select(r => r.Spread).DefaultIfEmpty(0).Max();
+
+    /// <summary>
+    /// True when the tie band is at or above the worst row's spread — i.e. when
+    /// the band is wide enough to be seeing signal rather than noise.
+    ///
+    /// <para>Both zero (an older profile, or a single-run sweep) reads as
+    /// trustworthy, because there is nothing to contradict. That is deliberate:
+    /// this is a check on a measurement that was taken, not an accusation against
+    /// one that was not.</para>
+    /// </summary>
+    public bool BandClearsNoise => TieBand >= MaxSpread;
 }
 
 /// <summary>

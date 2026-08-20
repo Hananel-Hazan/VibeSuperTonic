@@ -29,7 +29,30 @@
       user makes, never something the build infers, so a release run passes
       -Version explicitly and this value is updated to match afterwards.
     -->
-    <VstVersion>0.2.7.5</VstVersion>
+    <VstVersion>0.2.8</VstVersion>
+
+    <!--
+      And every assembly in the tree carries it. Set here rather than per-project
+      as of 2026-08-19, which REVERSES the scoping decision the daemon's csproj
+      used to state: the Linux binaries stamped VstVersion, the Windows ones did
+      not, so 0.2.8 shipped with a Control Panel whose About tab read
+      "Version: 1.0.0.0" — the .NET default, unchanged since the first commit and
+      wrong for eight releases.
+
+      The old reasoning was that changing assembly versions on the shipping
+      platform is not a side effect a shared props file deserves to have. True as
+      far as it goes, and the cost of honouring it was a version number nobody
+      could read off the product they were holding. It is now deliberate rather
+      than a side effect: nothing binds against these versions (SAPI registration
+      is path-keyed, none of the assemblies are strong-named), and the About tab
+      reads them back off the shipped binaries so a stale engine left behind by
+      an extract-over-the-old-folder shows up as a mismatch instead of silence.
+
+      Consequence worth knowing: bumping <VstVersion> now changes every
+      assembly's version, so a release run rebuilds everything. That is the
+      intended behaviour — one number, one product.
+    -->
+    <Version>$(VstVersion)</Version>
   </PropertyGroup>
 
   <PropertyGroup>

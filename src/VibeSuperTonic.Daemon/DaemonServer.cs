@@ -509,7 +509,7 @@ public sealed class DaemonServer : IDisposable
     /// </summary>
     private BenchmarkSummary? BenchmarkSnapshot()
     {
-        var stored = BenchmarkStore.Load(_config.DataDir);
+        var stored = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(_config.DataDir));
         if (stored is null) return null;
 
         var now = MachineFacts.Current(
@@ -638,7 +638,8 @@ public sealed class DaemonServer : IDisposable
             foreach (var failed in profile.Table.Where(r => r.Failed))
                 notes.Add($"{failed.Label} threads could not be measured: {failed.Error}");
 
-            bool saved = BenchmarkStore.TrySave(_config.DataDir, profile, out string path, out string? saveError);
+            string path = LinuxDataPaths.BenchmarkFile(_config.DataDir);
+            bool saved = BenchmarkStore.TrySave(path, profile, out string? saveError);
             if (!saved)
                 notes.Add($"could not save the profile to {path}: {saveError}. " +
                           "The measurement above is still correct; it just will not survive a restart.");

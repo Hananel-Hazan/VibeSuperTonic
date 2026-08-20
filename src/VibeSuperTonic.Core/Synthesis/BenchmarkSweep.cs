@@ -160,7 +160,8 @@ public static class BenchmarkSweep
             Machine: machine,
             Table: rows,
             NotVaried: NotVaried,
-            SampleSeconds: sampleSeconds);
+            SampleSeconds: sampleSeconds,
+            TieBand: TieBandFraction);
     }
 
     /// <summary>
@@ -231,8 +232,8 @@ public static class BenchmarkSweep
                 if (sampleRate > 0) audioSeconds = (double)pcm.Length / sampleRate;
             }
 
-            double medianWall = Median(walls);
-            double medianCpu = Median(cpuSeconds);
+            double medianWall = Measurement.Median(walls);
+            double medianCpu = Measurement.Median(cpuSeconds);
             double wallSeconds = medianWall / 1000.0;
 
             return (new BenchmarkRow(
@@ -242,7 +243,11 @@ public static class BenchmarkSweep
                 MedianWallMs: medianWall,
                 Rtf: audioSeconds > 0 ? wallSeconds / audioSeconds : 0,
                 AvgCores: wallSeconds > 0 ? medianCpu / wallSeconds : 0,
-                CoreSeconds: medianCpu), audioSeconds);
+                CoreSeconds: medianCpu,
+                // The noise this row was measured through, carried alongside it so
+                // the tie band can be compared against something rather than
+                // trusted. This is the number whose absence let a 5% band ship.
+                Spread: Measurement.Spread(walls)), audioSeconds);
         }
         catch (OperationCanceledException)
         {
@@ -254,7 +259,7 @@ public static class BenchmarkSweep
             // cannot build a session at 8 threads still deserves an answer about
             // the seven counts that worked, and the row records why rather than
             // vanishing — a gap in the table reads as "not tried".
-            return (new BenchmarkRow(label, threads, "cpu", 0, 0, 0, 0,
+            return (new BenchmarkRow(label, threads, "cpu", 0, 0, 0, 0, Spread: 0,
                 Failed: true, Error: $"{ex.GetType().Name}: {ex.Message}"), 0);
         }
         finally
@@ -282,13 +287,4 @@ public static class BenchmarkSweep
         }
     }
 
-    private static double Median(double[] values)
-    {
-        var sorted = (double[])values.Clone();
-        Array.Sort(sorted);
-        int mid = sorted.Length / 2;
-        return sorted.Length % 2 == 1
-            ? sorted[mid]
-            : (sorted[mid - 1] + sorted[mid]) / 2.0;
-    }
 }

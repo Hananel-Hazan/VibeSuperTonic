@@ -1,6 +1,7 @@
 using System.Windows.Forms;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Launcher.Host;
 
 namespace VibeSuperTonic.Launcher.Ui;
 
@@ -308,33 +309,26 @@ internal sealed class TuneTab : UserControl
         return QualityPreset.Custom;
     }
 
+    private const string TestPhrase =
+        "This is a test of the VibeSuperTonic voice with current settings.";
+
+    /// <summary>
+    /// Speaks the test phrase through <see cref="RenderHostProcess"/>.
+    ///
+    /// This used to activate SAPI.SpVoice right here, which took the whole
+    /// Control Panel down with an access violation inside ONNX Runtime the
+    /// moment the engine started inference — the Control Panel is a
+    /// self-contained single-file host and the engine cannot run in one. Settings
+    /// are saved first, and the helper's engine reads them on activation.
+    /// </summary>
     private async Task TestAsync()
     {
         SaveSettings();
         _testVoice.Enabled = false;
         try
         {
-            await Task.Run(() =>
-            {
-                Type? sapi = Type.GetTypeFromProgID("SAPI.SpVoice");
-                if (sapi is null) return;
-                dynamic voice = Activator.CreateInstance(sapi)!;
-                try
-                {
-                    string voiceId = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id;
-                    dynamic tokens = voice.GetVoices(string.Empty, string.Empty);
-                    int n = tokens.Count;
-                    for (int i = 0; i < n; i++)
-                    {
-                        dynamic tok = tokens.Item(i);
-                        if (((string)tok.Id).IndexOf($"VibeSuperTonic_{voiceId}", StringComparison.OrdinalIgnoreCase) >= 0)
-                        { voice.Voice = tok; break; }
-                    }
-                }
-                catch { }
-                voice.Speak("This is a test of the VibeSuperTonic voice with current settings.", 0);
-                System.Runtime.InteropServices.Marshal.FinalReleaseComObject(voice);
-            });
+            string voiceId = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id;
+            await Task.Run(() => RenderHostProcess.Speak(voiceId, TestPhrase, null, CancellationToken.None));
         }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Test failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         finally { _testVoice.Enabled = true; }

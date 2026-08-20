@@ -22,7 +22,7 @@ internal sealed class MainForm : Form
         tabs.TabPages.Add(MakeTabPage("Tune",           new TuneTab()));
         tabs.TabPages.Add(MakeTabPage("Pronunciations", new PronunciationsTab()));
         tabs.TabPages.Add(MakeTabPage("Export",         new ExportTab()));
-        tabs.TabPages.Add(MakeTabPage("Benchmark",      new BenchmarkTab()));
+        tabs.TabPages.Add(MakeTabPage("Benchmark",      MeasurementTabs()));
         tabs.TabPages.Add(MakeTabPage("Monitor",        new MonitorTab()));
         tabs.TabPages.Add(MakeTabPage("Advanced",       new AdvancedTab()));
         tabs.TabPages.Add(MakeTabPage("About",          new AboutTab()));
@@ -36,10 +36,10 @@ internal sealed class MainForm : Form
     ///
     /// Without the x86 runtime nothing is registered for 32-bit, so Balabolka and
     /// Lingoes list no VibeSuperTonic entries at all — while this window's own
-    /// Test button speaks perfectly, because the Control Panel is 64-bit and
-    /// self-contained. That combination reads as "the app works, the readers are
-    /// broken", and it is the single most expensive way this product can fail: it
-    /// sends the user to debug the wrong program.
+    /// Test button speaks perfectly, because it goes through the 64-bit render
+    /// helper. That combination reads as "the app works, the readers are broken",
+    /// and it is the single most expensive way this product can fail: it sends
+    /// the user to debug the wrong program.
     ///
     /// The Status tab has always held the evidence, but it was one truncated
     /// amber row among eleven green ones and nothing prompted anyone to read it.
@@ -92,9 +92,9 @@ internal sealed class MainForm : Form
             (needsDotNet ? $"  • .NET {DotNetRuntime.RequiredMajor} runtime (x86) — without it, no voices are listed at all\n" : "") +
             (needsVcRuntime ? "  • Visual C++ runtime (x86) — without it, the voices are listed but silent\n" : "") +
             "\n" +
-            "This window's Test buttons will keep working regardless, because the " +
-            "Control Panel is 64-bit — so the voices working here is not a sign that " +
-            "your reader will work.\n\n" +
+            "This window's Test, Benchmark and Export buttons will keep working " +
+            "regardless — they speak through the 64-bit render helper — so the " +
+            "voices working here is not a sign that your reader will work.\n\n" +
             "VibeSuperTonic can install these for you using winget. This needs " +
             "administrator rights and installs them machine-wide:\n\n" +
             string.Join("\n", missing) + "\n\n" +
@@ -158,6 +158,27 @@ internal sealed class MainForm : Form
             return k?.GetValue("SuppressX86Warning") is int v && v != 0;
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// The two measurements, side by side, because they answer two questions that
+    /// are easy to confuse.
+    ///
+    /// <para>"Quality presets" asks which quality setting this machine can keep up
+    /// with, and the answer is a preference. "This machine" asks how the engine
+    /// should be configured to run any of them, and the answer is a fact about the
+    /// hardware — one that measured, on the box that motivated it, as four threads
+    /// beating ORT's own pick while using a quarter of the machine.</para>
+    ///
+    /// <para>Nested rather than a ninth top-level tab: they belong together, and
+    /// a user looking for either will look under Benchmark.</para>
+    /// </summary>
+    private static Control MeasurementTabs()
+    {
+        var inner = new TabControl { Dock = DockStyle.Fill };
+        inner.TabPages.Add(MakeTabPage("Quality presets", new BenchmarkTab()));
+        inner.TabPages.Add(MakeTabPage("This machine",    new MachineSweepPanel()));
+        return inner;
     }
 
     private static TabPage MakeTabPage(string title, Control content)

@@ -35,7 +35,7 @@ internal static class MachineFacts
             MachineId: MachineId(),
             Cpu: CpuName(),
             LogicalProcessors: Environment.ProcessorCount,
-            ModelSet: ModelSetFingerprint(modelsRoot),
+            ModelSet: ModelSet.Fingerprint(modelsRoot),
             TotalStep: totalStep,
             Voice: voice,
             Language: language,
@@ -115,36 +115,6 @@ internal static class MachineFacts
             // A desktop has no mains supply entry at all; only a machine that has
             // one, and reports it offline, is actually on battery.
             return sawMains ? "battery" : "unknown";
-        }
-        catch { return "unknown"; }
-    }
-
-    /// <summary>
-    /// Identity of the model set, so a profile measured against one set of
-    /// weights is not applied to another.
-    ///
-    /// <para>Names and sizes only — deliberately not mtimes. A portable folder
-    /// copied to another machine gets new timestamps and the same models, and
-    /// treating that as a model change would invalidate every profile the moment
-    /// it travelled. The machine id is what catches the copy, and it catches it
-    /// for the right reason.</para>
-    /// </summary>
-    public static string ModelSetFingerprint(string modelsRoot)
-    {
-        try
-        {
-            string onnx = Path.Combine(modelsRoot, "onnx");
-            if (!Directory.Exists(onnx)) return "none";
-
-            var entries = new List<string>();
-            foreach (string file in Directory.EnumerateFiles(onnx, "*.onnx", SearchOption.AllDirectories))
-                entries.Add($"{Path.GetFileName(file)}:{new FileInfo(file).Length}");
-
-            if (entries.Count == 0) return "none";
-
-            entries.Sort(StringComparer.Ordinal);
-            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', entries)));
-            return Convert.ToHexString(hash, 0, 6).ToLowerInvariant();
         }
         catch { return "unknown"; }
     }

@@ -25,6 +25,13 @@ full review write-ups — is in
 future work is in this file.** Needing the archive to make a decision is a bug
 in this document; fix it here rather than reading there twice.
 
+**Windows work now has its own plan — [WINDOWS-PLAN.md](WINDOWS-PLAN.md), started
+2026-08-19.** The trigger was 8a: the Linux side measures its thread count per
+machine and the shipping platform still guesses, which is the first time this port
+has left the product it was ported *from* behind. That document also inherits the
+Windows convergence, which was written [here](#convergence) and should not have
+been. This file keeps only what binds Linux work.
+
 Port target is Linux Mint. The Windows product integrates with SAPI; the Linux
 product does not integrate with anything. It is a background daemon with a
 global hotkey that speaks whatever text you have highlighted, a separate window
@@ -55,7 +62,7 @@ before changing it.
 | **Nothing autostarts** — 2026-08-16 | No entry in `~/.config/autostart`. The daemon starts on the first hotkey press via [R-5](LINUX-PORT-ARCHIVE.md#r-5); the UI starts only when the user opens it. Consequence accepted: **no tray icon until first use** — [the arrangement](#startup) |
 | **The daemon owns the tray icon** — 2026-08-16 | It has to exist while the UI is closed. StatusNotifierItem is D-Bus, not X11, so this does not cost the daemon its headless property — but it must subscribe to the event stream like any other client, never read pipeline state directly |
 | **A first-run window, triggered by "no models present"** — 2026-08-16 | One screen carries the OpenRAIL-M acceptance, the model download, and the explanation that the daemon self-starts from now on. No marker file: the folder may be read-only |
-| **One version for all three binaries** — 2026-08-16 | `vibesupertonicd`, `vibesupertonic-ui` and `vst-ctl` share `<VstVersion>`. The packer **publishes all of them from source in one run and asserts the versions match** — the guard is against a stale binary surviving in an output folder, which is the same hazard the win-x86 and native-ELF assertions already cover |
+| **One version for all three binaries** — 2026-08-16, **widened to every binary 2026-08-19** | `vibesupertonicd`, `vibesupertonic-ui` and `vst-ctl` share `<VstVersion>`. The packer **publishes all of them from source in one run and asserts the versions match** — the guard is against a stale binary surviving in an output folder, which is the same hazard the win-x86 and native-ELF assertions already cover. `Directory.Build.props` now stamps it on the **Windows** assemblies too, which it never did: 0.2.8 shipped a Control Panel whose About tab read `1.0.0.0`. See [W0](WINDOWS-PLAN.md#w0) |
 | **Configuration is a file, not a verb** | There is deliberately no `config set`: the UI writes `settings.json`, the daemon only reads it, so there is exactly one writer and no concurrency story. The CLI equivalent is editing the file — the daemon picks it up on mtime with nothing sent. Parity above is about *actions*, and this is the one stated exception |
 | **First Linux release is 0.3.0** — 2026-08-16 | `<VstVersion>` is shared so one number produces both artifacts, so the next Windows ZIP is 0.3.0 too — a deliberate jump from 0.2.7.5. Bumped *after* the release ships, per [CLAUDE.md](../CLAUDE.md) |
 | **`InterChunkSilenceMs` is implemented, not dropped** — 2026-08-16 | Windows parity. It changes chunk timing and therefore boundary scheduling, so it landed *before* Phase 6 and the highlight is verified once, not twice. **Built the same day**; the gap is written through the same paced, cancellable, clocked path as speech, and counted into the stream position before the next chunk is planned — which is the half that would otherwise have made every boundary early |
@@ -614,6 +621,22 @@ Each of these has already cost time.
     code did exactly what it said. Run anything with a threshold in it against
     the real machine before believing it, and prefer a threshold derived from a
     measurement you took to one that looks reasonable.
+
+    **It is not discharged — 8b carries two more, and one of them is worse.**
+    Noted 2026-08-19. The GPU gate asks for "30% off first-audio latency" with no
+    run count, on a machine this phase measured at 15–18% run-to-run; and
+    `Pick`'s 15% tie band is a figure derived from *CPU-row* noise, which has no
+    reason to describe a GPU row. The gate is the worse of the two because its own
+    wording makes a failure permanent — *"recorded, and not revisited until the
+    hardware changes"* — so where a bad tie band is corrected by the next sweep, a
+    gate failed on luck closes the question in writing and the correction never
+    comes. [The full warning](#lucky-gpu).
+
+    The general form, worth carrying into any phase with a number in it: **a
+    threshold is only as fine as the noise it is measured through, and a decision
+    that is expensive to revisit deserves a spread printed beside it.** The same
+    warning applies to the Windows Benchmark tab, which ranks presets on a single
+    run each — [WINDOWS-PLAN.md](WINDOWS-PLAN.md#w3), phase W3.
 14. **DirectML is half-exercised — narrowed 2026-08-17, was "unexercised
     everywhere".** The Win11 VM has no GPU (`C0262002 Specified display adapter
     handle is invalid`), so every harness run there silently took the CPU branch.
@@ -1860,8 +1883,6 @@ measured working on 2026-08-16 with no clang installed, ILC driving `gcc-13` to 
 headers. Keep the contingency; drop the assumption that a missing `clang` is what
 a failure means.
 
-<a name="convergence"></a>
-
 <a name="phase-8"></a>
 
 ### Phase 8 — Fit the machine it runs on · 1.5 days + a gated spike, split around Phase 6 · **added 2026-08-16**
@@ -1938,6 +1959,42 @@ gets the same treatment: a spike and a gate before any commitment.
 fall back to CPU when the driver or libraries are missing. Fail any of the three
 and the answer is CPU-only, recorded, and not revisited until the hardware
 changes.
+
+<a name="lucky-gpu"></a>
+
+**The gate states three thresholds and no run count, and 8a is why that is not a
+detail.** Added 2026-08-19. This phase measured **15–18% run-to-run variation on
+identical configurations**, with one row moving 39%, on an idle machine — and
+[trap 15](#traps) exists because a threshold written below that floor selected the
+luckiest configuration rather than the best one, twice, while every test passed. A
+30% gate judged from one timed inference sits barely above the noise this phase
+already measured. It can be cleared, or missed, on luck alone.
+
+That matters more here than it did in 8a, because of what happens to the result:
+the gate's own wording says a failure is *"recorded, and not revisited until the
+hardware changes"*. A tie band that picks the wrong thread count is corrected by
+the next sweep. A gate failed by luck closes the question, in writing, and the
+correction never comes.
+
+So the spike measures its gate the way the sweep measures a row: **median of at
+least three, with the spread reported beside the verdict, and the spread written
+into whatever decision comes out of it.** A verdict with no spread attached is
+not a measurement, and a decision that lasts until the hardware changes deserves
+the same instrument the thread count gets.
+
+**And the 15% tie band must not follow GPU rows into `Pick`.** The band is not a
+constant and was never meant to be one — it is a number derived from the measured
+run-to-run noise of *CPU rows on this machine*, and its entire justification is
+that a band below the noise floor discriminates on noise. A GPU row's noise floor
+is unknown and has no reason to match: first-audio on a GPU is dominated by fixed
+per-inference overhead, driver scheduling and clock ramping rather than by thread
+contention, and the ~600 ms model floor this gate is aimed at is exactly where
+those live. Measure GPU-row noise before letting a GPU row compete in `Pick`, and
+if it differs from the CPU figure, the band becomes **per-provider** rather than
+one constant. Inheriting 15% because it is what
+[BenchmarkSweep](../src/VibeSuperTonic.Core/Synthesis/BenchmarkSweep.cs) already
+says would reproduce 8a's defect exactly — same shape, same function, one phase
+later, and this time with a `Pick` that looks like it has been through review.
 
 Three constraints the spike has to design around:
 
@@ -2060,36 +2117,37 @@ what [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) did with the same shape of questio
 - **The Tune tab's benchmark control is enabled and calls the verb**, and
   `config` reports the resulting profile with its reason attached. Until both
   hold, the [parity rule](#decisions) is broken and v1 cannot ship.
+- **Every threshold this phase decides by carries its spread** — the GPU gate's
+  30%, and the tie band applied to any GPU row. The band for GPU rows is derived
+  from measured GPU-row noise, never inherited from the CPU figure. Added
+  2026-08-19; the reasoning is [above](#lucky-gpu) and the precedent is
+  [trap 15](#traps).
 
-### Not a phase — the Windows convergence
+<a name="convergence"></a>
 
-Three separate pieces of Core now duplicate code the Windows engine still has its
-own copy of. Each was deferred for the same reason and they have accumulated into
-one job, so it is written down once here rather than as a footnote in three
-places.
+### Not a phase, and no longer this document's — the Windows convergence
 
-| Core has | `SapiEngine` still has | Proven equivalent by |
-| --- | --- | --- |
-| `BoundaryPlanner` | `EmitWordBoundaries` / `EmitSentenceBoundary` | unit oracle + harness step 10 |
-| `SpeechSession` | the COM speak loop | — |
-| `AudioBuffer.FloatToPcm16` | (already adopted) | Phase 1 |
+**Moved 2026-08-19 to [WINDOWS-PLAN.md](WINDOWS-PLAN.md), phase W6.** It was
+written here because it was discovered here, and that was the wrong home: every
+item in it is a behaviour-affecting change to the *Windows* product, and a Linux
+phase document is precisely the place where such a thing gets done as a tidy-up
+at the end of a sprint — which is the one way it must not be done.
 
-**Why it has not been done.** Every one of these is a behaviour-affecting change
-on the *shipping* platform, to no user-visible end, at the seam
-[trap 11](#where-to-pick-up) exists to warn about: R-14 shipped broken in five
-consecutive releases while every unit test passed, because the defect lived at
-the composition point in `SapiEngine` that Core.Tests cannot see. Doing this as a
-tidy-up at the end of a Linux phase is exactly how that happens again.
+The substance is unchanged and is now W6: `BoundaryPlanner` against
+`SapiEngine.EmitWordBoundaries`, `SpeechSession` against the COM speak loop, its
+own branch, a TestHarness run either side, nothing else in the diff.
+`Onnx.DirectML` is still explicitly not part of it.
 
-**Why it is still worth doing.** Two implementations of one rule is the drift
-Core exists to prevent, and the platforms will diverge the first time either side
-changes rounding, word characters, or chunking. Harness step 10 currently catches
-that — but only for boundaries, only while someone runs it.
+**One row was added by the 2026-08-19 audit**: the engine and the launcher each
+carry a hand-maintained copy of the `settings.json` schema, and their `TotalStep`
+defaults already disagree — 8 and 6. Linux reads the same file through a third
+implementation. Three readers, one format, no shared type. See
+[finding 6](WINDOWS-PLAN.md#findings).
 
-**Do it as its own piece of work**, on its own branch, with a TestHarness run
-before and after on the Win11 VM, and nothing else in the diff. Not while a Linux
-phase is open. `Onnx.DirectML` is explicitly **not** part of this — see
-[Open decisions](#open-decisions); it needs hardware nobody here has.
+**Why the split is the right one.** This document's job is to say what still
+binds *Linux* work. A Windows job with its own branch, its own verification
+ritual and its own risk profile binds nothing here except by competing for the
+same days — and that belongs in an effort table, not in a phase list.
 
 ---
 

@@ -122,8 +122,14 @@ internal static class LinuxDataPaths
     /// What <c>vst-ctl benchmark</c> measured about this machine. Beside the
     /// other two rather than under <c>logs/</c>: it is state the daemon reads
     /// back on every start, not a record of something that happened.
+    ///
+    /// <para>The filename comes from <see cref="BenchmarkStore"/> as of
+    /// 2026-08-19 — the Windows Control Panel writes the same file into the same
+    /// portable data directory, and two literals is how one platform ends up
+    /// reading a file the other never wrote.</para>
     /// </summary>
-    public static string BenchmarkFile(string dataDir) => Path.Combine(dataDir, "benchmark.json");
+    public static string BenchmarkFile(string dataDir) =>
+        Path.Combine(dataDir, VibeSuperTonic.Core.Synthesis.BenchmarkStore.FileName);
 
     /// <summary>
     /// Best effort, and deliberately not fatal. A portable folder can sit on a

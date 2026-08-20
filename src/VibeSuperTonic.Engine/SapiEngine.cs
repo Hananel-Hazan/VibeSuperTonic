@@ -226,7 +226,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
 
             // Telemetry: announce we're starting work.
-            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, resolved.OnnxThreads, 0, ""); }
+            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ""); }
             catch { /* swallow */ }
 
             if (planItems.Count == 0) return SapiConstants.S_OK;
@@ -425,7 +425,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 {
                                     TelemetryWriter.Update(false, _voiceId, "",
                                         resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                        0, double.NaN, 0, 0, resolved.OnnxThreads, 0,
+                                        0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0,
                                         $"Synth hang > {SynthHardTimeoutMs / 1000}s — session reset queued");
                                 }
                                 catch { }
@@ -452,7 +452,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 // file backend has no such limit.)
                                 TelemetryWriter.Update(true, _voiceId, chunk.Text ?? "",
                                     resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                    firstByte, rollingRtf, 1, 0, resolved.OnnxThreads, 0, "");
+                                    firstByte, rollingRtf, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, "");
                             }
                             catch { /* swallow */ }
                         }
@@ -482,7 +482,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             Log("Speak.Synthesize",
                                 new Exception($"Failed chunk text (first 60 with escapes): [{codePoints}] " +
                                               $"| preview: \"{failPreview}\"", ex));
-                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, resolved.OnnxThreads, 0, ex.Message); } catch { }
+                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ex.Message); } catch { }
                             return SapiConstants.E_FAIL;
                         }
 

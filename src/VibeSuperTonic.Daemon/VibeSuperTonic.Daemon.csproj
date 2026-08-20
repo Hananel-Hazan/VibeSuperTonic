@@ -25,16 +25,16 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
 
     <!--
-      From <VstVersion> in Directory.Build.props, the single source of truth the
-      packers read. `status` reports this so a stale client is diagnosable, which
-      a hand-maintained copy defeats the moment it drifts — and it had already
-      been written out twice as a literal.
+      No <Version> here. It comes from Directory.Build.props, which stamps
+      $(VstVersion) onto every assembly in the tree as of 2026-08-19 — this
+      project used to set it alone, with a comment explaining why the Windows
+      half was deliberately left out. That exemption is what shipped a 0.2.8
+      Control Panel reporting "1.0.0.0"; the props file records the reversal.
 
-      Scoped to this project rather than set repo-wide: Directory.Build.props is
-      shared with the Windows engine and launcher, and changing assembly versions
-      on the shipping platform is not a side effect this deserves to have.
+      `status` still reports this assembly's version so a stale client is
+      diagnosable. It is now the same number the Windows engine reports, which is
+      what "one number produces both artifacts" was always supposed to mean.
     -->
-    <Version>$(VstVersion)</Version>
   </PropertyGroup>
 
   <ItemGroup>

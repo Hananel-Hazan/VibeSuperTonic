@@ -161,6 +161,101 @@ internal static class EngineSettingsRegistry
         }
     }
 
+    // ------------------------------------------------ crash-tolerant restore
+    //
+    // Benchmark, Export and Tune all apply temporary settings, speak, and put the
+    // user's values back in a finally block. A finally block is not enough: the
+    // work happens in a child process, and if THIS process dies (or is killed, or
+    // the box loses power) mid-run, the restore never executes and the user is
+    // left synthesizing at whatever the dead run applied — silently, in every
+    // SAPI client on the machine, until they next open the Tune tab. That is
+    // exactly what a crashed Benchmark did in 0.2.7.5: it left settings pinned at
+    // Draft/TotalStep=4.
+    //
+    // So the snapshot is also written to disk before the change, and reconciled
+    // on the next launch. Belt and braces: the finally is the fast path, the
+    // sidecar is the one that survives a process that never gets to run code
+    // again.
+
+    private static string PendingRestorePath => Path.Combine(DataPaths.DataDir, "settings.restore.json");
+
+    /// <summary>
+    /// Begins a temporary settings change. Dispose restores the snapshot taken
+    /// here and clears the on-disk safety net. Always use with <c>using</c>.
+    /// </summary>
+    public static SettingsRestoreScope BeginTemporaryChange(IProgress<string>? log = null)
+    {
+        var snapshot = Load();
+        try { ArmRestore(snapshot); }
+        catch (Exception ex) { log?.Report($"WARNING: could not arm settings recovery: {ex.Message}"); }
+        return new SettingsRestoreScope(snapshot, log);
+    }
+
+    private static void ArmRestore(EngineSettings snapshot)
+    {
+        DataPaths.EnsureExists();
+        string path = PendingRestorePath;
+        string tmp = path + ".tmp";
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, EngineSettingsJsonContext.Default.EngineSettings);
+        lock (_writeGate)
+        {
+            File.WriteAllBytes(tmp, bytes);
+            try { File.Move(tmp, path, overwrite: true); }
+            catch
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                File.Move(tmp, path);
+            }
+        }
+    }
+
+    internal static void DisarmRestore()
+    {
+        try { File.Delete(PendingRestorePath); } catch { }
+    }
+
+    /// <summary>
+    /// Called once at launcher start. If a previous run died holding temporary
+    /// settings, puts the user's values back. Returns true (with a human-readable
+    /// <paramref name="detail"/>) when it actually recovered something.
+    /// </summary>
+    public static bool TryReconcilePendingRestore(out string? detail)
+    {
+        detail = null;
+        string path = PendingRestorePath;
+        if (!File.Exists(path)) return false;
+
+        EngineSettings? snapshot = null;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            snapshot = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
+        }
+        catch { /* unreadable — treated as nothing to recover, and cleaned up below */ }
+
+        if (snapshot is null) { DisarmRestore(); return false; }
+
+        var current = Load();
+        // Nothing to say if the finally already put things back; the sidecar is
+        // just stale in that case (a hard kill between Save and Delete).
+        bool changed = current.TotalStep != snapshot.TotalStep
+                    || current.Preset != snapshot.Preset
+                    || Math.Abs(current.DspRate - snapshot.DspRate) > 0.0001f
+                    || Math.Abs(current.EngineSpeed - snapshot.EngineSpeed) > 0.0001f
+                    || Math.Abs(current.VolumeTrimDb - snapshot.VolumeTrimDb) > 0.0001f
+                    || current.UseDirectML != snapshot.UseDirectML
+                    || current.DefaultVoice != snapshot.DefaultVoice;
+
+        try { Save(snapshot); }
+        catch (Exception ex) { detail = $"failed: {ex.Message}"; DisarmRestore(); return true; }
+        DisarmRestore();
+
+        if (!changed) return false;
+        detail = $"preset {current.Preset}/steps {current.TotalStep} → {snapshot.Preset}/steps {snapshot.TotalStep}";
+        return true;
+    }
+
     /// <summary>
     /// True when the per-voice entry has the same effective values as the global
     /// snapshot — meaning the override is doing nothing useful and should be pruned.
@@ -363,4 +458,41 @@ internal static class EngineSettingsRegistry
 
     private static float ParseFloat(string s, float fallback) =>
         float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fallback;
+}
+
+/// <summary>
+/// Lifetime of a temporary settings change — see
+/// <see cref="EngineSettingsRegistry.BeginTemporaryChange"/>. Restores the
+/// snapshot on dispose and clears the on-disk recovery record. Idempotent, so a
+/// caller that restores early can still dispose safely.
+/// </summary>
+internal sealed class SettingsRestoreScope : IDisposable
+{
+    private readonly IProgress<string>? _log;
+    private bool _done;
+
+    internal SettingsRestoreScope(EngineSettings snapshot, IProgress<string>? log)
+    {
+        Snapshot = snapshot;
+        _log = log;
+    }
+
+    /// <summary>The settings as they were before the temporary change.</summary>
+    public EngineSettings Snapshot { get; }
+
+    public void Dispose()
+    {
+        if (_done) return;
+        _done = true;
+        try
+        {
+            EngineSettingsRegistry.Save(Snapshot);
+            _log?.Report("Restored prior engine settings.");
+        }
+        catch (Exception ex)
+        {
+            _log?.Report($"WARNING: could not restore engine settings: {ex.Message}");
+        }
+        finally { EngineSettingsRegistry.DisarmRestore(); }
+    }
 }

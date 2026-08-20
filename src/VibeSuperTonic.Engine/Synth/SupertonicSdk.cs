@@ -750,8 +750,20 @@ namespace Supertonic
         // TextToSpeech loading
         // ============================================================================
 
-        public static TextToSpeech LoadTextToSpeech(string onnxDir, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0)
+        /// <param name="gpuActive">
+        /// True only when the DirectML provider was actually appended.
+        ///
+        /// <para>Reported rather than assumed, added 2026-08-19 for the thread
+        /// sweep. <c>useGpu</c> is a request; this is the answer. The two differ
+        /// on any machine without a usable DX12 device, and the difference used to
+        /// exist only as a line on the console — so a "DirectML" benchmark row on
+        /// such a machine would have been a CPU row wearing the wrong label, which
+        /// is the one outcome that makes the GPU question look answered when it
+        /// was never asked.</para>
+        /// </param>
+        public static TextToSpeech LoadTextToSpeech(string onnxDir, out bool gpuActive, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0)
         {
+            gpuActive = false;
             // When useGpu is true, append the DirectML execution provider for the device.
             // DirectML uses optimization passes specific to the GPU graph, so it cannot
             // share the CPU-optimized cache — we bypass the disk cache when on GPU.
@@ -798,6 +810,7 @@ namespace Supertonic
                 try
                 {
                     opts.AppendExecutionProvider_DML(directMLDevice);
+                    gpuActive = true;
                     Console.WriteLine($"DirectML provider appended (device {directMLDevice})");
                 }
                 catch (Exception ex)

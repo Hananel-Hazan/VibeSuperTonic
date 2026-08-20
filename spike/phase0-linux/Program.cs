@@ -77,7 +77,7 @@ internal static class Program
         TextToSpeech tts;
         try
         {
-            tts = Helper.LoadTextToSpeech(onnxDir, useGpu: false, intraOpThreads: 0, interOpThreads: 1);
+            tts = Helper.LoadTextToSpeech(onnxDir, out _, useGpu: false, intraOpThreads: 0, interOpThreads: 1);
         }
         catch (Exception ex)
         {
@@ -146,7 +146,7 @@ internal static class Program
             int half = Math.Max(1, System.Environment.ProcessorCount / 2);
             foreach (int threads in new[] { 0, half, System.Environment.ProcessorCount }.Distinct())
             {
-                using var t2 = Helper.LoadTextToSpeech(onnxDir, useGpu: false,
+                using var t2 = Helper.LoadTextToSpeech(onnxDir, out _, useGpu: false,
                     intraOpThreads: threads, interOpThreads: 1);
                 var times = new List<double>();
                 double audioSec = 0;

@@ -31,7 +31,7 @@
     <RootNamespace>VibeSuperTonic.Ui</RootNamespace>
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
     <VstPortable>false</VstPortable>
-    <Version>$(VstVersion)</Version>
+    <!-- <Version> comes from Directory.Build.props — every assembly, one number. -->
   </PropertyGroup>
 
   <ItemGroup>

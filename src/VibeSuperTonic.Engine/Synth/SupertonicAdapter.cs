@@ -175,9 +175,9 @@ internal sealed class SupertonicAdapter
         string onnxDir = Path.Combine(baseDir, "models", "onnx");
         if (!Directory.Exists(onnxDir))
             throw new FileNotFoundException($"Supertonic ONNX directory missing: {onnxDir}");
-        // Pull the user's tweaks from the registry-backed settings (cached by
-        // Settings\Version). The Control Panel surfaces all of these on the Advanced
-        // tab so users can experiment with their CPU/GPU.
+        // Pull the user's tweaks from the settings file (cached by mtime). The
+        // Control Panel surfaces all of these on the Advanced tab so users can
+        // experiment with their CPU/GPU.
         int intraOp = 0, interOp = 1, dmlDevice = 0;
         bool useDml = false;
         try
@@ -189,21 +189,72 @@ internal sealed class SupertonicAdapter
             dmlDevice = es.DirectMLDeviceId;
         }
         catch { /* defaults */ }
+
+        // A measurement beats a default, and a decision beats a measurement.
+        //
+        // OnnxThreads = 0 has always meant "let ORT decide", which measured as the
+        // WORST configuration on the machine that motivated this work: ORT's own
+        // pick spent eleven times the cores to finish later than two threads. It
+        // now means "use what this machine measured about itself, and fall back to
+        // ORT's pick if it has never been measured" — so an install that has never
+        // run a sweep behaves exactly as it did before.
+        //
+        // A non-zero OnnxThreads is left alone on purpose. That is a person who
+        // opened the Advanced tab and typed a number, and a knob that silently
+        // loses to a measurement is a knob that generates bug reports.
+        if (intraOp == CpuBudget.Auto)
+        {
+            var applied = BenchmarkProfileCache.Applicable(baseDir, onnxDir);
+            if (applied is not null)
+            {
+                intraOp = applied.Threads;
+                // The provider is measured too, and it is the half a percentage
+                // could never have answered. It still loses to the latch below:
+                // a profile that liked DirectML cannot override a driver that has
+                // failed twice in this process.
+                useDml = applied.Provider == "directml";
+            }
+        }
+
         // Honor the in-process latch: repeated GPU device-loss in this process
         // means the DML path is unhealthy here; force CPU until process exit.
         if (_useDmlLatchedOff || forceCpu) useDml = false;
         try
         {
-            _sharedTts = Helper.LoadTextToSpeech(onnxDir, useGpu: useDml,
+            _sharedTts = Helper.LoadTextToSpeech(onnxDir, out bool gpuActive, useGpu: useDml,
                 intraOpThreads: intraOp, interOpThreads: interOp, directMLDevice: dmlDevice);
+            EffectiveProvider = gpuActive ? "directml" : "cpu";
         }
         catch (Exception ex) when (IsNativeLoadFailure(ex))
         {
             throw new InvalidOperationException(NativeLoadDiagnostic(), ex);
         }
+
+        // What the session was ACTUALLY built with, as opposed to what settings
+        // asked for. Telemetry publishes this, which is what lets a sweep verify
+        // that the thread count it requested reached ORT at all — without it, every
+        // way that request could fail produces one symptom: a full table of numbers
+        // that all describe the same configuration.
+        EffectiveIntraOpThreads = intraOp;
         _ttsOnnxDir = onnxDir;
         return _sharedTts;
     }
+
+    /// <summary>
+    /// Intra-op threads the live shared session was built with, or -1 when there
+    /// is no session in this process yet.
+    ///
+    /// <para>Not the settings value: <c>0</c> in settings can mean ORT's pick or a
+    /// measured profile's count, and those are different numbers with the same
+    /// spelling.</para>
+    /// </summary>
+    internal static int EffectiveIntraOpThreads { get; private set; } = -1;
+
+    /// <summary>
+    /// Execution provider the live shared session actually got — "directml" only
+    /// when DirectML genuinely appended, never merely because it was requested.
+    /// </summary>
+    internal static string EffectiveProvider { get; private set; } = "";
 
     /// <summary>
     /// Is this ONNX Runtime's native DLL failing to load, in any of the shapes
@@ -276,6 +327,11 @@ internal sealed class SupertonicAdapter
         var dead = _sharedTts;
         _sharedTts = null;
         _ttsOnnxDir = null;
+        // No session, so nothing is in force. Reported rather than left stale:
+        // telemetry publishing the dead session's thread count would tell a sweep
+        // (or the Status tab) about a configuration that no longer exists.
+        EffectiveIntraOpThreads = -1;
+        EffectiveProvider = "";
         if (dead is null) return;
 
         // Backpressure: if multiple disposes are already pending, the DML

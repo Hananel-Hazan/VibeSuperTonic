@@ -44,6 +44,18 @@ internal static class Program
         // (it no-ops once SchemaVersion is current).
         try { EngineSettingsRegistry.EnsureMigrated(); } catch { /* registry quirks are non-fatal */ }
 
+        // If a previous run died holding temporary settings — a Benchmark sweep or
+        // an Export that took the process down before its finally could run — the
+        // user's global quality is still pinned to whatever that run applied, in
+        // every SAPI client on the machine, with nothing on screen to say so. Put
+        // it back before anything reads settings.
+        try
+        {
+            if (EngineSettingsRegistry.TryReconcilePendingRestore(out var detail))
+                DiagLog.Write($"Recovered engine settings from an interrupted run ({detail}).");
+        }
+        catch (Exception ex) { DiagLog.Write($"Settings recovery failed: {ex.Message}"); }
+
         try
         {
             // ---- CLI flag routing first
@@ -58,6 +70,9 @@ internal static class Program
 
             if (HasFlag(args, "--bench"))
                 return RunBenchAsync(args).GetAwaiter().GetResult();
+
+            if (HasFlag(args, "--sweep"))
+                return RunSweepAsync(args).GetAwaiter().GetResult();
 
             if (TryGetSet(args, out var key, out var value))
             {
@@ -133,14 +148,65 @@ internal static class Program
         string text = TryGetStringArg(args, "--text", null) ?? LoadSampleText();
         var presets = new[] { QualityPreset.Draft, QualityPreset.Balanced, QualityPreset.Quality, QualityPreset.HiFi };
 
-        var saved = EngineSettingsRegistry.Load();
-        var results = new List<BenchmarkResult>();
         var log = new Progress<string>(Console.Error.WriteLine);
-        foreach (var p in presets)
-            results.Add(await Benchmark.RunAsync(p, $"VibeSuperTonic_{voiceId}", text, wordCap, log, CancellationToken.None));
-        EngineSettingsRegistry.Save(saved);
+        var results = new List<BenchmarkResult>();
+        using (EngineSettingsRegistry.BeginTemporaryChange(log))
+        {
+            foreach (var p in presets)
+                results.Add(await Benchmark.RunAsync(p, voiceId, text, wordCap, log, CancellationToken.None));
+        }
 
         Console.WriteLine(JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));
+        return 0;
+    }
+
+    /// <summary>
+    /// The thread and provider sweep, headless.
+    ///
+    /// <para>The same code the Benchmark tab runs, reached without a window, for
+    /// the same reason Linux made <c>vst-ctl benchmark</c> the primary surface and
+    /// the button a caller of it: a measurement that only exists inside a GUI
+    /// cannot be run over a remote session, scripted across a fleet, or asked for
+    /// in a field report.</para>
+    ///
+    /// <para>Exit code is 0 when a profile was written, 1 when nothing could be
+    /// measured, and 2 when the machine was too busy and <c>--force</c> was not
+    /// given — a refusal is not a failure, and a script should be able to tell
+    /// them apart.</para>
+    /// </summary>
+    private static async Task<int> RunSweepAsync(string[] args)
+    {
+        string voiceId = TryGetStringArg(args, "--voice", "M1") ?? "M1";
+        bool includeGpu = !HasFlag(args, "--no-gpu");
+        bool force = HasFlag(args, "--force");
+
+        var log = new Progress<string>(Console.Error.WriteLine);
+        var rows = new Progress<Core.Synthesis.BenchmarkProgress>(p =>
+            Console.Error.WriteLine(p.Row.Failed
+                ? $"  [{p.Index}/{p.Total}] {p.Row.Label,-10} failed: {p.Row.Error}"
+                : $"  [{p.Index}/{p.Total}] {p.Row.Label,-10} {p.Row.MedianWallMs,8:F0} ms  " +
+                  $"rtf {p.Row.Rtf:F3}  cores {p.Row.AvgCores:F1}  spread {p.Row.Spread:P0}"));
+
+        // Same restore contract the tab has: the sweep writes a thread count into
+        // settings.json for every SAPI client on the machine while it runs, and a
+        // run that dies without putting them back leaves the user synthesizing at
+        // whatever the dead run applied, silently, until they next open the app.
+        using var restore = EngineSettingsRegistry.BeginTemporaryChange(log);
+
+        var outcome = await ThreadSweep.RunAsync(voiceId, includeGpu, force, log, rows, CancellationToken.None);
+
+        if (outcome.Refusal is not null)
+        {
+            Console.Error.WriteLine(outcome.Refusal);
+            return 2;
+        }
+
+        foreach (var note in outcome.Notes) Console.Error.WriteLine(note);
+
+        if (outcome.Profile is null) return 1;
+
+        Console.WriteLine(JsonSerializer.Serialize(outcome.Profile,
+            Core.Synthesis.BenchmarkJsonContext.Default.BenchmarkProfile));
         return 0;
     }
 

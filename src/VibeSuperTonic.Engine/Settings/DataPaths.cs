@@ -69,6 +69,15 @@ internal static class DataPaths
     public static string SettingsFilePath => Path.Combine(DataDir, "settings.json");
 
     /// <summary>
+    /// What this machine measured about itself — written by the Control Panel's
+    /// sweep, read here at session build. Filename from
+    /// <see cref="Core.Synthesis.BenchmarkStore"/>, which the Linux daemon also
+    /// uses, so one portable folder cannot carry two spellings of the same file.
+    /// </summary>
+    public static string BenchmarkFilePath =>
+        Path.Combine(DataDir, Core.Synthesis.BenchmarkStore.FileName);
+
+    /// <summary>
     /// Pure resolution function — same input always yields same output. Exposed
     /// so the launcher's preview UI can show the user what their override will
     /// resolve to without writing it first.
