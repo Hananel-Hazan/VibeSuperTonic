@@ -20,10 +20,25 @@ internal sealed record CheckResult(
     /// first: "Repair all" writing registry keys and fetching models is what the
     /// button promises, silently installing a system runtime is not.
     /// </summary>
-    bool NeedsConsent = false);
+    bool NeedsConsent = false,
+
+    /// <summary>
+    /// Which heading this row sits under on the Status tab.
+    ///
+    /// <para>Carried on the check rather than decided by the renderer, so the
+    /// benchmark row can sit with the inference facts it is the repair for
+    /// without the tab having to recognise it by title.</para>
+    /// </summary>
+    string Group = Checks.InstallGroup);
 
 internal static class Checks
 {
+    /// <summary>Heading for the registration and prerequisite rows.</summary>
+    public const string InstallGroup = "Install & registration";
+
+    /// <summary>Heading for the rows about what inference will do — see <see cref="InferenceReport"/>.</summary>
+    public const string InferenceGroup = "Inference";
+
     public static IReadOnlyList<CheckResult> RunAll(string? baseDirOverride = null)
     {
         var results = new List<CheckResult>();
@@ -73,7 +88,8 @@ internal static class Checks
         try { settings = EngineSettingsRegistry.Load(); }
         catch (Exception ex)
         {
-            return new(title, CheckSeverity.Info, true, $"settings unreadable ({ex.Message})", null, null);
+            return new(title, CheckSeverity.Info, true, $"settings unreadable ({ex.Message})", null, null,
+                Group: InferenceGroup);
         }
 
         // A hand-set thread count beats any measurement by design — see the
@@ -82,7 +98,7 @@ internal static class Checks
         if (settings.OnnxThreads != CpuBudget.Auto)
             return new(title, CheckSeverity.Info, true,
                 $"not used — ONNX threads is set to {settings.OnnxThreads} by hand on the Advanced tab",
-                null, null);
+                null, null, Group: InferenceGroup);
 
         BenchmarkProfile? stored = null;
         try { stored = BenchmarkStore.Load(DataPaths.BenchmarkFilePath); }
@@ -94,7 +110,7 @@ internal static class Checks
               + "which measured as the worst configuration on the machine that motivated this feature",
                 "Double-click to measure this machine (about a minute and a half). "
               + "Best done while the machine is otherwise idle.",
-                Repair: MeasureThisMachineAsync);
+                Repair: MeasureThisMachineAsync, Group: InferenceGroup);
 
         IReadOnlyList<string> stale;
         try
@@ -107,7 +123,7 @@ internal static class Checks
         {
             return new(title, CheckSeverity.Info, true,
                 $"a profile exists but this machine could not be described to compare it against ({ex.Message})",
-                null, null);
+                null, null, Group: InferenceGroup);
         }
 
         string measured = stored.MeasuredUtc.Length >= 10 ? stored.MeasuredUtc[..10] : stored.MeasuredUtc;
@@ -119,11 +135,11 @@ internal static class Checks
               + $"does not apply here — {string.Join("; ", stale)}",
                 "Double-click to measure this machine again. A profile is never scaled to fit: "
               + "the cost curve is not monotonic, so another machine's thread count cannot be converted into this one's.",
-                Repair: MeasureThisMachineAsync);
+                Repair: MeasureThisMachineAsync, Group: InferenceGroup);
 
         return new(title, CheckSeverity.Info, true,
             $"{stored.Provider.ToUpperInvariant()}, {pick}, measured {measured}",
-            null, null);
+            null, null, Group: InferenceGroup);
     }
 
     /// <summary>

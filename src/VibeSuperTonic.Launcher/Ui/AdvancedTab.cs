@@ -45,9 +45,10 @@ internal sealed class AdvancedTab : UserControl
             "and falls back to ONNX Runtime's own pick if it has never been measured.\n\n" +
             "Any other value is yours and wins over the measurement.\n\n" +
             "Worth knowing before you type one: the cost curve is not monotonic. Measured on a " +
-            "20-thread i7-12800H, 4 threads BEAT ORT's auto pick on speed while using a quarter of " +
-            "the machine, and 8 threads was the slowest row of all — slower than 2. The knee is a " +
-            "property of your hardware, which is why there is a button that finds it.");
+            "20-thread i7-12800H, the RTF ran 0.45 at 1 thread, 0.30 at 2, 0.32 at 3, 0.41 at 4, " +
+            "0.22 at 6 and 0.27 at 8 — while ORT's own pick spent 13.2 cores to manage 0.35. " +
+            "Six threads won, using a third of the machine. No formula over a core count produces " +
+            "that shape, which is why there is a button that measures yours.");
         _onnxInterOpThreads = AddNumeric(grid, row++, "ONNX inter-op threads",   1,  16, 1,
             "Threads ORT uses across ops. We run one model at a time, so 1 is correct for almost everyone. Raising it adds scheduler overhead with no benefit for our pipeline.");
 

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Windows.Forms;
 
 namespace VibeSuperTonic.Launcher.Ui;
@@ -29,17 +28,12 @@ internal sealed class AboutTab : UserControl
     public AboutTab()
     {
         string baseDir = Registration.DefaultBaseDir;
-        string appVersion = OwnVersion();
+        string appVersion = VersionInfo.Own();
 
         // Relative to the shipped layout that build/pack-zip.ps1 composes. A dev
         // run from bin\ finds none of them and says so, which is correct: those
         // components genuinely are not beside this exe.
-        var components = new (string Label, string Path)[]
-        {
-            ("Engine (x64)",  Path.Combine(baseDir, "engine", "x64", "VibeSuperTonic.Engine.dll")),
-            ("Engine (x86)",  Path.Combine(baseDir, "engine", "x86", "VibeSuperTonic.Engine.dll")),
-            ("Render helper", Path.Combine(baseDir, "render", "VibeSuperTonic.RenderHost.exe")),
-        };
+        var components = VersionInfo.Components(baseDir);
 
         var stack = new TableLayoutPanel
         {
@@ -59,7 +53,7 @@ internal sealed class AboutTab : UserControl
         var mismatched = new List<string>();
         foreach (var (label, path) in components)
         {
-            string? version = FileProductVersion(path);
+            string? version = VersionInfo.OfFile(path);
             stack.Controls.Add(new Label
             {
                 Text = $"{label}: {version ?? "(not installed here)"}",
@@ -91,7 +85,7 @@ internal sealed class AboutTab : UserControl
 
         stack.Controls.Add(new Label { Text = $"BaseDir: {baseDir}", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         stack.Controls.Add(new Label { Text = $".NET runtime: {Environment.Version}", AutoSize = true });
-        stack.Controls.Add(new Label { Text = $"ONNX runtime: {TryReadOrtVersion()}", AutoSize = true });
+        stack.Controls.Add(new Label { Text = $"ONNX runtime: {VersionInfo.OnnxRuntime(AppContext.BaseDirectory)}", AutoSize = true });
 
         const string ProjectUrl = "https://github.com/Hananel-Hazan/VibeSuperTonic";
         var link = new LinkLabel { Text = ProjectUrl, AutoSize = true, Margin = new Padding(0, 8, 0, 8) };
@@ -104,73 +98,4 @@ internal sealed class AboutTab : UserControl
         Controls.Add(stack);
     }
 
-    /// <summary>
-    /// This assembly's version, as the release calls it.
-    ///
-    /// <para>Informational version first because that is the one that carries
-    /// <c>&lt;VstVersion&gt;</c> verbatim — "0.2.8" — where
-    /// <see cref="AssemblyName.Version"/> pads it to a four-part 0.2.8.0 that
-    /// matches no ZIP filename anyone is holding. The SDK appends
-    /// "+&lt;commit sha&gt;" to it, which is trimmed: it is provenance for a
-    /// build log, not an answer to "which release is this".</para>
-    /// </summary>
-    private static string OwnVersion()
-    {
-        var informational = typeof(AboutTab).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
-        if (!string.IsNullOrWhiteSpace(informational))
-            return Trim(informational);
-
-        return typeof(AboutTab).Assembly.GetName().Version?.ToString(3) ?? "(unknown)";
-    }
-
-    /// <summary>
-    /// A shipped binary's version, or null when it is not there.
-    ///
-    /// <para><c>ProductVersion</c> rather than <c>FileVersion</c>, so this
-    /// compares like with like against <see cref="OwnVersion"/> — the same
-    /// informational string, with the same commit suffix to trim.</para>
-    /// </summary>
-    private static string? FileProductVersion(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) return null;
-            string? version = FileVersionInfo.GetVersionInfo(path).ProductVersion;
-            return string.IsNullOrWhiteSpace(version) ? null : Trim(version);
-        }
-        catch
-        {
-            // A file we cannot stat is reported as absent rather than as a
-            // mismatch. Claiming a version disagreement on the strength of an
-            // access error would send the user to re-extract a folder that is fine.
-            return null;
-        }
-    }
-
-    private static string Trim(string version)
-    {
-        int plus = version.IndexOf('+');
-        return (plus >= 0 ? version[..plus] : version).Trim();
-    }
-
-    private static string TryReadOrtVersion()
-    {
-        try
-        {
-            string baseDir = AppContext.BaseDirectory;
-            foreach (var arch in new[] { "x64", "x86" })
-            {
-                string ort = Path.Combine(baseDir, "engine", arch, "onnxruntime.dll");
-                if (File.Exists(ort))
-                {
-                    var info = FileVersionInfo.GetVersionInfo(ort);
-                    return $"{info.FileVersion} ({arch})";
-                }
-            }
-        }
-        catch { }
-        return "(not found)";
-    }
 }

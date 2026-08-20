@@ -39,6 +39,7 @@ internal sealed class StatusTab : UserControl
             FullRowSelect = true,
             GridLines = false,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            ShowGroups = true,
         };
         _list.Columns.Add("", 28);
         _list.Columns.Add("Check", 240);
@@ -70,17 +71,97 @@ internal sealed class StatusTab : UserControl
     private void Run(bool clearLog = true)
     {
         _last = Checks.RunAll();
+        _list.BeginUpdate();
         _list.Items.Clear();
-        foreach (var r in _last)
+        _list.Groups.Clear();
+
+        var groups = new Dictionary<string, ListViewGroup>(StringComparer.Ordinal);
+        ListViewGroup GroupFor(string name)
+        {
+            if (!groups.TryGetValue(name, out var g))
+            {
+                g = new ListViewGroup(name) { HeaderAlignment = HorizontalAlignment.Left };
+                groups[name] = g;
+                _list.Groups.Add(g);
+            }
+            return g;
+        }
+
+        foreach (var r in _last.Where(r => r.Group == Checks.InstallGroup))
         {
             string mark = r.Ok ? "OK" : (r.Severity == CheckSeverity.Error ? "✗" : "!");
-            var item = new ListViewItem(mark) { ForeColor = r.Ok ? Color.ForestGreen : (r.Severity == CheckSeverity.Error ? Color.Firebrick : Color.DarkOrange) };
+            var item = new ListViewItem(mark, GroupFor(Checks.InstallGroup))
+            {
+                ForeColor = r.Ok ? Color.ForestGreen : (r.Severity == CheckSeverity.Error ? Color.Firebrick : Color.DarkOrange),
+            };
             item.SubItems.Add(r.Title);
             item.SubItems.Add(r.Detail);
             item.Tag = r;
             _list.Items.Add(item);
         }
+
+        AddInferenceRows(GroupFor(Checks.InferenceGroup));
+
+        // The benchmark check last within its own group, because it is the row
+        // that carries the action: everything above it describes the state, and
+        // this is the one a user double-clicks to change it.
+        foreach (var r in _last.Where(r => r.Group == Checks.InferenceGroup))
+        {
+            string mark = r.Ok ? "OK" : (r.Severity == CheckSeverity.Error ? "✗" : "!");
+            var item = new ListViewItem(mark, GroupFor(Checks.InferenceGroup))
+            {
+                ForeColor = r.Ok ? Color.ForestGreen : (r.Severity == CheckSeverity.Error ? Color.Firebrick : Color.DarkOrange),
+            };
+            item.SubItems.Add(r.Title);
+            item.SubItems.Add(r.Detail);
+            item.Tag = r;
+            _list.Items.Add(item);
+        }
+
+        _list.EndUpdate();
         ShowFixHints(clearLog);
+    }
+
+    /// <summary>
+    /// The provenance rows — provider, threads, and why.
+    ///
+    /// <para>Rendered from the same <see cref="InferenceReport"/> that
+    /// <c>--config</c> prints, which is the point: a user reading this pane and a
+    /// maintainer reading a pasted field report have to be looking at the same
+    /// answer, and two renderers computing it separately is how they stop being
+    /// the same answer.</para>
+    ///
+    /// <para>These carry no <c>Tag</c>, so a double-click does nothing — they are
+    /// facts, not checks. The action that changes them is the benchmark row below.</para>
+    /// </summary>
+    private void AddInferenceRows(ListViewGroup group)
+    {
+        InferenceReport report;
+        try { report = InferenceReport.Build(); }
+        catch (Exception ex)
+        {
+            var failed = new ListViewItem("!", group) { ForeColor = Color.DarkOrange };
+            failed.SubItems.Add("Inference");
+            failed.SubItems.Add($"could not be determined ({ex.Message})");
+            _list.Items.Add(failed);
+            return;
+        }
+
+        foreach (var f in report.Configured)
+        {
+            var item = new ListViewItem("", group);
+            item.SubItems.Add(f.Label);
+            item.SubItems.Add(f.Value);
+            _list.Items.Add(item);
+        }
+
+        foreach (var f in report.Live)
+        {
+            var item = new ListViewItem("", group) { ForeColor = Color.DimGray };
+            item.SubItems.Add($"Live: {f.Label}");
+            item.SubItems.Add(f.Value);
+            _list.Items.Add(item);
+        }
     }
 
     /// <summary>

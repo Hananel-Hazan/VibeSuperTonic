@@ -39,6 +39,37 @@ internal static class Program
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         }
 
+        // Argument validation FIRST, and --version/--help before anything that can
+        // fail. Until 2026-08-20 "has arguments" meant "is CLI" and any unrecognised
+        // flag fell through to Application.Run — so `--version` opened a window, and
+        // so did a typo. That is the exact input that took vst-ctl down with SIGABRT
+        // on Linux, answered there in one sentence and exit 2; answering it with a
+        // GUI is the same defect wearing better clothes. A diagnostic flag must also
+        // not depend on the state it exists to diagnose, which is why these two run
+        // ahead of the migration below rather than beside --config.
+        if (isCli)
+        {
+            if (TryFindUnknownArgument(args, out var bad))
+            {
+                Console.Error.WriteLine($"VibeSuperTonic: unrecognised argument '{bad}'");
+                Console.Error.WriteLine();
+                Console.Error.Write(UsageText());
+                return 2;
+            }
+
+            if (HasFlag(args, "--help") || HasFlag(args, "-h") || HasFlag(args, "-?"))
+            {
+                Console.Write(UsageText());
+                return 0;
+            }
+
+            if (HasFlag(args, "--version"))
+            {
+                Console.WriteLine(VersionInfo.Own());
+                return 0;
+            }
+        }
+
         // One-shot schema migration — prunes stale per-voice overrides + flips GPU on
         // for installs from before that became the default. Safe to call every launch
         // (it no-ops once SchemaVersion is current).
@@ -74,6 +105,12 @@ internal static class Program
             if (HasFlag(args, "--sweep"))
                 return RunSweepAsync(args).GetAwaiter().GetResult();
 
+            if (HasFlag(args, "--config"))
+            {
+                Console.Write(InferenceReport.Build().ToPlainText());
+                return 0;
+            }
+
             if (TryGetSet(args, out var key, out var value))
             {
                 if (!EngineSettingsRegistry.TrySetSingle(key!, value!, out var err))
@@ -99,6 +136,80 @@ internal static class Program
 
     private static bool HasFlag(string[] args, string flag) =>
         args.Any(a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Flags that stand alone.</summary>
+    private static readonly string[] KnownFlags =
+    {
+        "--register", "--unregister", "--elevated", "--repair",
+        "--bench", "--sweep", "--no-gpu", "--force",
+        "--config", "--version", "--help", "-h", "-?",
+    };
+
+    /// <summary>Flags that consume the token after them.</summary>
+    private static readonly string[] ValueFlags = { "--set", "--words", "--voice", "--text" };
+
+    /// <summary>
+    /// The first argument this build does not understand, if there is one.
+    ///
+    /// <para>Bare words are rejected alongside unknown switches: nothing here
+    /// takes a positional argument, so <c>VibeSuperTonic.exe config</c> is a typo
+    /// for <c>--config</c> rather than a request, and opening the GUI in response
+    /// is how the mistake went unnoticed.</para>
+    /// </summary>
+    private static bool TryFindUnknownArgument(string[] args, out string? unknown)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+
+            if (ValueFlags.Contains(a, StringComparer.OrdinalIgnoreCase))
+            {
+                i++;   // its value is whatever follows, and is not ours to judge
+                continue;
+            }
+
+            if (KnownFlags.Contains(a, StringComparer.OrdinalIgnoreCase)) continue;
+
+            unknown = a;
+            return true;
+        }
+        unknown = null;
+        return false;
+    }
+
+    private static string UsageText() =>
+        $"""
+        VibeSuperTonic {VersionInfo.Own()} — SAPI5 neural voices
+
+        Run with no arguments to open the Control Panel.
+
+          --version              Print the version and exit.
+          --config               Print what inference will use, and why.
+          --help, -h, -?         This text.
+
+          --register             Register the voices for this user.
+          --unregister           Remove the registration.
+          --repair               Run every Status check and fix what it can,
+                                 including measuring this machine on first run.
+
+          --sweep                Measure this machine's thread and provider curve
+                                 and store the winner in data\benchmark.json.
+              --voice <id>       Voice to render the sample with (default M1).
+              --no-gpu           Skip the DirectML row.
+              --force            Measure even if the machine is busy. The result
+                                 is shaped by whatever else is running.
+
+          --bench                Time the quality presets and print JSON.
+              --voice <id>       Voice to use (default M1).
+              --words <n>        Words of the sample to read (default 500).
+              --text <string>    Text to read instead of the bundled sample.
+
+          --set <key>=<value>    Change one setting, e.g. --set onnxthreads=6
+
+        Exit codes: 0 success, 1 failure, 2 bad arguments (and, for --sweep, a
+        machine too busy to measure).
+
+        """;
 
     private static bool TryGetSet(string[] args, out string? key, out string? value)
     {

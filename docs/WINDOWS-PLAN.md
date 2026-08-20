@@ -1,12 +1,13 @@
 # VibeSuperTonic on Windows — convergence plan
 
-Status: **W0 and [W1](#w1) are done** — W0 on 2026-08-19, W1 on 2026-08-20.
-Windows now measures the machine it runs on, applies the answer, and a fresh
-install does it unprompted. Getting there needed the unpaced bench render (a
-sweep went from **327 s to 60 s**) and cost four defects in the measurement path
-that no amount of reading the code would have found — all four fixed, all four
+Status: **W0, [W1](#w1) and [W2](#w2) are done** — W0 on 2026-08-19, W1 and W2 on
+2026-08-20. Windows now measures the machine it runs on, applies the answer, a
+fresh install does it unprompted, and the product will say what it decided and
+why. Getting W1 there needed the unpaced bench render (a sweep went from
+**327 s to 78–91 s**) and cost four defects in the measurement path that no amount
+of reading the code would have found — all four fixed, all four
 [written up](#w1-closed). **940 Core tests pass, TestHarness green in both
-bitnesses on a real install, and three consecutive sweeps agree.** W2 onward have
+bitnesses on a real install, and three consecutive sweeps agree.** W3 onward have
 not started.
 
 Written 2026-08-19, from an audit of what the Linux port built that the shipping
@@ -60,16 +61,16 @@ verified against the source or by building it; none is a suspicion.
 
 | # | Finding | Severity | Phase |
 | --- | --- | --- | --- |
-| 1 | **Windows guesses its thread count and always has.** `OnnxThreads` defaults to `0` — ORT's own pick, every core. Linux measured that pick as **eleven times the machine for a 1.6x worse answer** on the same hardware family. Windows has the apply-side plumbing and no measurement | High | [W1](#w1) |
+| 1 | **Windows guesses its thread count and always has.** `OnnxThreads` defaults to `0` — ORT's own pick, every core. Linux measured that pick as **eleven times the machine for a 1.6x worse answer** on the same hardware family. Windows has the apply-side plumbing and no measurement | High | [W1](#w1) — **fixed** |
 | 2 | **`UseDirectML` defaults to `true` and has never been shown to win.** 2026-08-17 proved the *append* works on real hardware and passed all eleven harness steps at engine RTF 0.28. Nothing anywhere compared it against CPU on the same box | High | [W4](#w4) |
 | 3 | **The Benchmark tab runs each preset once.** No median, no spread, and verdict bands at 0.5/1.0 RTF that were never checked against the noise floor. Linux measured **15–18% run-to-run** on *identical* configurations. The tab is capable of ranking two presets on noise and colouring the answer green | High | [W3](#w3) |
-| 4 | **Nothing in the product says what inference is doing or why.** The Status tab is registration checks only. Linux `config` reports provider, threads, and the *reason* — "benchmark 2026-08-17" versus "20% of 20 logical processors, never benchmarked" | Medium | [W2](#w2) |
-| 5 | **`VibeSuperTonic.exe --version` opens the GUI.** So does any unrecognised flag: [Program.cs:19](../src/VibeSuperTonic.Launcher/Program.cs#L19) treats "has arguments" as "is CLI", then falls through to `Application.Run`. This is the exact input that crashed `vst-ctl` on Linux, fixed there 2026-08-18 with one sentence and exit 2 | Medium | [W2](#w2) |
+| 4 | **Nothing in the product says what inference is doing or why.** The Status tab is registration checks only. Linux `config` reports provider, threads, and the *reason* — "benchmark 2026-08-17" versus "20% of 20 logical processors, never benchmarked" | Medium | [W2](#w2) — **fixed** |
+| 5 | **`VibeSuperTonic.exe --version` opens the GUI.** So does any unrecognised flag: [Program.cs:19](../src/VibeSuperTonic.Launcher/Program.cs#L19) treats "has arguments" as "is CLI", then falls through to `Application.Run`. This is the exact input that crashed `vst-ctl` on Linux, fixed there 2026-08-18 with one sentence and exit 2 | Medium | [W2](#w2) — **fixed** |
 | 6 | **The two copies of the settings schema already disagree.** `TotalStep` defaults to **8** in [the engine's](../src/VibeSuperTonic.Engine/Settings/EngineSettings.cs#L25) and **6** in [the launcher's](../src/VibeSuperTonic.Launcher/EngineSettings.cs#L20). `Load()` does not write, so a fresh install with no `settings.json` shows 6 in the Tune tab while the engine synthesises at 8, until the user saves anything | Medium | [W6](#w6) |
 | 7 | **An in-place upgrade can leave a split-bitness install** — [trap 16](LINUX-PORT-PLAN.md#traps), found 2026-08-17. A running 32-bit reader holds `engine\x86` open; the copy fails there and succeeds for x64. Nothing detects it. W0 built the detector; nothing yet routes a user to it | Medium | [W5](#w5) |
 | 8 | **The shipped `tools\` harness is x64 only**, so a user diagnosing a 32-bit reader cannot test the engine that reader actually loads — which is the engine most users run | Low | [W5](#w5) |
 | 9 | **The models download with no acceptance step.** "Repair all" fetches them; `LICENSE-MODELS.txt` in the ZIP states the user agrees to OpenRAIL-M *by* accepting the download. Linux Phase 6 built an explicit screen because the acceptance has to be a human agreeing to something | Low, but a compliance question | [W5](#w5) |
-| 10 | **The Advanced tab's thread tooltip is wrong.** It states `0 = auto (cores/2)`; ORT's auto is every core. It then guesses "1–4 often beats auto" — which is right, and is exactly what W1 would stop guessing about | Low | [W1](#w1) |
+| 10 | **The Advanced tab's thread tooltip is wrong.** It states `0 = auto (cores/2)`; ORT's auto is every core. It then guesses "1–4 often beats auto" — which is right, and is exactly what W1 would stop guessing about | Low | [W1](#w1) — **fixed**, then fixed again: the replacement quoted the contaminated sweeps, [corrected 2026-08-20](#w1-closed) |
 
 ---
 
@@ -194,7 +195,7 @@ document.** *Built 2026-08-20; see below.*
 
 | Piece | Where |
 | --- | --- |
-| The switch: an environment variable whose value must be the reading process's **own pid**, so it cannot be set machine-wide and mean anything | [UnpacedBench.cs](../src/VibeSuperTonic.Core/Synthesis/UnpacedBench.cs) |
+| The switch: an environment variable whose value must be the reading process's **own pid**, so it cannot be set machine-wide and mean anything | [BenchSwitches.cs](../src/VibeSuperTonic.Core/Synthesis/BenchSwitches.cs) |
 | Engine skips the write throttle **and** the end-of-Speak drain | [SapiEngine.cs](../src/VibeSuperTonic.Engine/SapiEngine.cs) |
 | `--unpaced` on `--mode bench`, opt-in per caller; `BENCH unpaced=1` reads back whether the engine honoured it | [RenderHost/Program.cs](../src/VibeSuperTonic.RenderHost/Program.cs) |
 | Sweep passes it and **notes** — does not fail — a run the engine rendered paced anyway | [ThreadSweep.cs](../src/VibeSuperTonic.Launcher/Bench/ThreadSweep.cs) |
@@ -480,6 +481,18 @@ clause is deliberate: a row sitting just outside is exactly the one that flips a
 pick between sweeps, and excluding it would hide the instability the property
 exists to expose.
 
+**5 · The tooltip that closed a criterion was quoting the contaminated sweeps.**
+Found on the W2 readiness pass. "The Advanced tab's thread tooltip is replaced by
+what was measured" was met in form and not in fact: the text told users *"4
+threads BEAT ORT's auto pick"* and *"8 threads was the slowest row of all —
+slower than 2"*, both taken from the pre-fix runs. Against
+[the uncontaminated table](#w1-clean-table) 4 threads is 0.41 and auto is 0.35, so
+4 *loses*; 8 is 0.27 against 2 at 0.30, so 8 is *faster*; and the knee is **6**,
+not 4. It now quotes the clean row set. Worth noticing that the one surface in the
+product that tells a user what the curve looks like was the last thing to be
+updated with what the curve actually looks like — a fix's own documentation is not
+covered by the tests that prove the fix.
+
 **The measurement is reproducible; the machine is not.** Three consecutive sweeps
 on a rested machine, 150 s apart, with the profile retained between them:
 
@@ -531,25 +544,62 @@ directly, instead of leaving the user to infer it from inflated spreads.
 
 <a name="w2"></a>
 
-### Phase W2 — say where the number came from · 0.5 day
+### Phase W2 — say where the number came from · 0.5 day · **DONE 2026-08-20**
 
 A number in a settings file with no provenance is a number nobody dares change.
-Windows currently shows no number at all.
+Windows showed no number at all.
 
-- **Status tab gains an Inference group**: provider in force, threads in force,
-  the reason, and the profile's date with any staleness sentence. It sits beside
-  the existing checks because that is where users are already sent, and it uses
-  the same row shape so a stale profile can carry a "re-measure" action the way a
-  broken registration carries "repair".
-- **`VibeSuperTonic.exe --config`** prints the same thing to stdout, which is
-  `vst-ctl config` parity and is what a field report should contain.
-- **`--version` prints the version and exits 0.** Any unrecognised flag prints
-  usage to stderr and exits 2. Today both open the GUI, which is the same input
-  that took `vst-ctl` down with SIGABRT — Linux answered it in one sentence and
-  Windows should not answer it with a window.
+| Piece | Where |
+| --- | --- |
+| The report itself — settings, the stored profile and its staleness, the tie band against the measured noise, and live telemetry | [InferenceReport.cs](../src/VibeSuperTonic.Launcher/Integrity/InferenceReport.cs) |
+| Status tab renders it as an **Inference** group beside an **Install & registration** group; the benchmark row keeps its re-measure action and moves in beside the facts it explains | [StatusTab.cs](../src/VibeSuperTonic.Launcher/Ui/StatusTab.cs), `CheckResult.Group` |
+| `--config` prints the same report; `--version` prints the version and exits 0; `--help` prints usage | [Program.cs](../src/VibeSuperTonic.Launcher/Program.cs) |
+| Unrecognised flags — and bare words — print usage to **stderr** and exit **2** | `TryFindUnknownArgument` |
+| Version reading lifted out of About so both surfaces answer identically | [VersionInfo.cs](../src/VibeSuperTonic.Launcher/VersionInfo.cs) |
 
-**Exit criterion:** a user can answer "what is my machine doing and why" from
-either the tab or the CLI, and both give the same answer.
+**One report, two renderers, and that is the exit criterion.** Both surfaces call
+`InferenceReport.Build()`. Two renderers computing the same answer independently
+is how they come to disagree, and a field report that contradicts the window the
+user is looking at is worse than no field report.
+
+**What it will not claim.** The Control Panel is not a SAPI host, so the
+configuration half is a *prediction* of what the next engine session will build,
+computed by mirroring `SupertonicAdapter.GetSharedTtsLocked` in its own order —
+including the part where an applicable profile replaces the provider, so a
+profile that measured CPU as the winner turns DirectML off while the Advanced tab
+still shows the box ticked. Whether DirectML then actually appended, and whether
+a driver failure latched it off, only the engine knows: that comes from telemetry
+when a session is live and is printed as a separate section rather than folded
+in. Saying "DirectML" when the engine quietly fell back to CPU is precisely the
+defect [W1 found in its own sweep](#w1-hardware).
+
+**Two things running it changed.** Both are the same class as W1's — code that was
+right about itself and wrong about the world.
+
+1. **The report described one install and read another.** `Registration.DefaultBaseDir`
+   is *this exe's* folder; `DataPaths.BaseDir` is the registered install's. Run from
+   anywhere but the install — a dev build, a second copy — `--config` printed
+   "(not installed here)" for all three binaries while faithfully reporting the
+   real install's settings and benchmark. It now reports the **installed** engine's
+   versions and says when the exe running is somewhere else, which is
+   [finding 7](#findings)'s symptom seen from a new angle.
+2. **A GPU profile's thread count read as an abstention.** A DirectML row carries
+   `Threads = 0`, so the row rendered "auto — ONNX Runtime decides", which reads as
+   *the benchmark declined to choose* when in fact it chose the provider and the
+   CPU thread count stopped being the lever. It now says so.
+
+Verified 2026-08-20: `--version` → `0.2.8`, exit 0; `--bogus` and a bare `config`
+→ usage on stderr, exit 2, **no window**; every documented flag passes validation;
+`--config` reports the live install's four binaries at 0.2.8, ORT 1.22, the
+applied DirectML profile and its 15%-band-against-42%-noise warning. The Control
+Panel opens with both groups rendered and nothing in `launcher.log`.
+
+**Exit criterion met:** a user can answer "what is my machine doing and why" from
+either the tab or the CLI, and both give the same answer because both render the
+same object.
+
+**No engine code changed**, so this phase does not owe a both-bitness TestHarness
+run — the whole diff is Launcher.
 
 <a name="w3"></a>
 
@@ -719,7 +769,7 @@ already has detection, a CPU retry, a watchdog and a latch, all exercised by
 | — · First run measures the machine | 0.25 | **done 2026-08-20** — [what it does](#w1-first-run) |
 | — · Auto row inherits the stored profile | 0.25 + a harness run | **done 2026-08-20** — a second, separate pid-keyed switch |
 | — · GPU row ranked as the most expensive row | 0.25 | **done 2026-08-20** — tie-break now uses measured cores |
-| W2 · Provenance | 0.5 | not started |
+| W2 · Provenance | 0.5 | **DONE 2026-08-20** — [what landed](#w2) |
 | W3 · Preset benchmark, made trustworthy | 0.5 | not started |
 | W4 · Provider policy + battery | 1 | not started |
 | W5 · Upgrade safety | 0.5 | not started |
@@ -749,12 +799,15 @@ standing evidence that those are the ones that surprise you.
 
 ## Open decisions
 
-- **Does an explicit `OnnxThreads` beat a measured profile?** [W1](#w1) proposes
-  yes — a knob that silently loses to a measurement generates bug reports — but
-  it is the opposite of the Linux precedence, where the profile beats
-  `MaxCpuPercent`. The two are not really in conflict (a percentage is a guess, an
-  absolute count is a decision), and saying so out loud is what stops the next
-  reader from "fixing" the inconsistency.
+- ~~**Does an explicit `OnnxThreads` beat a measured profile?**~~ **Settled: yes,
+  and it is built.** A knob that silently loses to a measurement generates bug
+  reports. It is the opposite of the Linux precedence, where the profile beats
+  `MaxCpuPercent`, and the two are not really in conflict — a percentage is a
+  guess, an absolute count is a decision. Saying so out loud is what stops the
+  next reader from "fixing" the inconsistency. Live in
+  [SupertonicAdapter](../src/VibeSuperTonic.Engine/Synth/SupertonicAdapter.cs#L220),
+  stated in the Advanced tab's tooltip, and reported by [W2](#w2)'s "Applies
+  here? — yes, but it is not in force".
 - **Is there a licence acceptance screen on Windows, or is there a documented
   reason there is not?** [W5](#w5). The user's call.
 - **What is the right idle timeout for releasing the session**, if feature 2 is

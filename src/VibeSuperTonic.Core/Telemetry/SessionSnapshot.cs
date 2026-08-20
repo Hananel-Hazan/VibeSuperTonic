@@ -44,7 +44,7 @@ public sealed class SessionSnapshot
 
     /// <summary>
     /// Whether this Speak ran with real-time write pacing disabled — see
-    /// <see cref="Synthesis.UnpacedBench"/>. False for every ordinary SAPI host,
+    /// <see cref="Synthesis.BenchSwitches"/>. False for every ordinary SAPI host,
     /// and true only inside a benchmark helper that asked for it.
     ///
     /// Published rather than assumed for the same reason
