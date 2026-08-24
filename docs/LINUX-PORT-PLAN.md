@@ -112,6 +112,7 @@ before changing it.
 | 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
 | 6 · App + tray | **Done 2026-08-18.** Window, Reader, tray (rung 1 held), Tune and Pronunciations as writers, and the first-run screen — which downloads the models. Every exit criterion verified on hardware; one D-Bus trap cost most of a day. [The record](#phase-6-landed) |
 | 7 · Packaging | **Done 2026-08-22.** [build/pack-tar.sh](../build/pack-tar.sh) publishes all three binaries into emptied directories, composes the layout, writes `install.sh`/`uninstall.sh`/`INSTALL.txt`/`LICENSE-MODELS.txt`, ships `models-manifest.json` and no models, and asserts three things against the composed tree. 51 MB, 238 files, verified by extracting and running it. **Not yet released as 0.3.0** — the user took it as a personal install at 0.2.7.5, so the release number is still unspent. [The record](#phase-7-landed) |
+| — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
 | 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
 
 <a name="windows-check"></a>
@@ -791,6 +792,49 @@ invisible.
 **Still open:** GNOME refuses to implement ext-data-control on security grounds,
 so a GNOME/Wayland box has no path at all and the source says so in one sentence
 rather than failing silently.
+
+<a name="stale-flush"></a>
+
+### A press silenced by the stop before it — fixed 2026-08-24
+
+The second defect found in daily use rather than by a test, and the second one
+whose symptom is *a hotkey that does nothing*. Reported as: press the key, the
+text appears in the window, the highlight never moves, nothing is spoken — and
+the press after it works.
+
+**It is the tail of a bug that was already fixed once.** `Stop()` sets the sink's
+flush flag from the stopping thread; only the writer consumes it, between blocks.
+The teardown in `SpeechSession.Run` clears a flag the writer never saw, which
+covers a stop arriving during `Preparing` — that is the earlier fix, and its
+comment is still the best description of the mechanism.
+
+What it does not cover is a stop arriving as the utterance **ends**. `Stop()`
+reads the state, finds `Speaking`, cancels, and sets the flag *afterwards* — and
+a worker in its last moments can run the whole teardown in between. The flag then
+belongs to nobody. The next utterance's first write trips it, flushes and throws;
+that utterance dies silently, and tripping the flag is also what clears it, which
+is exactly why the press after always works.
+
+That window is not exotic. It is a press landing as the reading ends, which is
+when people press: to cut off the tail, or to read something new.
+
+| Part | Fix |
+| --- | --- |
+| The invariant | An utterance never begins under a flush request. Cleared on the writer thread at the start of `Run`, which makes it independent of how two threads interleaved rather than dependent on one of them winning |
+| Why `Flush` rather than a new verb | Dropping whatever the device still holds from a previous utterance is also correct, and after a stop it is required |
+| Make a recurrence say so | A cancellation with no stop behind it now emits an `Error`, which the daemon logs. `Stop()` is the only thing that cancels an utterance or requests a flush, and it sets `Stopping` before doing either — so any other way out is a defect, and the next report will name it instead of describing a silent hotkey |
+
+**The test is the part worth copying.** A 40-attempt timing loop, written first,
+passed every time — it agreed with the race instead of reproducing it, which is
+the [vacuous guard](#kde-wayland) in its other form. What reproduces it is a gate
+inside the fake sink that holds `Stop()`'s `RequestFlush` until the worker has
+finished unwinding: the few-instruction window in production becomes a line in a
+test, and both new tests fail before the fix.
+
+**R-5 again, in the form the audio-device loss taught**: anything that makes a
+press produce no sound must be visible somewhere a person will look. This one was
+visible nowhere — no error, no log line, correct state throughout — which is why
+it survived two rounds of being reported as "sometimes the hotkey does nothing".
 
 <a name="phase-8b-landed"></a>
 
@@ -2501,6 +2545,7 @@ same days — and that belongs in an effort table, not in a phase list.
 | 8a · `vst-ctl benchmark`, before 6 | 1 | **done, on estimate** | the sweep, the profile format, the verb, `config` provenance. Split out by decision — [the record](#phase-8a) |
 | 6 · App + tray | 3–4 | **done** | The second binary, the Reader against the stream, `hello`, R-1 by process boundary, finding 5 measured, finding 6 instrumented, the tray on rung 1, both settings writers, and the first-run screen with the model download |
 | 7 · Packaging | 1.5–2 | **done 2026-08-22** | the packer, its three assertions, `install.sh` / `uninstall.sh`, the layout — [the record](#phase-7-landed) |
+| — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
 | 8b · Fit the machine, the rest | 0.5 + spike | **done 2026-08-24** | battery rule, the provider switch, the Tune control; the GPU spike passed its gate and turned into a shipped CUDA path plus an opt-in provider pack — [the record](#phase-8b-landed) |
 | **Remaining** | **0** | | The port is done. What is left is not a phase: [the Windows convergence](#convergence) and [the Way 3 gate](#the-gate), both deliberately deferred until v1 ships |
 
