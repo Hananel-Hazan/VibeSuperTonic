@@ -291,6 +291,15 @@ public sealed record Response
 /// </param>
 /// <param name="SourceOffset">Where in <paramref name="Text"/> the reader is, or null.</param>
 /// <param name="SourceLength">How many characters that covers, or null.</param>
+/// <param name="Inference">
+/// What the next utterance will render on, and why — "CUDA, 4 threads (benchmark
+/// 2026-08-24)" or "CPU, 2 threads (on battery, benchmark 2026-08-24)".
+///
+/// <para>Here as well as in <c>config</c> because this is the field that changes
+/// while the daemon runs. Phase 8b re-decides at the start of every utterance, so
+/// a user who unplugs their laptop and wants to know whether the product noticed
+/// should not have to ask a different verb than the one they already use.</para>
+/// </param>
 public sealed record StatusPayload(
     SpeechState State,
     bool Paused,
@@ -301,7 +310,8 @@ public sealed record StatusPayload(
     string? Text = null,
     int? SourceOffset = null,
     int? SourceLength = null,
-    string? Tray = null);
+    string? Tray = null,
+    string? Inference = null);
 
 /// <summary>
 /// Where this instance reads its configuration, and what it made of it.

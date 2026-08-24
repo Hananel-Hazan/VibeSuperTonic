@@ -3,7 +3,7 @@ using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Core.Text;
 using VibeSuperTonic.Linux.Audio;
-using VibeSuperTonic.Onnx.Cpu;
+using VibeSuperTonic.Onnx.Ort;
 
 // Phase 2 end to end. See LinuxPlay.csproj for what the two modes are for.
 //
@@ -169,7 +169,7 @@ static int Speak(string[] args)
     var chunks = SentenceChunker.ChunkWithOffsets(spoken);
     Console.WriteLine($"chunks      : {chunks.Count}");
 
-    using ISynthesizer synth = new CpuSynthesizer(modelsRoot);
+    using ISynthesizer synth = new OrtSynthesizer(modelsRoot);
     var loadWatch = Stopwatch.StartNew();
     int rate = synth.SampleRate;
     loadWatch.Stop();

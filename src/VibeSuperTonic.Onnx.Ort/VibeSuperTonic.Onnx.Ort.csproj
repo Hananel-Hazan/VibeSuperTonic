@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The ONNX Runtime synthesis backend. Provider chosen at RUNTIME, which is the
+    thing that changed in Phase 8b and the reason this is no longer called
+    Onnx.Cpu.
+
+    R-13 SAYS A GPU BACKEND IS A SEPARATE PROJECT. That rule was written about
+    DirectML, where it is exactly right: Microsoft.ML.OnnxRuntime.DirectML
+    publishes the same managed assembly name with a DIFFERENT managed surface —
+    AppendExecutionProvider_DML does not exist in the CPU package, so the call
+    cannot even compile there and the split has to be made at build time.
+
+    Measured 2026-08-24, that premise does not hold for CUDA on Linux, and the
+    evidence is in the package graph: Microsoft.ML.OnnxRuntime and
+    Microsoft.ML.OnnxRuntime.Gpu.Linux BOTH depend on the same
+    Microsoft.ML.OnnxRuntime.Managed 1.22.1. One managed assembly, one API,
+    AppendExecutionProvider_CUDA present in both. The two packages differ only in
+    what native files they carry.
+
+    So the split moves down a layer, and the native side is where the real
+    constraint lives — also measured rather than assumed:
+
+    - The CPU package's libonnxruntime.so DOES NOT EXPORT
+      OrtSessionOptionsAppendExecutionProvider_CUDA. Dropping the GPU package's
+      330 MB provider library next to it fails with EntryPointNotFoundException.
+      Verified by building exactly that mixture and running it.
+    - A native library can be loaded once per process, and the battery rule wants
+      the provider to change BETWEEN utterances in a daemon that runs for a week.
+      Two libonnxruntime.so files in two directories cannot both be live.
+
+    Both point the same way: ship ONE libonnxruntime.so, the GPU-capable build,
+    and decide the provider at runtime. It costs CPU-only users 1 MB (21 -> 22)
+    and buys a product that can switch providers when the power lead moves.
+
+    SupertonicSdk.cs is COMPILED IN, not referenced — the one file both backends
+    genuinely share, and it cannot live in Core because it is full of ONNX Runtime
+    types. The Windows engine compiles the same source with ORT_DIRECTML defined
+    and gets the DML path; this build gets the CUDA path from the same #if.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>VibeSuperTonic.Onnx.Ort</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Onnx.Ort</RootNamespace>
+    <!-- No Windows types here: the backend is provider-agnostic, not OS-specific. -->
+    <VstPortable>true</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The Linux GPU package, NOT the CPU one and NOT DirectML. Pinned to match the
+      engine's version so every provider tracks the same upstream; see the pin
+      warning in VibeSuperTonic.Engine.csproj before changing it.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.22.1" />
+  </ItemGroup>
+
+  <!--
+    The 330 MB CUDA provider that must not ship is removed in
+    Directory.Build.targets, repo-wide — see the comment there. It cannot be done
+    from here: a target in this project governs this project's output, not the
+    publish of the daemon that references it.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\VibeSuperTonic.Engine\Synth\SupertonicSdk.cs" Link="Shared\SupertonicSdk.cs" />
+  </ItemGroup>
+
+</Project>

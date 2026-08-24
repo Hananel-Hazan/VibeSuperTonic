@@ -2,7 +2,7 @@ using System.Diagnostics;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Core.Text;
-using VibeSuperTonic.Onnx.Cpu;
+using VibeSuperTonic.Onnx.Ort;
 
 // Renders text to a WAV through the real seam: SentenceChunker -> ISynthesizer ->
 // AudioBuffer/WavWriter. Nothing from the Windows engine is referenced.
@@ -41,7 +41,7 @@ var chunks = SentenceChunker.Chunk(Text);
 Console.WriteLine($"chunks      : {chunks.Count} ({string.Join(", ", chunks.Select(c => c.Length))} chars)");
 
 // 2. Render each chunk through the seam.
-using ISynthesizer synth = new CpuSynthesizer(modelsRoot);
+using ISynthesizer synth = new OrtSynthesizer(modelsRoot);
 
 var loadWatch = Stopwatch.StartNew();
 int sampleRate = synth.SampleRate;          // forces the model load

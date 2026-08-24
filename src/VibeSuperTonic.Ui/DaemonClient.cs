@@ -149,6 +149,50 @@ public sealed class DaemonClient
         return line is null ? null : Protocol.TryDecode<Response>(line);
     }
 
+    /// <summary>
+    /// Send one verb that answers more than once — <c>benchmark</c> is the only
+    /// one — reporting each intermediate reply and returning the last.
+    ///
+    /// <para><b>Why this exists rather than a longer timeout on
+    /// <see cref="SendAsync"/>.</b> A sweep is about a minute of the daemon being
+    /// deliberately busy, and a control that goes grey for a minute is
+    /// indistinguishable from one that has hung. The progress replies are the
+    /// difference, and they are already on the wire — <c>vst-ctl benchmark</c>
+    /// reads exactly the same stream.</para>
+    ///
+    /// <para><paramref name="onReply"/> is invoked on a background thread; an
+    /// Avalonia caller must marshal it. Returns null when there is no daemon, or
+    /// when it closed the connection before answering.</para>
+    /// </summary>
+    public async Task<Response?> SendStreamingAsync(
+        Request request, Action<Response> onReply, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(onReply);
+
+        using Socket? socket = Connect();
+        if (socket is null) return null;
+
+        await using var stream = new NetworkStream(socket, ownsSocket: false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
+
+        while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+        {
+            if (Protocol.TryDecode<Response>(line) is not { } reply) continue;
+
+            // Progress replies carry a row and nothing else; the final one carries
+            // the payload, or a failure. That is the shape vst-ctl relies on too,
+            // and it is what lets this loop end without a sentinel message.
+            if (reply.Progress is not null) { onReply(reply); continue; }
+
+            return reply;
+        }
+
+        return null;
+    }
+
     // ------------------------------------------------------------- connecting
 
     private static Socket? Connect()

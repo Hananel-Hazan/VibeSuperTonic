@@ -129,7 +129,7 @@ if (switchRounds > 0)
         foreach (string provider in new[] { "cuda", "cpu" })
         {
             long t = Stopwatch.GetTimestamp();
-            using (var tts = provider == "cuda" ? BuildCuda() : Helper.LoadTextToSpeech(onnxDir, useGpu: false, intraOpThreads: cpuThreads))
+            using (var tts = provider == "cuda" ? BuildCuda() : Helper.LoadTextToSpeech(onnxDir, out _, useGpu: false, intraOpThreads: cpuThreads))
             {
                 double buildMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
                 long r = Stopwatch.GetTimestamp();
@@ -145,7 +145,7 @@ if (switchRounds > 0)
     return 0;
 }
 
-var cpu = Measure("cpu", () => Helper.LoadTextToSpeech(onnxDir, useGpu: false, intraOpThreads: cpuThreads));
+var cpu = Measure("cpu", () => Helper.LoadTextToSpeech(onnxDir, out _, useGpu: false, intraOpThreads: cpuThreads));
 var gpu = Measure("cuda", BuildCuda);
 
 Console.WriteLine();

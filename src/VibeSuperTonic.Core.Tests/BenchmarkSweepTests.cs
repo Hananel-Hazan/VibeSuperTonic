@@ -191,7 +191,7 @@ public class BenchmarkSweepTests
         // stays warm between utterances by design.
         var built = new List<ScriptedSynthesizer>();
         var profile = BenchmarkSweep.Run(
-            Machine(), threads => { var s = new ScriptedSynthesizer(threads, 0); built.Add(s); return s; },
+            Machine(), (threads, _) => { var s = new ScriptedSynthesizer(threads, 0); built.Add(s); return s; },
             Options, candidates: [1, 2]);
 
         Assert.Equal(2, built.Count);
@@ -207,7 +207,7 @@ public class BenchmarkSweepTests
         ScriptedSynthesizer? previous = null;
         bool overlapped = false;
 
-        BenchmarkSweep.Run(Machine(), threads =>
+        BenchmarkSweep.Run(Machine(), (threads, _) =>
         {
             if (previous is { Disposed: false }) overlapped = true;
             previous = new ScriptedSynthesizer(threads, 0);
@@ -224,7 +224,7 @@ public class BenchmarkSweepTests
         // A gap in the table reads as "not tried". Recording why is what makes
         // the difference between a profile that can be argued with and one that
         // quietly omits the interesting case.
-        var profile = BenchmarkSweep.Run(Machine(), threads =>
+        var profile = BenchmarkSweep.Run(Machine(), (threads, _) =>
             threads == 2 ? throw new InvalidOperationException("no session at 2")
                          : new ScriptedSynthesizer(threads, 0),
             Options, candidates: [1, 2, 4]);
@@ -240,7 +240,7 @@ public class BenchmarkSweepTests
     public void A_sweep_where_nothing_works_says_so_rather_than_picking_a_failure()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BenchmarkSweep.Run(
-            Machine(), _ => throw new InvalidOperationException("no models"),
+            Machine(), (_, _) => throw new InvalidOperationException("no models"),
             Options, candidates: [1, 2]));
 
         Assert.Contains("no models", ex.Message);
@@ -251,7 +251,7 @@ public class BenchmarkSweepTests
     {
         var seen = new List<BenchmarkProgress>();
 
-        BenchmarkSweep.Run(Machine(), threads => new ScriptedSynthesizer(threads, 0),
+        BenchmarkSweep.Run(Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0),
             Options, candidates: [1, 2, 4], onProgress: seen.Add);
 
         Assert.Equal(3, seen.Count);
@@ -268,7 +268,7 @@ public class BenchmarkSweepTests
 
         Assert.ThrowsAny<OperationCanceledException>(() => BenchmarkSweep.Run(
             Machine(),
-            threads =>
+            (threads, _) =>
             {
                 if (++built == 2) cts.Cancel();
                 return new ScriptedSynthesizer(threads, 0);
@@ -286,7 +286,7 @@ public class BenchmarkSweepTests
         // exercises timing at all, and it asserts the ordering rather than any
         // number.
         var profile = BenchmarkSweep.Run(
-            Machine(), threads => new ScriptedSynthesizer(threads, threads == 4 ? 2 : 40),
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, threads == 4 ? 2 : 40),
             Options, candidates: [1, 4]);
 
         Assert.Equal(4, profile.Threads);
@@ -303,7 +303,7 @@ public class BenchmarkSweepTests
         // behaviour, and the profile has to say so where someone reading it later
         // will look.
         var profile = BenchmarkSweep.Run(
-            Machine(), threads => new ScriptedSynthesizer(threads, 0, framesPerRender: 22050),
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0, framesPerRender: 22050),
             Options, candidates: [1]);
 
         Assert.Equal(0.5, profile.SampleSeconds, 3);
@@ -318,7 +318,7 @@ public class BenchmarkSweepTests
         // Written into a folder designed to be copied between machines, where a
         // locale-formatted date parses differently on arrival — or not at all.
         var profile = BenchmarkSweep.Run(
-            Machine(), threads => new ScriptedSynthesizer(threads, 0), Options, candidates: [1]);
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0), Options, candidates: [1]);
 
         var parsed = DateTime.Parse(profile.MeasuredUtc, System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.RoundtripKind);
@@ -339,7 +339,7 @@ public class BenchmarkSweepTests
         // Coarse bounds on purpose: this asserts that variance reaches the field at
         // all, not any particular value, because the value is the scheduler's.
         var profile = BenchmarkSweep.Run(
-            Machine(), _ => new ScriptedSynthesizer(1, 0, delays: [0, 60, 0]),
+            Machine(), (_, _) => new ScriptedSynthesizer(1, 0, delays: [0, 60, 0]),
             Options, candidates: [1]);
 
         Assert.True(profile.Table[0].Spread > 0.5,
@@ -350,7 +350,7 @@ public class BenchmarkSweepTests
     public void Runs_that_agree_report_almost_no_spread()
     {
         var profile = BenchmarkSweep.Run(
-            Machine(), _ => new ScriptedSynthesizer(1, 40), Options, candidates: [1]);
+            Machine(), (_, _) => new ScriptedSynthesizer(1, 40), Options, candidates: [1]);
 
         Assert.True(profile.Table[0].Spread < 0.5);
     }
@@ -362,7 +362,7 @@ public class BenchmarkSweepTests
         // it has been changed once already, and a profile that does not say which
         // rule chose it cannot be re-argued a year later.
         var profile = BenchmarkSweep.Run(
-            Machine(), threads => new ScriptedSynthesizer(threads, 0), Options, candidates: [1, 2]);
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0), Options, candidates: [1, 2]);
 
         Assert.Equal(BenchmarkSweep.TieBandFraction, profile.TieBand);
     }
@@ -435,5 +435,89 @@ public class BenchmarkSweepTests
         public Task PreloadAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public void Dispose() => Disposed = true;
+    }
+
+    // ------------------------------------------------------- across providers
+
+    private static BenchmarkRow Gpu(int threads, double ms) =>
+        new($"cuda ({threads})", threads, ExecutionProviders.Cuda, ms, ms / 5000.0, 1.2, ms / 1000.0 * 1.2);
+
+    [Fact]
+    public void A_GPU_that_wins_by_a_mile_is_picked()
+    {
+        // The measured shape on an RTX A2000: RTF 0.180 -> 0.018.
+        var rows = new[] { Row("4", 4, 5080), Row("2", 2, 5180), Gpu(4, 520) };
+
+        Assert.Equal(ExecutionProviders.Cuda, BenchmarkSweep.PickAcross(rows, 20)!.Provider);
+    }
+
+    [Fact]
+    public void A_GPU_that_merely_ties_does_not_earn_its_cost()
+    {
+        // Inside the tie band the CPU keeps it. A GPU costs a 330 MB provider
+        // library, a gigabyte-scale CUDA dependency, VRAM and a laptop battery,
+        // and a dead heat does not buy any of that back.
+        var rows = new[] { Row("4", 4, 5080), Gpu(4, 4600) };
+
+        Assert.Equal(ExecutionProviders.Cpu, BenchmarkSweep.PickAcross(rows, 20)!.Provider);
+    }
+
+    [Fact]
+    public void A_failed_GPU_row_leaves_the_CPU_pick_standing()
+    {
+        var rows = new[]
+        {
+            Row("4", 4, 5080),
+            new BenchmarkRow("cuda (4)", 4, ExecutionProviders.Cuda, 0, 0, 0, 0, Failed: true, Error: "no device"),
+        };
+
+        var pick = BenchmarkSweep.PickAcross(rows, 20)!;
+        Assert.Equal(ExecutionProviders.Cpu, pick.Provider);
+        Assert.Equal(4, pick.Threads);
+    }
+
+    [Fact]
+    public void GPU_rows_are_measured_at_the_thread_count_the_CPU_rows_chose()
+    {
+        // A GPU row still has a CPU side — ORT leaves shape-related and
+        // unassigned nodes there — so measuring it at a thread count the daemon
+        // would never run measures a configuration nobody will use.
+        var asked = new List<(int Threads, string Provider)>();
+
+        var profile = BenchmarkSweep.Run(
+            Machine(),
+            (threads, provider) =>
+            {
+                asked.Add((threads, provider));
+                // 2 is the fastest CPU row here, so the GPU row must be asked for 2.
+                return new ScriptedSynthesizer(threads, threads == 2 ? 2 : 40);
+            },
+            Options, candidates: [1, 2], gpuProviders: [ExecutionProviders.Cuda]);
+
+        Assert.Equal(3, profile.Table.Count);
+        Assert.Equal((2, ExecutionProviders.Cuda), asked[^1]);
+    }
+
+    [Fact]
+    public void Progress_counts_the_GPU_rows_too()
+    {
+        // A progress bar that says 2 of 2 and then keeps going is worse than none.
+        var seen = new List<BenchmarkProgress>();
+
+        BenchmarkSweep.Run(
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0), Options,
+            candidates: [1, 2], onProgress: seen.Add, gpuProviders: [ExecutionProviders.Cuda]);
+
+        Assert.All(seen, p => Assert.Equal(3, p.Total));
+        Assert.Equal([1, 2, 3], seen.Select(p => p.Index));
+    }
+
+    [Fact]
+    public void No_GPU_providers_means_the_sweep_is_exactly_what_it_was()
+    {
+        var profile = BenchmarkSweep.Run(
+            Machine(), (threads, _) => new ScriptedSynthesizer(threads, 0), Options, candidates: [1, 2]);
+
+        Assert.All(profile.Table, r => Assert.Equal(ExecutionProviders.Cpu, r.Provider));
     }
 }

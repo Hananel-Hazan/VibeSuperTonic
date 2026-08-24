@@ -93,8 +93,24 @@ internal static class MachineFacts
     /// to unsubscribe from. Phase 8b's battery rule reads it per utterance on the
     /// same basis.</para>
     /// </summary>
+    /// <summary>
+    /// "ac", "battery" or "unknown", read fresh every time it is asked.
+    ///
+    /// <para>Read per decision rather than watched: it is one file read and it is
+    /// always current, which is why the battery rule needs no D-Bus dependency,
+    /// no polling loop and no daemon of its own.</para>
+    ///
+    /// <para><c>VST_POWER</c> overrides it, for the same reason
+    /// <c>VST_SELECTION</c> overrides the selection source: the behaviour it
+    /// gates — the daemon rebuilding its ONNX session on the CPU when the power
+    /// lead comes out — is otherwise only testable by walking over and unplugging
+    /// a laptop, which is not a test anything can run twice.</para>
+    /// </summary>
     public static string PowerState()
     {
+        if (Environment.GetEnvironmentVariable("VST_POWER") is { Length: > 0 } forced)
+            return forced.Trim().ToLowerInvariant();
+
         try
         {
             const string root = "/sys/class/power_supply";

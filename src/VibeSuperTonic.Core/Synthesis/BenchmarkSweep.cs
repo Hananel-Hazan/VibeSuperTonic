@@ -119,10 +119,11 @@ public static class BenchmarkSweep
     /// <exception cref="InvalidOperationException">Every candidate failed, so there is nothing to pick.</exception>
     public static BenchmarkProfile Run(
         BenchmarkMachine machine,
-        Func<int, ISynthesizer> synthesizerFor,
+        Func<int, string, ISynthesizer> synthesizerFor,
         SynthesisOptions options,
         IReadOnlyList<int>? candidates = null,
         Action<BenchmarkProgress>? onProgress = null,
+        IReadOnlyList<string>? gpuProviders = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(machine);
@@ -130,22 +131,44 @@ public static class BenchmarkSweep
         ArgumentNullException.ThrowIfNull(options);
 
         candidates ??= Candidates(machine.LogicalProcessors);
+        gpuProviders ??= [];
 
-        var rows = new List<BenchmarkRow>(candidates.Count);
+        var rows = new List<BenchmarkRow>(candidates.Count + gpuProviders.Count);
         double sampleSeconds = 0;
+        int total = candidates.Count + gpuProviders.Count;
 
         for (int i = 0; i < candidates.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var (row, seconds) = Measure(candidates[i], synthesizerFor, options, cancellationToken);
+            var (row, seconds) = Measure(
+                candidates[i], ExecutionProviders.Cpu, synthesizerFor, options, cancellationToken);
             rows.Add(row);
             if (seconds > 0) sampleSeconds = seconds;
 
-            onProgress?.Invoke(new BenchmarkProgress(i + 1, candidates.Count, row));
+            onProgress?.Invoke(new BenchmarkProgress(i + 1, total, row));
         }
 
-        var pick = Pick(rows, machine.LogicalProcessors)
+        // GPU rows run at the thread count the CPU rows just chose, not at auto
+        // and not at one. ORT leaves shape-related and unassigned nodes on the CPU
+        // — the Phase 8b spike counted 46 to 80 Memcpy nodes added per graph — so
+        // a GPU row still has a CPU side, and measuring it with a thread count the
+        // daemon would never use measures a configuration nobody will run.
+        int gpuThreads = Pick(rows, machine.LogicalProcessors)?.Threads ?? CpuBudget.Auto;
+
+        for (int i = 0; i < gpuProviders.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var (row, seconds) = Measure(
+                gpuThreads, gpuProviders[i], synthesizerFor, options, cancellationToken);
+            rows.Add(row);
+            if (seconds > 0) sampleSeconds = seconds;
+
+            onProgress?.Invoke(new BenchmarkProgress(candidates.Count + i + 1, total, row));
+        }
+
+        var pick = PickAcross(rows, machine.LogicalProcessors)
             ?? throw new InvalidOperationException(
                 "no configuration could be measured: " +
                 (rows.FirstOrDefault(r => r.Error is not null)?.Error ?? "every candidate failed"));
@@ -162,6 +185,41 @@ public static class BenchmarkSweep
             NotVaried: NotVaried,
             SampleSeconds: sampleSeconds,
             TieBand: TieBandFraction);
+    }
+
+    /// <summary>
+    /// The pick across every provider the sweep measured: the best CPU row, and
+    /// the GPU only when it beats that row by more than the tie band.
+    ///
+    /// <para><b>A GPU has to win, not tie.</b> It costs a 330 MB provider
+    /// library, a gigabyte-scale CUDA dependency, VRAM, and a laptop's battery —
+    /// so a dead heat should leave the machine on the provider that needs none of
+    /// those. Reusing <see cref="TieBandFraction"/> as the margin keeps one number
+    /// answering one question: what counts as a real difference rather than
+    /// measurement noise.</para>
+    ///
+    /// <para>Measured 2026-08-24 on an RTX A2000, this is not a close call — CUDA
+    /// took first audio from 802 ms to 77 ms and RTF from 0.180 to 0.018 — which
+    /// is exactly why the margin is written down now, while nothing depends on
+    /// where it sits.</para>
+    /// </summary>
+    public static BenchmarkRow? PickAcross(IReadOnlyList<BenchmarkRow> rows, int processorCount)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        var cpuPick = Pick(rows.Where(r => r.Provider == ExecutionProviders.Cpu).ToList(), processorCount);
+
+        var gpuPick = rows
+            .Where(r => r.Provider != ExecutionProviders.Cpu && !r.Failed && r.MedianWallMs > 0)
+            .OrderBy(r => r.MedianWallMs)
+            .FirstOrDefault();
+
+        if (cpuPick is null) return gpuPick;
+        if (gpuPick is null) return cpuPick;
+
+        return gpuPick.MedianWallMs < cpuPick.MedianWallMs * (1 - TieBandFraction)
+            ? gpuPick
+            : cpuPick;
     }
 
     /// <summary>
@@ -212,15 +270,16 @@ public static class BenchmarkSweep
     }
 
     private static (BenchmarkRow Row, double SampleSeconds) Measure(
-        int threads, Func<int, ISynthesizer> synthesizerFor, SynthesisOptions options,
-        CancellationToken cancellationToken)
+        int threads, string provider, Func<int, string, ISynthesizer> synthesizerFor,
+        SynthesisOptions options, CancellationToken cancellationToken)
     {
-        string label = threads == CpuBudget.Auto ? "auto" : threads.ToString();
+        string count = threads == CpuBudget.Auto ? "auto" : threads.ToString();
+        string label = provider == ExecutionProviders.Cpu ? count : $"{provider} ({count})";
 
         ISynthesizer? synth = null;
         try
         {
-            synth = synthesizerFor(threads);
+            synth = synthesizerFor(threads, provider);
 
             // Warm-up, discarded. It pays the model load and lets ORT's arena
             // reach steady state, neither of which the user pays per utterance on
@@ -255,7 +314,7 @@ public static class BenchmarkSweep
             return (new BenchmarkRow(
                 Label: label,
                 Threads: threads,
-                Provider: "cpu",
+                Provider: provider,
                 MedianWallMs: medianWall,
                 Rtf: audioSeconds > 0 ? wallSeconds / audioSeconds : 0,
                 AvgCores: wallSeconds > 0 ? medianCpu / wallSeconds : 0,
@@ -275,7 +334,7 @@ public static class BenchmarkSweep
             // cannot build a session at 8 threads still deserves an answer about
             // the seven counts that worked, and the row records why rather than
             // vanishing — a gap in the table reads as "not tried".
-            return (new BenchmarkRow(label, threads, "cpu", 0, 0, 0, 0, Spread: 0,
+            return (new BenchmarkRow(label, threads, provider, 0, 0, 0, 0, Spread: 0,
                 Failed: true, Error: $"{ex.GetType().Name}: {ex.Message}"), 0);
         }
         finally

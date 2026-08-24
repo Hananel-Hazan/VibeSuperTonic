@@ -819,11 +819,21 @@ namespace Supertonic
                     // Continue without DML; opts has only the default CPU provider.
                 }
 #else
-                // Built against the CPU-only ORT package (Linux, or any host without
-                // DirectML). AppendExecutionProvider_DML does not exist in that package,
-                // so the call above cannot even compile — this is a build-time split, not
-                // a runtime one. Callers still pass useGpu; we just have nowhere to put it.
-                Console.WriteLine("DirectML not available in this build — using CPU provider.");
+                // Not DirectML: this build is the Linux GPU package, where the GPU is
+                // CUDA. directMLDevice carries the device ordinal for whichever provider
+                // the build has — the name is DirectML's because the Windows engine calls
+                // it by name and renaming a parameter across a shipping platform to
+                // improve a comment is not a trade worth making.
+                //
+                // DELIBERATELY NOT SWALLOWED, unlike the DML path above. A missing
+                // provider library (the 330 MB pack that does not ship), a driver too
+                // old, or no device at all all throw here, and the caller has to learn
+                // that so it can fall back to CPU *and say which of those happened*. A
+                // GPU path that dies quietly is worse than no GPU path: the symptom is a
+                // hotkey that stopped working, which is the exact shape of the
+                // audio-device loss that hid for five hours.
+                opts.AppendExecutionProvider_CUDA(directMLDevice);
+                Console.WriteLine($"CUDA provider appended (device {directMLDevice})");
 #endif
             }
             else if (!cacheHit)

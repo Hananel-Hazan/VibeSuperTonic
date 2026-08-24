@@ -3,26 +3,35 @@ using Supertonic;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Synthesis;
 
-namespace VibeSuperTonic.Onnx.Cpu;
+namespace VibeSuperTonic.Onnx.Ort;
 
 /// <summary>
-/// <see cref="ISynthesizer"/> over the CPU execution provider.
+/// <see cref="ISynthesizer"/> over one ONNX Runtime execution provider, chosen
+/// when the instance is built.
 ///
 /// Deliberately a fraction of the size of the Windows adapter, and that is the
 /// point. That class is ~600 lines, most of it DirectML device-loss recovery:
 /// TDR detection, a process-local latch that disables the GPU after repeated
 /// losses, a reset channel from the launcher, and a CPU-retry path. None of it
-/// has any meaning without DirectML, and dragging it across was exactly what
-/// R-12 warned about. What is left when you remove it is this: load a session,
-/// render, cancel.
+/// has any meaning here, and dragging it across was exactly what R-12 warned
+/// about. What is left when you remove it is this: load a session, render,
+/// cancel.
 ///
-/// The session is shared across voices because it is the expensive part (~380 MB,
-/// 0.43 s warm on the Mint box); only the small per-voice Style differs.
+/// <para><b>One instance, one provider, for the life of the instance.</b> ORT
+/// binds the provider when the session is created, so switching means building
+/// another of these and dropping the first — a rebuild of about a second, which
+/// is precisely why Phase 8b's battery rule switches BETWEEN utterances and
+/// never inside one.</para>
+///
+/// <para>The session is shared across voices because it is the expensive part
+/// (~380 MB, 0.43 s warm on the development box); only the small per-voice Style
+/// differs.</para>
 /// </summary>
-public sealed class CpuSynthesizer : ISynthesizer
+public sealed class OrtSynthesizer : ISynthesizer
 {
     private readonly string _onnxDir;
     private readonly string _voiceStylesDir;
+    private readonly string _provider;
     private readonly int _intraOpThreads;
     private readonly int _interOpThreads;
 
@@ -45,19 +54,77 @@ public sealed class CpuSynthesizer : ISynthesizer
     private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(30);
 
     /// <param name="modelsRoot">Directory containing <c>onnx/</c> and <c>voice_styles/</c>.</param>
-    /// <param name="intraOpThreads">
-    /// 0 means "let ORT decide", which is the only sane value here. Phase 0
-    /// measured every manual setting on Linux at roughly 2x worse than auto —
-    /// including half-the-cores, which was harmless on Windows. Exposed as a
-    /// parameter for benchmarking, not for users.
+    /// <param name="provider">
+    /// <see cref="ExecutionProviders.Cpu"/> or <see cref="ExecutionProviders.Cuda"/>.
+    /// Anything else is refused here rather than at session build, because "the
+    /// provider name in settings.json was a typo" and "this machine has no GPU"
+    /// deserve different sentences.
     /// </param>
-    public CpuSynthesizer(string modelsRoot, int intraOpThreads = 0, int interOpThreads = 1)
+    /// <param name="intraOpThreads">
+    /// 0 means "let ORT decide". Phase 0 measured every manual setting on Linux at
+    /// roughly 2x worse than auto — and then Phase 8a measured the curve properly
+    /// and found 4 beating auto on the development box, which is why the daemon
+    /// passes a benchmarked number rather than 0. Still applies on the CUDA path:
+    /// ORT leaves shape-related and unassigned nodes on the CPU, and the spike
+    /// counted 46 to 80 Memcpy nodes added per graph.
+    /// </param>
+    public OrtSynthesizer(
+        string modelsRoot,
+        string provider = ExecutionProviders.Cpu,
+        int intraOpThreads = 0,
+        int interOpThreads = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelsRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        if (!ExecutionProviders.IsKnown(provider))
+            throw new ArgumentException(
+                $"unknown execution provider '{provider}'; expected " +
+                $"'{ExecutionProviders.Cpu}' or '{ExecutionProviders.Cuda}'", nameof(provider));
+
         _onnxDir = Path.Combine(modelsRoot, "onnx");
         _voiceStylesDir = Path.Combine(modelsRoot, "voice_styles");
+        _provider = provider;
         _intraOpThreads = intraOpThreads;
         _interOpThreads = interOpThreads;
+    }
+
+    /// <summary>Which provider this instance renders on.</summary>
+    public string Provider => _provider;
+
+    /// <summary>
+    /// Whether the CUDA provider can be initialised on this machine — null when
+    /// it can, and the reason it cannot otherwise.
+    ///
+    /// <para><b>Asked by appending the provider to a throwaway
+    /// <c>SessionOptions</c>, not by looking for files or running
+    /// <c>nvidia-smi</c>.</b> Every failure mode this has to detect lives inside
+    /// that call: the 330 MB provider library absent (the default install), its
+    /// CUDA and cuDNN dependencies unreachable, a driver too old, no device.
+    /// Checking for the file only answers the first, and answering three of four
+    /// questions confidently is how a machine ends up reporting "GPU available"
+    /// and then falling back on every utterance.</para>
+    ///
+    /// <para>Costs a library load — tens of milliseconds with the pack absent,
+    /// under a second with it present — and no CUDA context, which is created
+    /// with the session. Call it once at startup and remember the answer: a GPU
+    /// does not appear halfway through a login session.</para>
+    /// </summary>
+    public static string? ProbeCuda()
+    {
+        try
+        {
+            using var probe = new SessionOptions();
+            probe.AppendExecutionProvider_CUDA(0);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // EntryPointNotFoundException when the runtime was built without CUDA
+            // at all, OnnxRuntimeException when the provider library or its
+            // dependencies cannot be loaded. Both are measured cases — see the
+            // csproj — and both are reported the same way: one sentence.
+            return $"{ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}";
+        }
     }
 
     public int SampleRate => EnsureLoaded().SampleRate;
@@ -157,13 +224,21 @@ public sealed class CpuSynthesizer : ISynthesizer
             throw new DirectoryNotFoundException(
                 $"ONNX model directory not found: {_onnxDir}. Models download on first run.");
 
-        // gpuActive is discarded here and always false: this is the CPU-only
-        // backend, built against the ORT package that has no DirectML in it at
-        // all (R-13), so there is no answer for it to carry. The out parameter
-        // exists for the Windows engine, where "GPU requested" and "GPU actually
-        // appended" are genuinely different answers.
+        // gpuActive is discarded: whether CUDA was actually appended is a
+        // question the daemon answers with its own probe, and a failure here
+        // throws rather than quietly landing on the CPU.
+        //
+        // useGpu is the SDK's one provider switch, and on this build it means
+        // CUDA — see the #else branch in SupertonicSdk.LoadTextToSpeech. It also
+        // bypasses the optimised-graph cache, which is correct and not incidental:
+        // those graphs are optimised for the CPU provider and mean nothing to a
+        // GPU one.
+        //
+        // A CUDA failure throws out of here rather than falling back silently. The
+        // daemon catches it, rebuilds on the CPU provider and logs the reason,
+        // because only the daemon has somewhere to say it.
         _tts = Helper.LoadTextToSpeech(
-            _onnxDir, out _, useGpu: false,
+            _onnxDir, out _, useGpu: _provider == ExecutionProviders.Cuda,
             intraOpThreads: _intraOpThreads, interOpThreads: _interOpThreads);
         return _tts;
     }

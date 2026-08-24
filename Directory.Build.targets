@@ -30,4 +30,34 @@
     <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
   </PropertyGroup>
 
+  <!--
+    THE 330 MB THAT MUST NOT SHIP — Phase 8b.
+
+    VibeSuperTonic.Onnx.Ort links Microsoft.ML.OnnxRuntime.Gpu.Linux for one
+    reason: its libonnxruntime.so exports the CUDA entry point and the CPU
+    package's does not (measured — the mixture fails with
+    EntryPointNotFoundException). What comes with it is
+    libonnxruntime_providers_cuda.so at 330 MB, against a 51 MB archive, and it
+    is useless without the CUDA and cuDNN that build/install-gpu.sh fetches
+    alongside it. So the pack is opt-in and these two files are removed.
+
+    REPO-WIDE RATHER THAN IN THE BACKEND CSPROJ, and that is the whole reason
+    this lives here: a target inside Onnx.Ort governs Onnx.Ort's own output, not
+    the publish of the daemon that references it. The first version of this was
+    in the csproj, it looked correct, `dotnet build` was clean — and
+    build/pack-tar.sh caught 330 MB sitting in the composed tree. Assertion 4
+    there is the guard that fires if this stops working.
+
+    Removed from the publish list rather than from the package reference,
+    because the reference is what puts the working libonnxruntime.so in place.
+  -->
+  <Target Name="VstRemoveOptionalGpuProviders" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish
+        Remove="@(ResolvedFileToPublish)"
+        Condition="'%(Filename)' == 'libonnxruntime_providers_cuda'
+                or '%(Filename)' == 'libonnxruntime_providers_tensorrt'" />
+    </ItemGroup>
+  </Target>
+
 </Project>

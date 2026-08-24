@@ -109,12 +109,53 @@ public sealed class LinuxSettings
     /// <para><b>Only consulted when there is no usable measurement.</b>
     /// <c>vst-ctl benchmark</c> writes <c>data/benchmark.json</c>, and a profile
     /// that still describes this machine wins over this percentage — see
-    /// <see cref="VibeSuperTonic.Core.Synthesis.CpuProfileDecision"/>. This
+    /// <see cref="VibeSuperTonic.Core.Synthesis.ExecutionDecision"/>. This
     /// remains the answer for a machine that has never been swept, and the
     /// fallback for one whose profile no longer applies. <c>vst-ctl config</c>
     /// reports which of the two is in force and why.</para>
     /// </summary>
     public int MaxCpuPercent { get; set; } = 20;
+
+    /// <summary>
+    /// Which execution provider to render on: <c>auto</c>, <c>cpu</c> or
+    /// <c>gpu</c>. Default <c>auto</c>.
+    ///
+    /// <para><c>auto</c> means "what the benchmark chose, subject to the battery
+    /// rule" — so on a machine that has never been swept, or one with no GPU
+    /// provider pack installed, it means CPU. The two explicit values are a
+    /// person overriding a measurement, which is allowed: someone permanently
+    /// plugged into a dock can set <c>gpu</c> and mean it.</para>
+    ///
+    /// <para><b>It cannot conjure a GPU.</b> With no provider pack, no driver or
+    /// no device, <c>gpu</c> still renders on the CPU — and <c>config</c> says
+    /// which of those it was rather than reporting a setting back as if it were
+    /// an outcome.</para>
+    ///
+    /// <para>Read per utterance, unlike <see cref="MaxCpuPercent"/>: the provider
+    /// is bound to the ONNX session, and Phase 8b builds a new session between
+    /// utterances precisely so this does not need a restart.</para>
+    ///
+    /// <para><b>Linux-only, and absent from the Windows engine's settings type.</b>
+    /// It survives a round trip on Windows through that type's own extension-data
+    /// dictionary, the same mechanism <see cref="Extra"/> provides here.</para>
+    /// </summary>
+    public string Provider { get; set; } = ProviderPreference.Auto;
+
+    /// <summary>
+    /// Use the GPU while running on battery. Off by default.
+    ///
+    /// <para><b>Requested explicitly, and it is the right default.</b> A discrete
+    /// GPU on a laptop is the difference between a machine that lasts an
+    /// afternoon and one that does not, and nothing is lost by switching: the CPU
+    /// path renders about five times faster than real time, so the reading does
+    /// not stutter — it only starts a little later.</para>
+    ///
+    /// <para>Checked at the start of an utterance and never during one. Changing
+    /// provider means disposing the ONNX session and building another, roughly a
+    /// second, and doing that mid-sentence to chase a power event the user did
+    /// not notice would be indefensible.</para>
+    /// </summary>
+    public bool GpuOnBattery { get; set; }
 
     /// <summary>
     /// Every key this type does not declare, carried through unchanged.

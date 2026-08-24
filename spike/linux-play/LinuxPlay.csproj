@@ -34,7 +34,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
     <ProjectReference Include="..\..\src\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
-    <ProjectReference Include="..\..\src\VibeSuperTonic.Onnx.Cpu\VibeSuperTonic.Onnx.Cpu.csproj" />
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Onnx.Ort\VibeSuperTonic.Onnx.Ort.csproj" />
   </ItemGroup>
 
 </Project>

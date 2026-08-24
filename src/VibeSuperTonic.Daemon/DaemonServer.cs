@@ -37,8 +37,17 @@ public sealed class DaemonServer : IDisposable
     private readonly ConcurrentDictionary<Guid, Subscriber> _subscribers = new();
     private volatile bool _modelLoaded;
 
-    private readonly Func<int, ISynthesizer>? _synthesizerFor;
-    private readonly CpuProfileDecision _cpuProfile;
+    private readonly Func<int, string, ISynthesizer>? _synthesizerFor;
+    private readonly ProviderSwitchingSynthesizer? _switch;
+
+    /// <summary>
+    /// What is in force right now — asked of the switch rather than remembered,
+    /// because it changes between utterances as of Phase 8b. A field holding the
+    /// startup answer would report "CUDA" for the rest of the session to a user
+    /// who unplugged their laptop an hour ago.
+    /// </summary>
+    private ExecutionDecision Execution =>
+        _switch?.Decision ?? new ExecutionDecision(CpuBudget.Auto, "cpu", "not recorded", FromProfile: false);
 
     // 0 idle, 1 sweeping. A second benchmark would measure the first one.
     private int _benchmarking;
@@ -58,20 +67,21 @@ public sealed class DaemonServer : IDisposable
     /// failure to the caller. Null in tests that drive the session directly.
     /// </param>
     /// <param name="synthesizerFor">
-    /// Builds a synthesizer at a given intra-op thread count, for
+    /// Builds a synthesizer for a given intra-op thread count and provider, for
     /// <see cref="RequestVerb.Benchmark"/>. Null disables the verb — which is the
     /// right answer for a test that has no models, and the reason the failure is
     /// a sentence rather than a NullReferenceException.
     /// </param>
-    /// <param name="cpuProfile">
-    /// The thread count this daemon's session was actually built with, and where
-    /// it came from. Decided in <c>Program</c> before the session exists, because
-    /// ORT sizes its pool at session construction and nothing after that can move
-    /// it.
+    /// <param name="providerSwitch">
+    /// The synthesizer the session speaks through, which owns the provider and
+    /// thread count in force and can change them between utterances. Null in
+    /// tests that drive a fixed synthesizer directly, where "not recorded" is the
+    /// honest answer to <c>config</c>.
     /// </param>
     public DaemonServer(DaemonOptions options, HostConfig config, ISynthesizer synth,
         SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null,
-        Func<int, ISynthesizer>? synthesizerFor = null, CpuProfileDecision? cpuProfile = null)
+        Func<int, string, ISynthesizer>? synthesizerFor = null,
+        ProviderSwitchingSynthesizer? providerSwitch = null)
     {
         _options = options;
         _config = config;
@@ -80,8 +90,7 @@ public sealed class DaemonServer : IDisposable
         _selection = selection ?? new NullSelectionSource();
         _sink = sink;
         _synthesizerFor = synthesizerFor;
-        _cpuProfile = cpuProfile
-            ?? new CpuProfileDecision(CpuBudget.Auto, "cpu", "not recorded", FromProfile: false);
+        _switch = providerSwitch;
 
         _session.Emitted += OnSessionEvent;
     }
@@ -493,9 +502,9 @@ public sealed class DaemonServer : IDisposable
         _config.Settings.MinChunkChars,
         _config.Settings.InterChunkSilenceMs,
         _config.Notes,
-        _cpuProfile.Provider,
-        _cpuProfile.Threads,
-        _cpuProfile.Reason,
+        Execution.Provider,
+        Execution.Threads,
+        Execution.Reason,
         BenchmarkSnapshot());
 
     /// <summary>
@@ -521,8 +530,8 @@ public sealed class DaemonServer : IDisposable
         // staleness: a profile measured five minutes ago is perfectly valid and
         // still not in force until the daemon restarts.
         bool inForce = staleness.Count == 0
-                       && stored.Threads == _cpuProfile.Threads
-                       && string.Equals(stored.Provider, _cpuProfile.Provider, StringComparison.Ordinal);
+                       && stored.Threads == Execution.Threads
+                       && string.Equals(stored.Provider, Execution.Provider, StringComparison.Ordinal);
 
         var reasons = staleness.Count > 0
             ? staleness
@@ -623,6 +632,7 @@ public sealed class DaemonServer : IDisposable
                 _synthesizerFor,
                 options,
                 candidates: null,
+                gpuProviders: _switch?.SweepableGpuProviders,
                 onProgress: p =>
                 {
                     // Nothing else writes to this connection — it is not a
@@ -644,18 +654,29 @@ public sealed class DaemonServer : IDisposable
                 notes.Add($"could not save the profile to {path}: {saveError}. " +
                           "The measurement above is still correct; it just will not survive a restart.");
 
+            // Applied here rather than at the next start. The session has been
+            // idle since the guard above, and the switch rebuilds when the answer
+            // changes — so a sweep the user waited a minute for is in force by the
+            // time it prints, which is what everybody assumed it already did.
+            //
+            // It can still legitimately NOT be in force: the profile may have
+            // picked the GPU on a machine that has since been unplugged. Reporting
+            // the decision rather than the profile is what tells those apart.
+            bool rebuilt = _switch?.ReevaluateWhenIdle() ?? false;
+
             bool appliesNow =
-                profile.Threads == _cpuProfile.Threads &&
-                string.Equals(profile.Provider, _cpuProfile.Provider, StringComparison.Ordinal);
+                profile.Threads == Execution.Threads &&
+                string.Equals(profile.Provider, Execution.Provider, StringComparison.Ordinal);
 
-            if (!appliesNow)
+            if (appliesNow && rebuilt)
+                notes.Add("applied now: the daemon rebuilt its session on this profile, " +
+                          "so the next press uses it. No restart needed.");
+            else if (!appliesNow)
                 notes.Add(
-                    $"the running daemon is using {Describe(_cpuProfile.Threads)} ({_cpuProfile.Reason}). " +
-                    "ORT sizes its thread pool when the session is built, so this profile applies " +
-                    "the next time the daemon starts — run `vst-ctl shutdown` to apply it now, " +
-                    "and the next hotkey press will start a daemon that uses it.");
+                    $"the daemon is running {Execution.Describe()} rather than what this sweep picked. " +
+                    "That is the settings and the power lead having their say — see `vst-ctl config`.");
 
-            Log($"benchmark: picked {Describe(profile.Threads)}" +
+            Log($"benchmark: picked {profile.Provider} {Describe(profile.Threads)}" +
                 $"{(saved ? $", saved to {path}" : ", not saved")}");
 
             await WriteAsync(writer, new Response
@@ -700,7 +721,11 @@ public sealed class DaemonServer : IDisposable
             _session.State, _session.IsPaused, _modelLoaded,
             EffectiveVoice, EffectiveLanguage, _options.Version,
             _session.CurrentText, at?.SourceOffset, at?.SourceLength,
-            TrayStatus?.Invoke());
+            TrayStatus?.Invoke(),
+            // Asked of the switch every time rather than cached: it is the one
+            // status field that changes without anything being spoken, which is
+            // the whole point of the battery rule.
+            _switch is null ? null : Execution.Describe());
     }
 
     /// <summary>
@@ -940,6 +965,18 @@ public sealed class DaemonServer : IDisposable
     private Response StartSpeaking(string text, Request request, string? notice = null)
     {
         if (NotReadyToSpeak() is { } refusal) return refusal;
+
+        // THE START OF AN UTTERANCE, which is the only moment a provider may
+        // change. The power lead may have moved, settings.json may have been
+        // edited, a benchmark may have been written — this is where all three are
+        // noticed, and it is a no-op that costs one file read when none of them
+        // has. It does nothing at all unless the session is idle, so the answer
+        // cannot change underneath a render already in flight.
+        //
+        // Before Speak rather than after: rebuilding takes about a second, and
+        // paying it after the session has begun scheduling boundaries would put
+        // the highlight a second behind the audio for the first chunk.
+        _switch?.ReevaluateWhenIdle();
 
         var options = _config.Synthesis(
             request.Voice ?? _options.VoiceOverride,

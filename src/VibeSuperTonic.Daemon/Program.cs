@@ -9,7 +9,7 @@ using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Daemon;
 using VibeSuperTonic.Linux.Audio;
-using VibeSuperTonic.Onnx.Cpu;
+using VibeSuperTonic.Onnx.Ort;
 
 // vibesupertonicd — holds the warm model for the life of the login session.
 //
@@ -105,6 +105,13 @@ string modelsRoot = string.IsNullOrWhiteSpace(modelsArg)
 // a user files a report about.
 DaemonLog.Initialize(dataDir);
 
+// BEFORE ANY ONNX RUNTIME CALL, and before the socket exists. If a GPU provider
+// pack is installed this replaces the process with itself, with the pack's CUDA
+// libraries on the loader's path — the only arrangement measured not to corrupt
+// the heap at exit. Returns immediately when there is no pack, which is every
+// ordinary install.
+GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.BaseDir, DaemonLog.Write);
+
 // Load whatever the last usage left in the folder, before anything can speak.
 // This is the "first run picks up where it left off" half of being portable:
 // with no config read, a portable install spoke with built-in defaults and
@@ -126,33 +133,74 @@ if (!Directory.Exists(Path.Combine(modelsRoot, "onnx")))
 
 var options = new DaemonOptions(voice, language, Version: version);
 
-// Capped rather than left to ORT, which sizes its pool to every core and makes
-// the desktop stutter for the length of each read. Startup-only: ORT builds the
-// thread pool with the session, so `reload` cannot move it — which is also why a
-// benchmark run at 11:00 governs the daemon started at 12:00 and not the one
-// that measured it.
+// HOW MANY THREADS, AND ON WHAT. Capped rather than left to ORT, which sizes its
+// pool to every core and makes the desktop stutter for the length of each read.
 //
 // A stored measurement beats the percentage whenever it still describes this
 // machine, because the percentage is a guess and this is not: the cost curve is
 // not monotonic, so a share of the machine cannot be turned into the right
 // thread count by arithmetic. `vst-ctl benchmark` is what writes the profile and
 // `vst-ctl config` reports which of the two is in force, with its reason.
+//
+// This is the decision the FIRST session is built from. It is not the last word
+// any more: ProviderSwitchingSynthesizer asks again before each utterance, which
+// is what lets the battery rule, an edited Provider setting and a freshly
+// written benchmark take effect without a restart. Until Phase 8b that was
+// impossible and this comment said so — ORT does size its pool at session
+// construction, and the answer turned out to be building another session rather
+// than living with the first.
+//
+// Assigned once the session exists, which is after the synthesizer it speaks
+// through — the switch asks "is anything in flight" and the answer before there
+// is a session to ask is idle, which is exactly right for the startup window.
+Func<SpeechStateProbe>? sessionState = null;
+
+// Asked once, here, and remembered. The probe loads the CUDA provider library
+// and reports one sentence when it cannot — the default install has no provider
+// pack, so "cannot" is the ordinary answer rather than an error, and the daemon
+// logs which it got because "why is my GPU idle" needs somewhere to look.
+string? gpuUnavailable = OrtSynthesizer.ProbeCuda();
+DaemonLog.Write(gpuUnavailable is null
+    ? "gpu: CUDA provider available"
+    : $"gpu: CUDA unavailable — {gpuUnavailable}");
+
 var storedProfile = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(dataDir));
-var cpuProfile = CpuProfileDecision.Decide(
+var machineNow = MachineFacts.Current(modelsRoot, config.Settings.TotalStep,
+    voice ?? config.Settings.DefaultVoice, language ?? config.Settings.Language);
+var startupDecision = ExecutionDecision.Decide(
     storedProfile,
-    MachineFacts.Current(modelsRoot, config.Settings.TotalStep,
-        voice ?? config.Settings.DefaultVoice, language ?? config.Settings.Language),
+    machineNow,
     config.Settings.MaxCpuPercent,
-    Environment.ProcessorCount);
+    Environment.ProcessorCount,
+    config.Settings.Provider,
+    gpuUnavailable,
+    machineNow.PowerState,
+    config.Settings.GpuOnBattery);
 
-int intraOp = cpuProfile.Threads;
-DaemonLog.Write($"version {version}, inference {cpuProfile.Describe()} of {Environment.ProcessorCount} logical processors");
+DaemonLog.Write($"version {version}, inference {startupDecision.Describe()} " +
+                $"of {Environment.ProcessorCount} logical processors, power {machineNow.PowerState}");
 
-// The factory the benchmark verb sweeps with — the same constructor the daemon's
-// own session uses, so a row measures what a restart would actually get.
-Func<int, ISynthesizer> synthesizerFor = threads => new CpuSynthesizer(modelsRoot, intraOpThreads: threads);
+// The factory the benchmark verb sweeps with, and the one the provider switch
+// rebuilds through — the same constructor the daemon's own session uses, so a
+// row measures what the daemon would actually get.
+Func<int, string, ISynthesizer> synthesizerFor =
+    (threads, provider) => new OrtSynthesizer(modelsRoot, provider, intraOpThreads: threads);
 
-using ISynthesizer synth = new CpuSynthesizer(modelsRoot, intraOpThreads: intraOp);
+// The session speaks through the switch, not through a fixed backend: the
+// battery rule, an edited Provider setting and a freshly written benchmark all
+// take effect on the next utterance rather than the next daemon start. It owns
+// the inner synthesizer's lifetime, which is why only this one is `using`.
+ProviderSwitchingSynthesizer? switcher = null;
+using ISynthesizer synth = switcher = new ProviderSwitchingSynthesizer(
+    config,
+    startupDecision,
+    synthesizerFor(startupDecision.Threads, startupDecision.Provider),
+    synthesizerFor,
+    gpuUnavailable,
+    () => sessionState?.Invoke() ?? SpeechStateProbe.Idle,
+    DaemonLog.Write,
+    voice,
+    language);
 
 // Opened on the first request that needs to play, not here. Opening here meant a
 // machine whose audio server was unreachable got an unhandled exception and a
@@ -162,6 +210,7 @@ using ISynthesizer synth = new CpuSynthesizer(modelsRoot, intraOpThreads: intraO
 // the same fix: start anyway, and let the speak path say what is wrong.
 using var sink = new LazyAudioSink(44100, () => new PulseAudioSink(44100, "VibeSuperTonic"));
 var session = new SpeechSession(synth, sink, config.SessionOptions);
+sessionState = () => session.State == SpeechState.Idle ? SpeechStateProbe.Idle : SpeechStateProbe.Busy;
 // ClipboardFallback is read once here rather than per capture: a reload can
 // change it, but the selection source is built with the daemon, and a hotkey
 // that changes behaviour halfway through a session is worse than one that needs
@@ -200,7 +249,7 @@ DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1
 using var server = new DaemonServer(
     options, config, synth, session,
     selectionSource, sink,
-    synthesizerFor, cpuProfile);
+    synthesizerFor, switcher);
 
 using var lifetime = new CancellationTokenSource();
 

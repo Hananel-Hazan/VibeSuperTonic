@@ -15,7 +15,7 @@
   <Folder Name="/src/">
     <Project Path="src/VibeSuperTonic.Core/VibeSuperTonic.Core.csproj" />
     <Project Path="src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj" />
-    <Project Path="src/VibeSuperTonic.Onnx.Cpu/VibeSuperTonic.Onnx.Cpu.csproj" />
+    <Project Path="src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj" />
     <Project Path="src/VibeSuperTonic.Linux.Audio/VibeSuperTonic.Linux.Audio.csproj" />
     <Project Path="src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />
     <Project Path="src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj" />
@@ -30,5 +30,6 @@
     <Project Path="spike/avalonia-primary/AvaPrimary.csproj" />
     <Project Path="spike/avalonia-bigtext/BigText.csproj" />
     <Project Path="spike/wayland-selection/WlSel.csproj" />
+    <Project Path="spike/gpu-cuda/GpuSpike.csproj" />
   </Folder>
 </Solution>

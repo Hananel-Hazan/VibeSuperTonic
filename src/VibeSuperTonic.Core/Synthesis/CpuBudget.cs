@@ -42,7 +42,7 @@ namespace VibeSuperTonic.Core.Synthesis;
 /// region. The default here is correct for the machine it was measured on and is
 /// a guess everywhere else, so the knee is measured per machine by
 /// <c>vst-ctl benchmark</c> (<see cref="BenchmarkSweep"/>) and recorded in
-/// <c>data/benchmark.json</c>. <see cref="CpuProfileDecision.Decide"/> prefers
+/// <c>data/benchmark.json</c>. <see cref="ExecutionDecision.Decide"/> prefers
 /// that measurement whenever it still describes the machine and falls back to
 /// this percentage when it does not — a machine that has never been swept, or one
 /// whose profile arrived with a copied folder.</para>

@@ -27,7 +27,25 @@ public sealed class TuneTab : UserControl
     private readonly DaemonClient _client;
     private readonly TextBlock _status = Ui.Label("");
     private readonly Dictionary<string, TextBox> _fields = [];
+    private readonly TextBlock _benchmarkStatus = Ui.Label("");
+    private readonly TextBlock _inForce = Ui.Label("");
+    private readonly Button _benchmark;
     private readonly CheckBox _clipboardFallback = new() { Content = "Fall back to the clipboard when nothing is selected" };
+
+    /// <summary>
+    /// auto / cpu / gpu. Not a text box, because there are exactly three answers
+    /// and a typo in this one silently means auto.
+    /// </summary>
+    private readonly ComboBox _provider = new()
+    {
+        Width = 120,
+        ItemsSource = new[] { "auto", "cpu", "gpu" },
+    };
+
+    private readonly CheckBox _gpuOnBattery = new()
+    {
+        Content = "Keep using the GPU on battery",
+    };
 
     private string? _settingsPath;
 
@@ -67,7 +85,11 @@ public sealed class TuneTab : UserControl
             grid.Children.Add(Row(label, box, hint));
         }
 
+        grid.Children.Add(Row("Execution provider", _provider,
+            "auto follows the benchmark. gpu needs the optional provider pack — without it, "
+            + "auto and gpu both mean CPU, and the line below says so."));
         grid.Children.Add(_clipboardFallback);
+        grid.Children.Add(_gpuOnBattery);
 
         var save = new Button { Content = "Save", HorizontalAlignment = HorizontalAlignment.Left };
         save.Click += async (_, _) => await SaveAsync();
@@ -75,16 +97,16 @@ public sealed class TuneTab : UserControl
         var revert = new Button { Content = "Revert", HorizontalAlignment = HorizontalAlignment.Left };
         revert.Click += async (_, _) => await RefreshAsync();
 
-        // Ships disabled, with the note. `vst-ctl benchmark` exists and works
-        // headless; wiring this button is a Phase 8 exit criterion, because
-        // parity does not permit a dead control to reach v1 — and a control that
-        // silently does nothing is worse than one that says why.
-        var benchmark = new Button
+        // WIRED IN PHASE 8B, and it was an exit criterion: parity does not
+        // permit a dead control to reach v1. It calls the same verb `vst-ctl
+        // benchmark` does — not a private path into the daemon — so the window
+        // and the terminal cannot disagree about what a measurement is.
+        _benchmark = new Button
         {
             Content = "Measure this machine…",
-            IsEnabled = false,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
+        _benchmark.Click += async (_, _) => await BenchmarkAsync(force: false);
 
         Content = new ScrollViewer
         {
@@ -100,9 +122,18 @@ public sealed class TuneTab : UserControl
                 },
                 _status,
                 new Separator(),
-                benchmark,
-                Ui.Label("Disabled until Phase 8 wires it. The measurement itself works today: "
-                       + "run `vst-ctl benchmark`, then `vst-ctl shutdown` to apply it.")),
+                _inForce,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children = { _benchmark },
+                },
+                _benchmarkStatus,
+                Ui.Label("About a minute. It renders a fixed sample at every thread count worth "
+                       + "trying — and on each GPU provider this machine can actually use — three "
+                       + "times each, then keeps the whole table in data/benchmark.json. The daemon "
+                       + "picks the result up on the next thing you ask it to read; no restart.")),
         };
 
         AttachedToVisualTree += async (_, _) => await RefreshAsync();
@@ -171,9 +202,26 @@ public sealed class TuneTab : UserControl
         _fields["InterChunkSilenceMs"].Watermark = c.InterChunkSilenceMs.ToString(CultureInfo.InvariantCulture);
 
         _clipboardFallback.IsChecked = root.Bool("ClipboardFallback") ?? false;
+        _gpuOnBattery.IsChecked = root.Bool("GpuOnBattery") ?? false;
+        _provider.SelectedItem = root.String("Provider") is { Length: > 0 } p
+                                 && new[] { "auto", "cpu", "gpu" }.Contains(p)
+            ? p
+            : "auto";
 
         _status.Text = $"read from {_settingsPath}"
                      + (c.DataDirWritable ? "" : " — this data directory is NOT writable, so a save will fail");
+
+        // The daemon's answer, not the file's. "cuda (benchmark 2026-08-24)" and
+        // "cpu, 2 threads (on battery, benchmark 2026-08-24)" are the same
+        // profile reporting two different outcomes, and the second one is a
+        // question the user would otherwise ask by unplugging things and
+        // guessing.
+        string threads = c.IntraOpThreads == 0 ? "auto" : $"{c.IntraOpThreads} threads";
+        _inForce.Text = $"In force now: {c.Provider}, {threads} ({c.ThreadsReason})."
+                      + (c.Benchmark is { } b
+                          ? $" Last measured {b.MeasuredUtc[..Math.Min(10, b.MeasuredUtc.Length)]}"
+                            + (b.Applied ? "." : $" — not applied: {string.Join("; ", b.Staleness)}.")
+                          : " This machine has never been measured.");
     }
 
     private async Task SaveAsync()
@@ -208,6 +256,12 @@ public sealed class TuneTab : UserControl
         }
 
         root.Set("ClipboardFallback", JsonValue.Create(_clipboardFallback.IsChecked == true));
+        root.Set("GpuOnBattery", JsonValue.Create(_gpuOnBattery.IsChecked == true));
+
+        // Written even when it is "auto", which is the default: it is a setting a
+        // person went looking for, and a key that vanishes when set back to its
+        // default reads as a save that did not take.
+        root.Set("Provider", JsonValue.Create((string)(_provider.SelectedItem ?? "auto")));
 
         try { SettingsFile.Write(_settingsPath, root); }
         catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
@@ -226,6 +280,98 @@ public sealed class TuneTab : UserControl
                          + $"{after.TotalStep} steps, chunks {after.MinChunkChars}–{after.MaxChunkChars}, "
                          + $"{after.InterChunkSilenceMs} ms between them."
                          + (after.Notes.Count > 0 ? " " + string.Join(" ", after.Notes) : "");
+    }
+
+    /// <summary>
+    /// Run the sweep, showing each row as it lands.
+    ///
+    /// <para><b>The refusals are the interesting part.</b> The daemon declines to
+    /// measure a machine that is busy, or one that is speaking, because a sweep
+    /// run then records whatever else was running and stamps it with a timestamp
+    /// as though it were sound. Those come back as ordinary failures with a
+    /// sentence, and the sentence is shown verbatim rather than replaced with
+    /// "benchmark failed" — the load guard in particular is one the user can
+    /// answer, either by waiting or by insisting.</para>
+    /// </summary>
+    private async Task BenchmarkAsync(bool force)
+    {
+        _benchmark.IsEnabled = false;
+        _benchmarkStatus.Text = force
+            ? "measuring anyway…"
+            : "measuring… this takes about a minute, and the daemon cannot speak while it runs.";
+
+        try
+        {
+            var reply = await _client.SendStreamingAsync(
+                new Request { Verb = RequestVerb.Benchmark, Force = force ? true : null },
+                progress =>
+                {
+                    if (progress.Progress is not { } p) return;
+
+                    // Off the socket's thread and onto the UI's. Avalonia controls
+                    // are single-threaded and this is the one place in the window
+                    // where something else is talking.
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        _benchmarkStatus.Text = p.Row.Failed
+                            ? $"{p.Index} of {p.Total}: {p.Row.Label} could not be measured ({p.Row.Error})"
+                            : $"{p.Index} of {p.Total}: {p.Row.Label} — "
+                              + $"{p.Row.MedianWallMs:F0} ms, RTF {p.Row.Rtf:F3}, "
+                              + $"{p.Row.AvgCores:F1} cores busy");
+                });
+
+            if (reply is null)
+            {
+                _benchmarkStatus.Text = "no daemon answered, so nothing was measured.";
+                return;
+            }
+
+            if (!reply.Ok)
+            {
+                _benchmarkStatus.Text = reply.Error ?? "the benchmark failed without saying why.";
+
+                // Only the load guard can be overridden, and only deliberately.
+                // A second button beats a checkbox nobody reads before clicking.
+                if (!force && (reply.Error?.Contains("busy") ?? false))
+                {
+                    _benchmarkStatus.Text += " A result measured now is worth less; measure anyway?";
+                    var anyway = new Button
+                    {
+                        Content = "Measure anyway",
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                    };
+                    anyway.Click += async (_, _) =>
+                    {
+                        ((StackPanel)_benchmark.Parent!).Children.Remove(anyway);
+                        await BenchmarkAsync(force: true);
+                    };
+                    ((StackPanel)_benchmark.Parent!).Children.Add(anyway);
+                }
+                return;
+            }
+
+            if (reply.Benchmark is not { } result)
+            {
+                _benchmarkStatus.Text = "the daemon ended the sweep without a result.";
+                return;
+            }
+
+            string picked = result.Profile.Threads == 0 ? "auto" : $"{result.Profile.Threads} threads";
+            _benchmarkStatus.Text =
+                $"measured: {result.Profile.Provider}, {picked}"
+                + (result.Profile.Winner is { } w ? $" — RTF {w.Rtf:F3}, {w.AvgCores:F1} cores busy" : "")
+                + (result.Saved ? $". Saved to {result.Path}." : ". NOT saved — this install is read-only.")
+                + (result.Notes.Count > 0 ? " " + string.Join(" ", result.Notes) : "");
+
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            _benchmarkStatus.Text = $"the sweep could not be run: {ex.Message}";
+        }
+        finally
+        {
+            _benchmark.IsEnabled = true;
+        }
     }
 
     private static JsonNode? Text(TextBox box) =>
