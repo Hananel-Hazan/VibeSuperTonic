@@ -1035,18 +1035,35 @@ proves this stack has opinions about lifetimes.
 | --- | --- |
 | `benchmark` completes in about a minute and reproduces itself | **Held.** Eight rows now, seven CPU and one CUDA, ~40 s |
 | No GPU, and a GPU with a broken driver, both benchmark cleanly to a CPU profile | **Done, both halves.** The broken half was measured by hiding `libcudnn.so.9` from an installed pack: the probe fails, the daemon says so, the sweep runs seven CPU rows and exits 0 |
-| Unplugging changes the provider on the next utterance, visible in `status`, no glitch in the utterance in progress | **Done through `VST_POWER`**, which is a diagnosis hook of the same family as `VST_SELECTION` and exists because the alternative is a test nobody can run twice. `status` grew an `Inference` field. **The physical unplug is not yet done** — see below |
+| Unplugging changes the provider on the next utterance, visible in `status`, no glitch in the utterance in progress | **Done, and the physical unplug is done too — 2026-08-24.** `VST_POWER` remains the repeatable half, a diagnosis hook of the same family as `VST_SELECTION`; `status` grew an `Inference` field. [What the real lead did](#battery-verified) |
 | The profile survives a portable-folder copy as a *stale* profile | Done in [8a](#phase-8a); unchanged |
 | The Tune tab's benchmark control is enabled and calls the verb, and `config` reports the profile with its reason | **Wired.** The button calls the same verb `vst-ctl` does, over a new streaming client that reports each row as it lands, with a "measure anyway" button for the load guard's refusal. The tab also grew the `Provider` and `GpuOnBattery` controls, because a setting with no surface is the parity rule's other failure mode |
 
 **Two things a person has to do**, both a few seconds, neither blocking:
 
-- **Unplug the laptop and press the hotkey.** The rule is verified through the
-  override and by unit tests; what is not verified is that this machine's
-  `/sys/class/power_supply/AC/online` goes to 0 when the lead comes out. It reads
-  1 now, and `MachineFacts` selects the supply by `type == Mains` rather than by
-  name, which is already better than the plan's `AC*/online` — the box also has
-  three USB-C supplies and one of them reports itself as charging.
+<a name="battery-verified"></a>
+
+- ~~**Unplug the laptop and press the hotkey.**~~ **Done 2026-08-24, and it
+  passes.** `/sys/class/power_supply/AC/online` reads **0** with the lead out —
+  that was the only genuinely unverified part, since a `sysfs` file that never
+  changes would have made the rule dead code on this machine. A daemon that had
+  been up for 1h38m rendering on CUDA logged, on the next utterance:
+
+  ```
+  inference: CUDA, 2 threads (benchmark 2026-08-24)
+          -> CPU, 2 threads (on battery, benchmark 2026-08-24)
+  ```
+
+  **It landed on a measured thread count, not back on the percentage** — the same
+  sweep's best CPU row — which is the part of this that was designed rather than
+  inherited, and it had never been seen happen on hardware. No restart, and the
+  switch is at the start of an utterance, never inside one.
+
+  `MachineFacts` selecting the supply by `type == Mains` rather than by an `AC*`
+  name glob is now tested rather than argued: this box also carries two Logitech
+  device batteries and three USB-C supplies, one of which reports itself as
+  charging, and a name-matching implementation would have had four candidates to
+  be wrong about.
 - **Click the Tune tab's button once.** The window renders, the tab is
   constructed, and the exact client path the button uses was driven headlessly
   against a real daemon — seven progress replies, then the payload. What could
