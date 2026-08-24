@@ -15,7 +15,7 @@ obvious; the project ships two products from one repository.
 
 **Linux ships two artifacts, and the tarball is the canonical one.** Decided
 2026-08-24. The AppImage is built *from the tree pack-tar.sh composed* — it
-publishes nothing itself — so all five of the tarball's assertions are inherited
+publishes nothing itself — so all six of the tarball's assertions are inherited
 rather than copied. A run that produces both is:
 
 ```bash
@@ -49,7 +49,7 @@ because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
 `INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
 `install-gpu.sh` to the root, and archives it.
 
-Five assertions run against the **composed tree**, not the build outputs, and
+Six assertions run against the **composed tree**, not the build outputs, and
 each exists because the failure it catches is silent:
 
 - **All three binaries report the same version**, asked of the shipped files via
@@ -72,6 +72,14 @@ each exists because the failure it catches is silent:
   The provider library and `libonnxruntime.so` are one build split across two
   files; a drift between them fails on the user's machine and nowhere else, and
   this is the only place both numbers are visible at once.
+- **The glibc floor has not risen above 2.34** (Phase 9). Measured across every
+  ELF in the tree: `vst-ctl` needs `GLIBC_2.34` and nothing else needs above
+  2.27, because `vst-ctl` is the only binary compiled on the build machine — the
+  runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet. So the floor
+  belongs to the toolchain rather than to this repository, it can rise under a
+  distro upgrade with every test still green, and the symptom is a user on a
+  supported distro told `GLIBC_2.39 not found` by a binary that ran yesterday.
+  2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+.
 
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from

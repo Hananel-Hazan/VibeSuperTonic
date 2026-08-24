@@ -11,11 +11,12 @@
 # composed, at dist/release-linux/VibeSuperTonic, and refuses to run if that
 # tree is absent or reports a different version.
 #
-# That is the whole design. The tarball's five assertions — one version across
+# That is the whole design. The tarball's six assertions — one version across
 # three binaries, a native vst-ctl rather than a managed apphost, no models, no
-# 330 MB CUDA provider, and install-gpu.sh fetching the ORT version the daemon
-# links — are properties of a composed tree, so consuming that tree inherits
-# them instead of copying them somewhere they can drift. A second packer with
+# 330 MB CUDA provider, install-gpu.sh fetching the ORT version the daemon links,
+# and a glibc floor that has not risen — are properties of a composed tree, so
+# consuming that tree inherits them instead of copying them somewhere they can
+# drift. A second packer with
 # its own publish steps is how two artifacts of "the same" release end up
 # differing, which is the failure the shared <VstVersion> already exists to
 # prevent one level up.

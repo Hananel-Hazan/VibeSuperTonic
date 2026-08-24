@@ -10,11 +10,13 @@
 # This is the canonical Linux packer and the counterpart to build/pack-zip.ps1.
 # Do NOT hand-roll a tarball out of `dotnet publish` output: the composition
 # step here is most of what makes the result droppable on a fresh machine, and
-# the three assertions below are the only thing standing between a green build
-# and an archive that is quietly wrong.
+# the assertions below are the only thing standing between a green build and an
+# archive that is quietly wrong.
 #
 # ---------------------------------------------------------------------------
-# The three assertions, and why each exists
+# The six assertions, and why each exists. Every one of them exists because the
+# failure it catches is SILENT — a green build, a plausible archive, and a defect
+# that surfaces on someone else's machine.
 #
 #  1. ALL THREE BINARIES REPORT THE SAME VERSION.
 #     Publishing writes into per-project bin/ trees that nothing clears between
@@ -36,6 +38,25 @@
 #     a human agreeing to something. The first-run screen downloads them behind
 #     that acceptance. An archive that shipped them would make the licence screen
 #     a lie.
+#
+#  4. NO CUDA PROVIDER LIBRARY IN THE ARCHIVE (Phase 8b).
+#     330 MB against a 52 MB tarball, arriving by default with the GPU package
+#     the backend links. The removal lives in Directory.Build.targets; its first
+#     version sat in the backend csproj, looked right and built clean, and this
+#     assertion is what found the 330 MB sitting in the composed tree.
+#
+#  5. install-gpu.sh FETCHES THE ORT VERSION THE DAEMON LINKS.
+#     The provider library and libonnxruntime.so are one build split across two
+#     files. A drift between them fails on the user's machine and nowhere else,
+#     and this is the only place both numbers are visible at once.
+#
+#  6. THE GLIBC FLOOR HAS NOT RISEN (Phase 9).
+#     Measured, not assumed: vst-ctl needs GLIBC_2.34 and everything else in the
+#     tree needs 2.27 or lower, because vst-ctl is the only binary compiled here
+#     — the rest arrive prebuilt from NuGet. The floor is therefore a property of
+#     THIS machine's toolchain, it can rise under a distro upgrade with every
+#     test still green, and the symptom is a user on a supported distro being
+#     told GLIBC_2.39 is missing by a binary that worked yesterday.
 #
 # What is deliberately NOT here: the engine/x64 + engine/x86 split the Windows
 # packer needs. That exists because the Windows engine is an in-process COM
@@ -261,6 +282,57 @@ if [[ "$ort_in_csproj" != "$ort_in_script" ]]; then
        The CUDA provider and libonnxruntime.so are one build in two files."
 fi
 info "no GPU provider in the archive; install-gpu.sh fetches ORT $ort_in_script to match"
+
+# --- 5. the glibc floor has not risen ----------------------------------------
+#
+# WHAT THIS IS ABOUT. A shipped binary runs on any glibc at least as new as the
+# highest GLIBC_x.y symbol version it imports. Measured 2026-08-24 across every
+# ELF in the composed tree:
+#
+#     vst-ctl            GLIBC_2.34      <- the floor, and the only local build
+#     libonnxruntime.so  GLIBC_2.27
+#     libcoreclr.so      GLIBC_2.27
+#     everything else    GLIBC_2.17 or lower
+#
+# So the product's floor is set by ONE 4 MB file. Everything else arrives
+# prebuilt from NuGet, built by Microsoft against an old glibc on purpose;
+# vst-ctl is NativeAOT, which links here, against whatever this machine has.
+# This box has 2.43, and the binary still only asks for 2.34 — the merge of
+# libpthread into libc, which is where a modern link lands regardless.
+#
+# 2.34 means Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+. Accepted 2026-08-24
+# rather than chased into a container: what a lower floor buys is Ubuntu 20.04,
+# Debian 11 and RHEL 8, all EOL, at the price of a second build environment for
+# one binary.
+#
+# WHY A GUARD RATHER THAN A NOTE. The floor is a property of the toolchain, not
+# of this repository, so it can rise under a distro upgrade with every test still
+# green — and the symptom is a user on a supported distro getting "GLIBC_2.39 not
+# found" from a binary that ran yesterday. Nothing else here can see that.
+command -v objdump >/dev/null 2>&1 || die "objdump is required (binutils) — it is what measures the glibc floor.
+       Skipping the check silently would be worse than not having it: the floor
+       rises under a toolchain upgrade with every other test still green."
+
+glibc_floor="2.34"
+glibc_max=""
+while IFS= read -r elf; do
+    [[ "$(head -c4 "$elf" | od -An -tx1 | tr -d ' \n')" == "7f454c46" ]] || continue
+    needed=$(objdump -T "$elf" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+    [[ -n "$needed" ]] || continue
+    if [[ -z "$glibc_max" ]] || [[ "$(printf '%s\n%s\n' "$glibc_max" "$needed" | sort -V | tail -1)" == "$needed" ]]; then
+        glibc_max="$needed"
+        glibc_worst="$elf"
+    fi
+done < <(find "$staging" -type f)
+
+if [[ "$(printf '%s\n%s\n' "$glibc_floor" "$glibc_max" | sort -V | tail -1)" != "$glibc_floor" ]]; then
+    die "the glibc floor has risen to $glibc_max, needed by ${glibc_worst#$staging/}.
+       It was $glibc_floor, which is Ubuntu 22.04+ / Debian 12+ / RHEL 9+. Something
+       in the toolchain moved. Either build vst-ctl somewhere older, or raise the
+       floor here deliberately and say so in INSTALL.txt — but do not let it move
+       on its own."
+fi
+info "glibc floor $glibc_max (${glibc_worst#$staging/}) — Ubuntu 22.04+, Debian 12+, RHEL 9+"
 
 # ------------------------------------------------------------------- text
 step "Writing INSTALL.txt and LICENSE-MODELS.txt…"
