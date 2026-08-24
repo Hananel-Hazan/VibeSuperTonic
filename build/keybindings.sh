@@ -14,10 +14,17 @@
 # is only safe because stop has a binding of its own; with one key doing
 # everything, a press that always speaks would leave no way to be quiet.
 #
-# Ctrl+~ is Ctrl+Shift+` — the tilde is the shifted backtick (keycode 49), so
-# the accelerator is written <Control><Shift>grave rather than <Control>asciitilde.
-# Binding the tilde keysym directly works on some setups and silently does not
-# on others, because what the desktop grabs is a keycode plus modifiers.
+# Ctrl+~ is Ctrl+Shift+` — the tilde is the shifted backtick (keycode 49). On
+# CINNAMON the accelerator is therefore written <Control><Shift>grave rather than
+# <Control>asciitilde, because what GTK grabs is a keycode plus modifiers and
+# binding the tilde keysym directly works on some setups and silently does not on
+# others.
+#
+# THE KDE BACKEND INVERTS THIS and writes Ctrl+~, because Plasma stores a
+# QKeySequence — a keysym plus modifiers — so Ctrl+Shift+` would be
+# Key_QuoteLeft while the event that arrives carries Key_AsciiTilde, and the two
+# never match. Same two keys, two spellings, one per toolkit. See the KDE
+# section for the layout evidence that also favours it.
 #
 # There is NO behaviour in this file. The state machine, the debounce and the
 # speak-or-stop decision all live in the daemon and are covered by Core.Tests;
@@ -33,16 +40,30 @@
 #     vst_bind /opt/vibesupertonic     # install dir containing vst-ctl
 #     vst_unbind
 #
-# Standalone, for a hand install or a desktop other than Cinnamon:
+# Standalone, for a hand install or a desktop we have no backend for:
 #
 #     bash build/keybindings.sh bind /opt/vibesupertonic
 #     bash build/keybindings.sh unbind
 #     bash build/keybindings.sh status
 #
-# Set VST_KB_DRY_RUN=1 to print every mutating gsettings call instead of
-# running it. The read-only half — schema detection, conflict scan, id
-# allocation — still executes, so a dry run answers "what would this do to my
-# desktop" honestly.
+# Set VST_KB_DRY_RUN=1 to print every mutating call instead of running it. The
+# read-only half — schema detection, conflict scan, id allocation — still
+# executes, so a dry run answers "what would this do to my desktop" honestly.
+#
+# ---------------------------------------------------------------------------
+# TWO BACKENDS
+#
+# Cinnamon/GNOME (gsettings) and KDE Plasma (config files) bind the same two
+# verbs by completely different mechanisms, so the file is split: a detector
+# picks a backend, and each backend owns bind/unbind/status. Everything above
+# the detector — the verbs, the accelerators, the "warn, never steal" rule — is
+# shared and must stay that way, because a shortcut that means something
+# different on KDE than on Cinnamon is a support problem nobody can reproduce.
+#
+# The KDE backend was added 2026-08-22 when the target machine was reinstalled
+# as Ubuntu 26.04 / Plasma 6 / Wayland. Cinnamon remains supported; neither is
+# privileged over the other.
+# ---------------------------------------------------------------------------
 #
 # ---------------------------------------------------------------------------
 # Why the mechanics below look the way they do
@@ -327,6 +348,354 @@ _vst_kb_preflight() {
     return 0
 }
 
+# --- KDE Plasma backend ----------------------------------------------------
+#
+# Plasma binds a key to a COMMAND by pointing kglobalaccel at a .desktop file,
+# so there are two artefacts rather than one: the .desktop (what to run) and an
+# entry in kglobalshortcutsrc (which key runs it). Both are files. That is a
+# deliberate choice and the most important comment in this section:
+#
+#   DO NOT register these over D-Bus. On 2026-08-22, calling
+#   org.kde.kglobalaccel setShortcutKeys (signature asa(ai)u) with a
+#   hand-marshalled message SIGABRT'd kwin_wayland on Plasma 6.6.6 and took the
+#   whole session down with it — every Wayland client dies with its compositor,
+#   so the user lost their browser and a video call. In Plasma 6 kglobalaccel is
+#   hosted INSIDE kwin, so a malformed body does not bounce off a daemon, it
+#   kills the desktop. The file route cannot do that. It costs one thing, and
+#   the cost is stated plainly to the user at the end of a bind: shortcuts load
+#   when kglobalaccel next starts, i.e. at the next login.
+#
+# Mechanics, all read off this machine's own kglobalshortcutsrc and the .desktop
+# files it points at rather than guessed:
+#
+#  1. The section is [services][<desktop-file-id>], and the KEYS INSIDE IT ARE
+#     DESKTOP ACTION NAMES. org.kde.spectacle.desktop declares
+#     Actions=...;RecordRegion;... and its section carries RecordRegion=...
+#     An entry with no actions uses the reserved key _launch instead, which is
+#     what org.kde.kate.desktop does. We declare two actions, so we use their
+#     names and never _launch.
+#
+#  2. The value is the accelerator alone — NOT the three-field
+#     "active,default,friendly" form used in component sections like [kwin].
+#     Writing the three-field form here produces a shortcut that reads back
+#     correctly and never fires.
+#
+#  3. A tab separates alternate accelerators, and a trailing tab means "and no
+#     second one". A single binding needs neither, so we write neither.
+#
+#  4. The entry is a NORMAL, VISIBLE launcher whose Exec opens the window, and
+#     the two hotkeys are Desktop Actions on it. An earlier version set
+#     NoDisplay=true to keep it out of the application menu, on the reasoning
+#     that NoDisplay hides an entry from menus without hiding the service from
+#     KService — which is what kglobalaccel resolves the id through. That
+#     reasoning is probably correct and it was never verified: the obvious check
+#     (look for the id in the sycoca cache) could not find a KNOWN-WORKING entry
+#     either, so it proved nothing. Since the only way to test the real thing is
+#     to make the user log out, the unverified ingredient was removed instead of
+#     defended. Hidden=true genuinely would break it and must never be used.
+#
+#     Consequence: this file is also the application-menu entry, so install.sh
+#     does not write one of its own and there is exactly one "VibeSuperTonic" in
+#     the menu rather than two.
+#
+# ACCELERATORS ARE SPELLED DIFFERENTLY HERE THAN ON CINNAMON, and it is not a
+# style choice. The Cinnamon half writes <Control><Shift>grave because GTK grabs
+# a KEYCODE plus modifiers, and the tilde is merely the shifted backtick.
+#
+# Plasma stores a QKeySequence, which is a KEYSYM plus modifiers, so the same
+# reasoning inverts:
+#
+#   Ctrl+Shift+`  parses as Ctrl|Shift|Key_QuoteLeft
+#   the keypress  delivers  Ctrl|Shift|Key_AsciiTilde   <- shift already applied
+#
+# so the stored sequence never matches what arrives. Ctrl+~ is Ctrl|Key_AsciiTilde,
+# which is exactly the event. Corrected 2026-08-22 on the user's instruction.
+#
+# It is also the layout-proof spelling on this machine, which has us,il installed:
+#
+#   keycode 49 = grave asciitilde | semicolon asciitilde
+#                └─ us ─┘           └─ il (Hebrew) ─┘
+#
+# asciitilde is the shifted keysym in BOTH groups, so stop works whichever layout
+# is active. `grave` exists only in the Latin group, so READ is the fragile one
+# here — if it stops working while typing Hebrew, that is why, and the fix is a
+# different key rather than a different spelling of this one.
+
+VST_KB_KDE_DESKTOP_ID="vibesupertonic.desktop"
+VST_KB_KDE_ACTIONS=("Read" "Stop")
+VST_KB_KDE_ACCELS=('Ctrl+`' 'Ctrl+~')
+VST_KB_KDE_ACTION_NAMES=("Speak selection" "Stop speaking")
+
+# A .desktop Exec field, quoted only when it needs to be. The freedesktop spec
+# splits this with shell-like rules, so an install path containing a space breaks
+# an unquoted command — the same hazard _vst_kb_command handles for the verbs.
+_vst_kb_quote() {
+    case "$1" in
+        *[[:space:]]*) printf '"%s"' "$1" ;;
+        *)             printf '%s' "$1" ;;
+    esac
+}
+
+_vst_kde_apps_dir() {
+    printf '%s/applications' "${XDG_DATA_HOME:-$HOME/.local/share}"
+}
+
+_vst_kde_desktop_file() {
+    printf '%s/%s' "$(_vst_kde_apps_dir)" "$VST_KB_KDE_DESKTOP_ID"
+}
+
+_vst_kde_rc() {
+    printf '%s/kglobalshortcutsrc' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+# Mutating kwriteconfig6 calls funnel through here so VST_KB_DRY_RUN works on
+# this backend exactly as it does on the Cinnamon one.
+_vst_kde_write() {
+    if [[ "${VST_KB_DRY_RUN:-0}" == "1" ]]; then
+        printf '    [dry-run] kwriteconfig6'; printf ' %q' "$@"; printf '\n'
+        return 0
+    fi
+    kwriteconfig6 "$@"
+}
+
+# Normalise a Plasma accelerator for comparison: case-folded, modifiers sorted,
+# aliases folded. Same purpose as _vst_kb_norm_accel, different syntax — Plasma
+# writes "Ctrl+Shift+X" where GTK writes "<Control><Shift>x".
+_vst_kde_norm_accel() {
+    local a="${1,,}" part mods=() key=""
+    a="${a//meta+/super+}"
+    a="${a//control+/ctrl+}"
+    local IFS='+'
+    for part in $a; do
+        case "$part" in
+            ctrl|shift|alt|super) mods+=("$part") ;;
+            "") ;;
+            *) key="$part" ;;
+        esac
+    done
+    printf '%s|%s' "$(printf '%s\n' "${mods[@]}" | sort | tr -d '\n')" "$key"
+}
+
+# Anything in kglobalshortcutsrc already holding this accelerator, excluding our
+# own section. Emits "section key" per line. Best-effort, like the Cinnamon
+# scan: a missed conflict costs a warning, not a broken install.
+_vst_kde_conflicts() {
+    local want; want="$(_vst_kde_norm_accel "$1")"
+    local rc; rc="$(_vst_kde_rc)"
+    [[ -r "$rc" ]] || return 0
+
+    local section="" line lhs rhs cand
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^\[(.*)\]$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            continue
+        fi
+        [[ "$line" == *=* ]] || continue
+        [[ "$section" == *"$VST_KB_KDE_DESKTOP_ID"* ]] && continue
+        lhs="${line%%=*}"
+        rhs="${line#*=}"
+        [[ "$lhs" == _k_friendly_name ]] && continue
+        # Split alternates on a literal \t, then take the first comma field of
+        # each — component sections store "active,default,friendly".
+        local piece
+        while IFS= read -r piece; do
+            [[ -z "$piece" ]] && continue
+            cand="${piece%%,*}"
+            [[ -z "$cand" || "$cand" == "none" ]] && continue
+            if [[ "$(_vst_kde_norm_accel "$cand")" == "$want" ]]; then
+                printf '[%s] %s\n' "$section" "$lhs"
+            fi
+        # printf '%s\n', NOT '%s'. Without the trailing newline `read` hits EOF
+        # on the last (and usually only) field, returns non-zero, and the loop
+        # body never runs — so EVERY accelerator scanned clean and the conflict
+        # check silently passed on keys that were already taken. Caught by
+        # asserting the scanner FINDS a known conflict; a test that only checks
+        # "our keys are free" agrees with a scanner that can see nothing at all.
+        done < <(printf '%s\n' "$rhs" | sed 's/\\t/\n/g')
+    done < "$rc"
+}
+
+_vst_kde_install_desktop() {   # <install-dir>
+    local dir="$1" path body i
+    path="$(_vst_kde_desktop_file)"
+
+    # Exec opens the WINDOW, not a verb: this is the application-menu entry as
+    # well as the shortcut carrier, and an entry that spoke your selection when
+    # clicked from the menu would be a surprising thing to hand somebody.
+    local ui="$dir/vibesupertonic-ui"
+    [[ -x "$ui" ]] || ui="$dir/vibesupertonic-ui"
+    body="[Desktop Entry]
+Type=Application
+Name=VibeSuperTonic
+Comment=Read selected text aloud
+Exec=$(_vst_kb_quote "$ui")
+Icon=audio-speakers
+Terminal=false
+Categories=Utility;Accessibility;
+X-KDE-StartupNotify=false
+Actions=$(IFS=';'; printf '%s;' "${VST_KB_KDE_ACTIONS[*]}")
+"
+    for i in "${!VST_KB_KDE_ACTIONS[@]}"; do
+        body+="
+[Desktop Action ${VST_KB_KDE_ACTIONS[$i]}]
+Name=${VST_KB_KDE_ACTION_NAMES[$i]}
+Exec=$(_vst_kb_command "$dir" "${VST_KB_VERBS[$i]}")
+"
+    done
+
+    if [[ "${VST_KB_DRY_RUN:-0}" == "1" ]]; then
+        printf '    [dry-run] would write %s:\n' "$path"
+        printf '%s\n' "$body" | sed 's/^/      | /'
+        return 0
+    fi
+
+    mkdir -p "$(_vst_kde_apps_dir)"
+    printf '%s' "$body" > "$path"
+    chmod 644 "$path"
+}
+
+_vst_kde_bind() {   # <install-dir>
+    local dir="$1" rc backup i accel conflicts bound=0 unassigned=0
+    rc="$(_vst_kde_rc)"
+
+    # Back up before touching it. Clobbering somebody's whole shortcut config is
+    # unforgivable and a single bad kwriteconfig6 invocation away.
+    if [[ -f "$rc" && "${VST_KB_DRY_RUN:-0}" != "1" ]]; then
+        backup="${rc}.vst-backup.$(date +%Y%m%d-%H%M%S)"
+        cp -p "$rc" "$backup"
+        _vst_kb_info "backed up $rc"
+        _vst_kb_info "        -> $backup"
+    fi
+
+    _vst_kde_install_desktop "$dir"
+    [[ "${VST_KB_DRY_RUN:-0}" == "1" ]] || _vst_kb_info "installed $(_vst_kde_desktop_file)"
+
+    for i in "${!VST_KB_KDE_ACTIONS[@]}"; do
+        accel="${VST_KB_KDE_ACCELS[$i]}"
+        conflicts="$(_vst_kde_conflicts "$accel")"
+        if [[ -n "$conflicts" ]]; then
+            _vst_kb_warn "$accel is already bound to:"
+            while read -r c; do
+                [[ -n "$c" ]] && printf '           %s\n' "$c" >&2
+            done <<<"$conflicts"
+            _vst_kb_warn "leaving ${VST_KB_NAMES[$i]} WITHOUT an accelerator — assign one in"
+            _vst_kb_warn "System Settings -> Keyboard -> Shortcuts."
+            accel=""
+            unassigned=$((unassigned+1))
+        else
+            bound=$((bound+1))
+        fi
+
+        _vst_kde_write --file kglobalshortcutsrc \
+            --group services --group "$VST_KB_KDE_DESKTOP_ID" \
+            --key "${VST_KB_KDE_ACTIONS[$i]}" "$accel"
+    done
+
+    # Without this the service id does not resolve and the shortcut is inert.
+    if [[ "${VST_KB_DRY_RUN:-0}" == "1" ]]; then
+        printf '    [dry-run] kbuildsycoca6\n'
+    else
+        kbuildsycoca6 --noincremental >/dev/null 2>&1 || \
+            _vst_kb_warn "kbuildsycoca6 failed; the shortcut may not resolve until next login."
+    fi
+
+    _vst_kb_info ""
+    _vst_kb_info "$bound shortcut(s) written, $unassigned left unassigned."
+    _vst_kb_info ""
+    _vst_kb_info "These take effect when kglobalaccel next starts — LOG OUT AND BACK IN."
+    _vst_kb_info "Plasma 6 hosts kglobalaccel inside kwin, and there is no way to make it"
+    _vst_kb_info "re-read its config that does not risk restarting your compositor."
+    _vst_kb_info "Check them afterwards in System Settings -> Keyboard -> Shortcuts."
+    return 0
+}
+
+_vst_kde_unbind() {
+    local rc backup path
+    rc="$(_vst_kde_rc)"
+    path="$(_vst_kde_desktop_file)"
+
+    if ! grep -qF "[services][$VST_KB_KDE_DESKTOP_ID]" "$rc" 2>/dev/null && [[ ! -f "$path" ]]; then
+        _vst_kb_info "no VibeSuperTonic shortcuts were registered; nothing to do."
+        return 0
+    fi
+
+    if [[ -f "$rc" && "${VST_KB_DRY_RUN:-0}" != "1" ]]; then
+        backup="${rc}.vst-backup.$(date +%Y%m%d-%H%M%S)"
+        cp -p "$rc" "$backup"
+        _vst_kb_info "backed up $rc -> $backup"
+    fi
+
+    # Exactly our section, by id. Nothing else in the file is read or rewritten.
+    _vst_kde_write --file kglobalshortcutsrc \
+        --group services --group "$VST_KB_KDE_DESKTOP_ID" --delete-group
+
+    if [[ "${VST_KB_DRY_RUN:-0}" == "1" ]]; then
+        printf '    [dry-run] rm -f %q\n' "$path"
+    else
+        rm -f "$path"
+        kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+    fi
+
+    _vst_kb_info "removed the VibeSuperTonic shortcuts and launcher."
+    _vst_kb_info "The keys are released at the next login."
+    return 0
+}
+
+_vst_kde_status() {
+    local rc path i val found=0
+    rc="$(_vst_kde_rc)"
+    path="$(_vst_kde_desktop_file)"
+
+    if [[ -f "$path" ]]; then
+        printf 'launcher: %s\n' "$path"
+        printf '  Exec:     %s\n' "$(grep -m1 '^Exec=' "$path" | cut -d= -f2-)"
+    else
+        printf 'launcher: not installed (%s)\n' "$path"
+    fi
+
+    for i in "${!VST_KB_KDE_ACTIONS[@]}"; do
+        val="$(kreadconfig6 --file kglobalshortcutsrc \
+                 --group services --group "$VST_KB_KDE_DESKTOP_ID" \
+                 --key "${VST_KB_KDE_ACTIONS[$i]}" 2>/dev/null || true)"
+        if [[ -n "$val" ]]; then
+            found=$((found+1))
+            printf '%s\n' "${VST_KB_NAMES[$i]}"
+            printf '  action:   %s\n' "${VST_KB_KDE_ACTIONS[$i]}"
+            printf '  binding:  %s\n' "$val"
+        fi
+    done
+    (( found )) || _vst_kb_info "no VibeSuperTonic shortcuts are registered."
+    return 0
+}
+
+# --- which desktop are we on -----------------------------------------------
+#
+# Detected by CAPABILITY, with $XDG_CURRENT_DESKTOP only as a tiebreak. A user
+# running Cinnamon's schema inside a KDE session is rare but real, and the
+# question that actually matters is "which mechanism will work here", not "what
+# does the session call itself".
+_vst_kb_backend() {
+    if [[ -n "${VST_KB_BACKEND:-}" ]]; then
+        printf '%s' "$VST_KB_BACKEND"; return 0
+    fi
+    local kde=0 cinnamon=0
+    command -v kwriteconfig6 >/dev/null 2>&1 && kde=1
+    command -v gsettings >/dev/null 2>&1 && _vst_kb_has_schema "$VST_KB_SCHEMA_PARENT" && cinnamon=1
+
+    if (( kde && cinnamon )); then
+        case "${XDG_CURRENT_DESKTOP:-}" in
+            *KDE*) printf 'kde' ;;
+            *)     printf 'cinnamon' ;;
+        esac
+    elif (( kde )); then
+        printf 'kde'
+    elif (( cinnamon )); then
+        printf 'cinnamon'
+    else
+        printf 'unknown'
+    fi
+}
+
 # --- the two entry points --------------------------------------------------
 
 vst_bind() {
@@ -344,6 +713,17 @@ vst_bind() {
         _vst_kb_error "Binding a key to a binary that is not there is a hotkey that silently does nothing."
         return 64
     fi
+
+    case "$(_vst_kb_backend)" in
+        kde)      _vst_kde_bind "$dir"; return $? ;;
+        cinnamon) ;;   # falls through to the gsettings path below
+        *)
+            _vst_kb_error "no backend for this desktop — neither Plasma's kwriteconfig6"
+            _vst_kb_error "nor Cinnamon's $VST_KB_SCHEMA_PARENT schema is present."
+            _vst_kb_manual "$dir"
+            return 2
+            ;;
+    esac
 
     _vst_kb_preflight || { _vst_kb_manual "$dir"; return 2; }
 
@@ -428,6 +808,12 @@ _vst_kb_alloc_id_excluding() {
 }
 
 vst_unbind() {
+    case "$(_vst_kb_backend)" in
+        kde)      _vst_kde_unbind; return $? ;;
+        cinnamon) ;;
+        *)        _vst_kb_error "no backend for this desktop; nothing to unbind."; return 2 ;;
+    esac
+
     _vst_kb_preflight || return 2
 
     local -a keep=()
@@ -460,6 +846,12 @@ vst_unbind() {
 }
 
 vst_kb_status() {
+    case "$(_vst_kb_backend)" in
+        kde)      _vst_kde_status; return $? ;;
+        cinnamon) ;;
+        *)        _vst_kb_error "no backend for this desktop."; return 2 ;;
+    esac
+
     _vst_kb_preflight || return 2
     local id found=0
     while read -r id; do
@@ -496,10 +888,16 @@ VibeSuperTonic desktop keybindings.
   Ctrl+~            vst-ctl stop
 
 VST_KB_DRY_RUN=1 prints every mutating call instead of making it.
+VST_KB_BACKEND=kde|cinnamon forces a backend instead of detecting one.
 
-Known limit: screen lockers, some fullscreen games and open menus take an X11
+Backends: Cinnamon/GNOME via gsettings, KDE Plasma via a .desktop launcher plus
+kglobalshortcutsrc. On KDE the shortcuts load at the NEXT LOGIN — kglobalaccel
+lives inside kwin there and cannot be asked to re-read its config without
+risking the compositor.
+
+Known limit: screen lockers, some fullscreen games and open menus take a
 keyboard grab, and global shortcuts do not fire under one. That is a property
-of X11, not a bug here.
+of the display server, not a bug here.
 EOF
             ;;
     esac
