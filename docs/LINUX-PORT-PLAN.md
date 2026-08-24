@@ -1105,11 +1105,50 @@ daemon through the image and answers `status`** — R-5 intact with no
 `vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
 start put it back.
 
+<a name="glibc-floor"></a>
+
+#### The glibc floor: measured 2026-08-24, and the expensive fix disappeared
+
+This phase carried *"build the AppDir in a container against an older glibc"* as
+real work, on sound reasoning: a self-contained publish links the build machine's
+libc, and this box runs **2.43**. Measuring it first turned out to be the whole
+job.
+
+Across every ELF in the composed tree:
+
+```
+  vst-ctl             GLIBC_2.34      <- the floor
+  libonnxruntime.so   GLIBC_2.27
+  libcoreclr.so       GLIBC_2.27
+  everything else     GLIBC_2.17 or lower
+```
+
+**One 4 MB file sets it, and it is the only one compiled here.** NativeAOT links
+locally; the runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet, built
+by Microsoft against an old glibc deliberately. And 2.34 is not this machine's
+2.43 — it is where any modern link lands, because libpthread merged into libc
+there.
+
+**2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+.** What a container
+would buy is Ubuntu 20.04, Debian 11 and RHEL 8 — all EOL — at the price of a
+second build environment maintained for one binary. **Accepted rather than
+chased, 2026-08-24.**
+
+What the phase gets instead is [assertion 6](../build/pack-tar.sh): the floor is
+a property of the toolchain rather than of this repository, so it can rise under
+a distro upgrade with every test still green, and the symptom is a user on a
+supported distro being told `GLIBC_2.39 not found` by a binary that ran
+yesterday — a failure this machine cannot experience and no test here would see.
+It lives in the tarball packer beside the other five, so the AppImage inherits it.
+
+*The generalisable half, and it is the same lesson [8a](#phase-8a) paid for
+twice:* the reasoning was correct and the conclusion was wrong, because the
+premise ("a self-contained publish compiles against this libc") was true of one
+file out of two hundred. Ten minutes of `objdump` replaced a day of container
+plumbing.
+
 #### Still to do
 
-- Building the AppDir in a container against an older glibc, and naming the floor
-  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
-  which is an AppImage that has given up its one advantage over the tarball.
 - A FUSE-missing message worth reading. The runtime's own is not, and
   `--appimage-extract-and-run` must be a documented answer rather than a thing
   someone finds in a forum.
@@ -2715,11 +2754,50 @@ daemon through the image and answers `status`** — R-5 intact with no
 `vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
 start put it back.
 
+<a name="glibc-floor"></a>
+
+#### The glibc floor: measured 2026-08-24, and the expensive fix disappeared
+
+This phase carried *"build the AppDir in a container against an older glibc"* as
+real work, on sound reasoning: a self-contained publish links the build machine's
+libc, and this box runs **2.43**. Measuring it first turned out to be the whole
+job.
+
+Across every ELF in the composed tree:
+
+```
+  vst-ctl             GLIBC_2.34      <- the floor
+  libonnxruntime.so   GLIBC_2.27
+  libcoreclr.so       GLIBC_2.27
+  everything else     GLIBC_2.17 or lower
+```
+
+**One 4 MB file sets it, and it is the only one compiled here.** NativeAOT links
+locally; the runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet, built
+by Microsoft against an old glibc deliberately. And 2.34 is not this machine's
+2.43 — it is where any modern link lands, because libpthread merged into libc
+there.
+
+**2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+.** What a container
+would buy is Ubuntu 20.04, Debian 11 and RHEL 8 — all EOL — at the price of a
+second build environment maintained for one binary. **Accepted rather than
+chased, 2026-08-24.**
+
+What the phase gets instead is [assertion 6](../build/pack-tar.sh): the floor is
+a property of the toolchain rather than of this repository, so it can rise under
+a distro upgrade with every test still green, and the symptom is a user on a
+supported distro being told `GLIBC_2.39 not found` by a binary that ran
+yesterday — a failure this machine cannot experience and no test here would see.
+It lives in the tarball packer beside the other five, so the AppImage inherits it.
+
+*The generalisable half, and it is the same lesson [8a](#phase-8a) paid for
+twice:* the reasoning was correct and the conclusion was wrong, because the
+premise ("a self-contained publish compiles against this libc") was true of one
+file out of two hundred. Ten minutes of `objdump` replaced a day of container
+plumbing.
+
 #### Still to do
 
-- Building the AppDir in a container against an older glibc, and naming the floor
-  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
-  which is an AppImage that has given up its one advantage over the tarball.
 - A FUSE-missing message worth reading. The runtime's own is not, and
   `--appimage-extract-and-run` must be a documented answer rather than a thing
   someone finds in a forum.
@@ -2789,7 +2867,7 @@ consequence of that one sentence.
 | **The hotkey** | The interesting one. See below |
 | The GPU pack | `install-gpu.sh` writes into the install root today; the install root is now read-only. It targets the data directory, and `GpuProviderPack.ReexecIfNeeded` looks for it there. The `execv` of `/proc/self/exe` still works — the process holds the mount alive — so the arrangement measured not to corrupt the heap is unchanged |
 | Replacing the file while it is running | Worse than the tarball's version of this hazard: overwriting a squashfs image that a week-old daemon has mounted is not "an old binary still serving presses", it is a corrupt mount. `install.sh`'s `/proc/<pid>/exe` trick also stops identifying us, because that path is inside the mount. The answer is the verb that already exists: **`vst-ctl shutdown` before replacing the file**, in `INSTALL.txt` and in whatever the AppImage prints on `--help` |
-| "Runs on any distro" | A self-contained .NET publish built on Ubuntu 26.04 links that box's glibc, so it would run on nothing older. The AppDir is therefore built in a container on an older base. This is the difference between an AppImage and a tarball with extra steps |
+| "Runs on any distro" | **Measured, and it is not what this row assumed** — see [the floor](#glibc-floor). One binary sets it, the number is 2.34, and no container is needed |
 | FUSE | Type-2 runtimes want libfuse2, which recent Ubuntu does not install by default. Settle in the spike which runtime is used and what the failure text says; `--appimage-extract-and-run` exists but must never be the silent default, because it is slow in exactly the place this phase is measuring |
 
 <a name="appimage-hotkey"></a>
@@ -2931,11 +3009,50 @@ daemon through the image and answers `status`** — R-5 intact with no
 `vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
 start put it back.
 
+<a name="glibc-floor"></a>
+
+#### The glibc floor: measured 2026-08-24, and the expensive fix disappeared
+
+This phase carried *"build the AppDir in a container against an older glibc"* as
+real work, on sound reasoning: a self-contained publish links the build machine's
+libc, and this box runs **2.43**. Measuring it first turned out to be the whole
+job.
+
+Across every ELF in the composed tree:
+
+```
+  vst-ctl             GLIBC_2.34      <- the floor
+  libonnxruntime.so   GLIBC_2.27
+  libcoreclr.so       GLIBC_2.27
+  everything else     GLIBC_2.17 or lower
+```
+
+**One 4 MB file sets it, and it is the only one compiled here.** NativeAOT links
+locally; the runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet, built
+by Microsoft against an old glibc deliberately. And 2.34 is not this machine's
+2.43 — it is where any modern link lands, because libpthread merged into libc
+there.
+
+**2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+.** What a container
+would buy is Ubuntu 20.04, Debian 11 and RHEL 8 — all EOL — at the price of a
+second build environment maintained for one binary. **Accepted rather than
+chased, 2026-08-24.**
+
+What the phase gets instead is [assertion 6](../build/pack-tar.sh): the floor is
+a property of the toolchain rather than of this repository, so it can rise under
+a distro upgrade with every test still green, and the symptom is a user on a
+supported distro being told `GLIBC_2.39 not found` by a binary that ran
+yesterday — a failure this machine cannot experience and no test here would see.
+It lives in the tarball packer beside the other five, so the AppImage inherits it.
+
+*The generalisable half, and it is the same lesson [8a](#phase-8a) paid for
+twice:* the reasoning was correct and the conclusion was wrong, because the
+premise ("a self-contained publish compiles against this libc") was true of one
+file out of two hundred. Ten minutes of `objdump` replaced a day of container
+plumbing.
+
 #### Still to do
 
-- Building the AppDir in a container against an older glibc, and naming the floor
-  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
-  which is an AppImage that has given up its one advantage over the tarball.
 - A FUSE-missing message worth reading. The runtime's own is not, and
   `--appimage-extract-and-run` must be a documented answer rather than a thing
   someone finds in a forum.
