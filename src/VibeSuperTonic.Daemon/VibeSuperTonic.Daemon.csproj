@@ -25,6 +25,14 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
 
     <!--
+      For Interop/WaylandNative.cs. ext-data-control-v1 has no C ABI in
+      libwayland — the descriptor tables wayland-scanner would normally generate
+      are built here in unmanaged memory, and the event listeners are arrays of
+      function pointers, which needs `delegate* unmanaged`.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
       No <Version> here. It comes from Directory.Build.props, which stamps
       $(VstVersion) onto every assembly in the tree as of 2026-08-19 — this
       project used to set it alone, with a comment explaining why the Windows

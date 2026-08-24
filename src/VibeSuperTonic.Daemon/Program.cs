@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using VibeSuperTonic.Daemon.Interop;
 using VibeSuperTonic.Daemon.Tray;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
@@ -156,9 +157,40 @@ var session = new SpeechSession(synth, sink, config.SessionOptions);
 // change it, but the selection source is built with the daemon, and a hotkey
 // that changes behaviour halfway through a session is worse than one that needs
 // a restart to pick the setting up. Noted in the setting's own documentation.
+//
+// WHICH SOURCE. On a Wayland session the X11 source is nearly blind: a native
+// Wayland client's selection never reaches X11 PRIMARY, and on the machine this
+// was written against exactly one running application was an X11 client — so
+// `read` answered "nothing is selected" for everything the user actually uses.
+// The Wayland source is a strict superset there, because KWin bridges XWayland
+// clients' selections into Wayland and this reads both.
+//
+// Decided by asking the compositor rather than by trusting $XDG_SESSION_TYPE:
+// the variable is set by the session manager and a daemon started from cron, a
+// service or an ssh login may not have inherited it, while a connection either
+// succeeds or does not. VST_SELECTION forces the answer for diagnosis.
+//
+// Unlike the X11 source there is no per-request display to thread through here.
+// $DISPLAY had to arrive with the request because a daemon can legitimately be
+// started with the wrong one; the Wayland equivalent is $XDG_RUNTIME_DIR, and
+// this daemon's control socket already lives there — so a daemon vst-ctl can
+// reach at all is one whose runtime dir is right by construction.
+string? forced = Environment.GetEnvironmentVariable("VST_SELECTION");
+bool useWayland = forced switch
+{
+    "wayland" => true,
+    "x11" => false,
+    _ => WaylandNative.CanConnect(),
+};
+ISelectionSource selectionSource = useWayland
+    ? new WaylandSelectionSource(config.Settings.ClipboardFallback)
+    : new X11SelectionSource(config.Settings.ClipboardFallback);
+DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1)" : "x11 (PRIMARY)")}"
+    + (forced is null ? "" : $", forced by VST_SELECTION={forced}"));
+
 using var server = new DaemonServer(
     options, config, synth, session,
-    new X11SelectionSource(config.Settings.ClipboardFallback), sink,
+    selectionSource, sink,
     synthesizerFor, cpuProfile);
 
 using var lifetime = new CancellationTokenSource();

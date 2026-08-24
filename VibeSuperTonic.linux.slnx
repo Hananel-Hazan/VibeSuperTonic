@@ -29,5 +29,6 @@
     <Project Path="spike/x11-freshness/SelCheck.csproj" />
     <Project Path="spike/avalonia-primary/AvaPrimary.csproj" />
     <Project Path="spike/avalonia-bigtext/BigText.csproj" />
+    <Project Path="spike/wayland-selection/WlSel.csproj" />
   </Folder>
 </Solution>
