@@ -7,8 +7,19 @@ the Reader, the tray icon on rung 1, both settings writers and the first-run
 screen, with every exit criterion verified on hardware
 ([the record](#phase-6-landed)). It also closed the hole Phase 7 was carrying:
 **the models download on Linux now**, through Core's own downloader, behind the
-licence acceptance. Next is [Phase 7](#phase-7); 8b has not started.
-881 Core tests. See [What to do next](#next).
+licence acceptance.
+**[Phase 7](#phase-7) is done — 2026-08-22**: `build/pack-tar.sh`, `install.sh`,
+and a 51 MB tarball verified by extracting it and running what came out. 8b has
+not started. 881 Core tests. See [What to do next](#next).
+
+**The target machine changed underneath this document on 2026-08-22, and two of
+its assumptions died with it.** It was reinstalled as **Ubuntu 26.04 / KDE Plasma
+6.6.6 / Wayland**, with no X11 session available at all. Cinnamon's `gsettings`
+keybinding schema does not exist there — and, the expensive one, **a native
+Wayland client's selection never reaches X11 PRIMARY**, so `X11SelectionSource`
+was blind to every application on that desktop except one Electron app. Both are
+fixed: `build/keybindings.sh` grew a KDE backend, and the daemon grew
+`WaylandSelectionSource` on ext-data-control-v1. [The record](#kde-wayland).
 
 **The Windows product was re-verified on real hardware 2026-08-17 and nothing the
 Mint work did has reached it** — build, both RID publishes, 881 Core tests and all
@@ -95,7 +106,7 @@ before changing it.
 | — · `vst-ctl` crashed on a flag with no verb | **Fixed 2026-08-18.** `vst-ctl --version` — or any mistyped flag — indexed an empty array after the options were filtered out, and a NativeAOT binary turns that into SIGABRT, a core file and exit 134. Now one sentence on stderr, the usage, and exit 2: the same refusal shape the daemon's over-long socket path was given |
 | 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
 | 6 · App + tray | **Done 2026-08-18.** Window, Reader, tray (rung 1 held), Tune and Pronunciations as writers, and the first-run screen — which downloads the models. Every exit criterion verified on hardware; one D-Bus trap cost most of a day. [The record](#phase-6-landed) |
-| 7 · Packaging | **Next.** Ships as 0.3.0. The hole this row used to carry — *nothing on Linux can download the models* — **was closed by Phase 6**: the first-run screen fetches them through Core's downloader and verifies the pinned hashes. What is left for the packer is to *ship* `models-manifest.json` beside the binaries, since that file is what the download reads |
+| 7 · Packaging | **Done 2026-08-22.** [build/pack-tar.sh](../build/pack-tar.sh) publishes all three binaries into emptied directories, composes the layout, writes `install.sh`/`uninstall.sh`/`INSTALL.txt`/`LICENSE-MODELS.txt`, ships `models-manifest.json` and no models, and asserts three things against the composed tree. 51 MB, 238 files, verified by extracting and running it. **Not yet released as 0.3.0** — the user took it as a personal install at 0.2.7.5, so the release number is still unspent. [The record](#phase-7-landed) |
 | 8b · Fit the machine, the rest | Not started. Battery rule, the gated GPU spike, wiring Phase 6's Tune control — see [Phase 8](#phase-8) |
 
 <a name="windows-check"></a>
@@ -692,11 +703,142 @@ Each of these has already cost time.
     us there; there is one binary, and it is the one that stays running for a
     week.
 
+<a name="kde-wayland"></a>
+
+### KDE and Wayland — 2026-08-22
+
+The machine was reinstalled as Ubuntu 26.04 / Plasma 6 / Wayland. Two things
+broke, one cosmetically and one completely.
+
+**Hotkeys: a missing schema, and a crashed desktop.** `build/keybindings.sh`
+wrote `org.cinnamon.desktop.keybindings`, which does not exist on KDE, so it
+refused and printed the manual instructions — the correct behaviour, and useless
+to the user. Plasma binds a key to a *command* by pointing kglobalaccel at a
+`.desktop` file, so the KDE backend writes two artefacts: the launcher in
+`~/.local/share/applications` with a `[Desktop Action]` per verb, and a
+`[services][<id>.desktop]` section in `kglobalshortcutsrc` **keyed by action
+name** (`_launch` is only for entries with no actions — read off
+`org.kde.spectacle.desktop` and `org.kde.kate.desktop`, not guessed).
+
+**The route not to take, learned the hard way.** Registering the same shortcut
+over D-Bus — `org.kde.kglobalaccel` `setShortcutKeys`, signature `asa(ai)u` —
+with a hand-marshalled `busctl` message **SIGABRT'd `kwin_wayland` and took the
+session down**: Zoom and Brave died with it inside five seconds, because on
+Wayland every client dies with its compositor. In Plasma 6 kglobalaccel is hosted
+*inside* kwin, so a malformed body does not bounce off a daemon. This is the
+[MessageWriter trap](#traps) from the other end of the socket. Configure KDE
+through files; if a live API must be exercised, use a **nested** compositor.
+
+The price of the file route is that shortcuts load when kglobalaccel next
+starts — i.e. at the next login. There is no way to force a reload that does not
+risk restarting the compositor, and the script says so rather than pretending.
+
+**One defect found in the new code by testing the guard rather than the
+feature.** The conflict scanner returned nothing for *every* accelerator,
+because `printf '%s'` with no trailing newline makes `while read` skip its only
+field. Every key scanned "free", so the first real conflict would have been
+silently stolen. It was caught by asserting the scanner **finds** a known
+conflict (kate's `Meta+Shift+T`); a test that only checks "our keys are free"
+agrees perfectly with a scanner that can see nothing. Same shape as
+[trap 15](#traps), and worth generalising: **a guard that cannot fire is worse
+than no guard, because it also reports success.**
+
+<a name="wayland-selection"></a>
+
+**Selection capture: the feature, not a detail.** Measured on the new machine,
+`vst-ctl read` answered *"nothing is selected"* for everything. The reason is
+that `X11SelectionSource` reads X11 PRIMARY and a native Wayland client's
+selection never reaches it. Xwayland is running and `$DISPLAY` is set, so nothing
+*looks* wrong — and `xlsclients` found exactly **one** X11 client on the whole
+desktop. The product was, in practice, blind.
+
+`ext-data-control-v1` is the fix and the only one: `zwp_primary_selection_*`
+only delivers to the client holding keyboard focus, which a daemon never has.
+KWin advertises ext-data-control; `wl-paste` from wl-clipboard 2.2.1 does **not**
+use it — it predates the rename from `wlr-data-control` and falls back to
+spawning an invisible surface and stealing focus, which is why an early test
+wrongly suggested the compositor could not do this. *Measure the tool before
+concluding something about the system.*
+
+Built in [spike/wayland-selection](../spike/wayland-selection) first, deliberately:
+libwayland has no ABI for a protocol it does not define, so the `wl_interface`
+and `wl_message` tables `wayland-scanner` normally generates are built by hand in
+unmanaged memory, and a wrong offset is a **SIGSEGV with no stack trace** rather
+than an exception. It worked first run. Then it moved into the daemon as
+`WaylandSelectionSource` behind the existing `ISelectionSource` seam — which is
+the second time that seam has paid for itself.
+
+| Measured | Result |
+| --- | --- |
+| Native Wayland selection, through the daemon | `read: speak` — **the case that was broken** |
+| XWayland (X11 client) selection, through the *Wayland* source | works — KWin bridges X11 selections into Wayland |
+| Capture cost | **30 ms** including process start, against a 300 ms budget |
+| X11 source, forced with `VST_SELECTION=x11` | still works — X11 sessions are not regressed |
+
+**The Wayland source therefore replaces the X11 one on a Wayland session rather
+than joining it.** It is a strict superset there, and running both would only add
+a way for them to disagree. Which one is used is decided by *asking the
+compositor* (`wl_display_connect`), not by trusting `$XDG_SESSION_TYPE`, because
+a daemon started from a service or an ssh login may never have inherited it —
+and the daemon logs which source it chose, because the failure this replaces was
+invisible.
+
+**Still open:** GNOME refuses to implement ext-data-control on security grounds,
+so a GNOME/Wayland box has no path at all and the source says so in one sentence
+rather than failing silently.
+
+<a name="phase-7-landed"></a>
+
+### Phase 7 landed — 2026-08-22
+
+`bash build/pack-tar.sh [-v X.Y.Z]`. 51 MB, 238 files, 123 MB uncompressed.
+Verified by extracting the tarball into an empty directory and running what came
+out, which is the only test that means anything here.
+
+Both self-contained publishes land in the **same** root and share one copy of the
+.NET runtime — safe only because they are built from one solution in one run,
+which is exactly what the version assertion enforces.
+
+Three assertions, run against the composed tree rather than the build outputs.
+Each was checked for its ability to **fire**, after the keybinding scanner
+above showed what a vacuous guard looks like:
+
+| Assertion | Discriminates because |
+| --- | --- |
+| All three report one version | asked of the shipped files via `--version` — a flag none of them had, and which had to be added. `vst-ctl` also had no `<Version>` at all, so it reported `1.0.0`: the assertion **could never have passed** before this phase |
+| `vst-ctl` is native | `file` reports **byte-identical** output for a managed apphost and an AOT binary — confirmed, so CI's `grep ELF` cannot tell them apart. The real discriminators: no companion `vst-ctl.dll`, and size (78 KB apphost vs 4 MB AOT, measured) |
+| No models ship | `models/` empty **and** no `*.onnx` anywhere; both fire on a planted file |
+
+`install.sh` stops a running daemon first, by `/proc/<pid>/exe` and never
+`pkill -f` — a rule this session paid for twice, once when a `pkill -f wl-copy`
+killed the shell running the test.
+
+**The release number is still unspent.** This shipped as a personal install at
+0.2.7.5; 0.3.0 remains the settled first Linux release. Note the packer refuses
+to name an archive differently from what the binaries report, which means
+shipping 0.3.0 requires bumping `<VstVersion>` *before* the pack rather than
+after — a deliberate divergence from the Windows workflow, where a ZIP can be
+named for a version its contents do not claim.
+
 ---
 
 ## Confirmed environment
 
-Verified on the target machine, 2026-08-14:
+**Superseded 2026-08-22 — the machine was reinstalled.** The original table is
+kept below it because the Mint/Cinnamon/X11 path is still supported and still
+what most of this document was designed against.
+
+Verified on the target machine, 2026-08-22:
+
+| Fact | Value | What it costs us |
+| --- | --- | --- |
+| Distro | Ubuntu 26.04 (Resolute Raccoon) | glibc current; `dotnet-sdk-10.0` **is** in the repos now, with `dotnet-sdk-aot-10.0` for NativeAOT |
+| Desktop | KDE Plasma 6.6.6 | **no `org.cinnamon.*` gsettings schema** — `build/keybindings.sh` needed a KDE backend. The tray works untouched: StatusNotifierItem is D-Bus, and the daemon registered with `org.kde.StatusNotifierWatcher` first try |
+| Session | `XDG_SESSION_TYPE=wayland`, **no `/usr/share/xsessions` at all** | **PRIMARY capture through Xlib sees almost nothing** — see [the record](#kde-wayland). Xwayland runs and `DISPLAY=:0` is set, which makes the failure look like a bug rather than a topology change |
+| Audio | `PulseAudio (on PipeWire)` | unchanged; libpulse covers it |
+| .NET 10 | `10.0.111` from apt | still shipped self-contained |
+
+Verified on the previous target machine, 2026-08-14:
 
 | Fact | Value | What it buys us |
 | --- | --- | --- |
@@ -706,9 +848,11 @@ Verified on the target machine, 2026-08-14:
 | Audio | `PulseAudio (on PipeWire 1.0.5)` | one libpulse client API covers PipeWire *and* PulseAudio boxes |
 | .NET 10 | not in Ubuntu repos | we ship self-contained; no user-side runtime install |
 
-Cinnamon keeps X11 as its default session and Mint has said it stays that way
-until Wayland reaches feature parity. Every design choice below still assumes
-Wayland arrives eventually and avoids anything that would be a dead end there.
+The old note here said "every design choice below assumes Wayland arrives
+eventually and avoids anything that would be a dead end there." That aged well
+for the tray and badly for the selection: nothing in the design was a dead end,
+but the X11 selection path turned out to be **the whole feature**, and it needed
+a second implementation rather than an adjustment.
 
 ---
 
