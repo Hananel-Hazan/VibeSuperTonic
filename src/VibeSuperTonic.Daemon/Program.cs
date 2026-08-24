@@ -69,9 +69,27 @@ for (int i = 0; i < args.Length; i++)
         case "--version":
             Console.WriteLine(version);
             return 0;
+        // For AppRun and install-gpu.sh, which need the store and must not
+        // re-implement the rule that picks it. One owner, asked rather than
+        // copied — the same reason there is no `config set` verb.
+        case "--print-store":
+            Console.WriteLine(LinuxDataPaths.StoreRoot);
+            return 0;
+        // Called by the window at startup. The daemon does the same thing on its
+        // own start; this exists so that opening the window — which is what a
+        // person does when the hotkey stopped working — repairs it too.
+        case "--ensure-client":
+            if (LinuxDataPaths.AppImageFile is { } img)
+            {
+                string? said = AppImageClient.EnsureInstalled(
+                    img, AppContext.BaseDirectory.TrimEnd('/'), version);
+                if (said is not null) Console.WriteLine(said);
+            }
+            return 0;
         case "--help" or "-h":
             Console.WriteLine(
                 "vibesupertonicd [--data <dir>] [--models <dir>] [--voice M1] [--lang en] [--preload]");
+            Console.WriteLine("                [--version] [--print-store]");
             Console.WriteLine();
             Console.WriteLine("Portable: with no arguments, reads models/ and data/ from the");
             Console.WriteLine($"directory holding this executable ({LinuxDataPaths.BaseDir}).");
@@ -123,9 +141,18 @@ GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.StoreRoot, DaemonLog.Write);
 var config = new HostConfig(dataDir, modelsRoot);
 config.Reload(force: true);
 
-if (LinuxDataPaths.IsAppImage)
-    DaemonLog.Write($"appimage {LinuxDataPaths.AppImageFile}, store {LinuxDataPaths.StoreRoot} " +
+if (LinuxDataPaths.AppImageFile is { } appImage)
+{
+    DaemonLog.Write($"appimage {appImage}, store {LinuxDataPaths.StoreRoot} " +
                     $"({LinuxDataPaths.Store.Reason})");
+
+    // The hotkeys point at a copy of vst-ctl in ~/.local/bin, and upgrading is
+    // replacing one file that has nothing to do with that copy. Re-checked here
+    // so that every way of waking this product up also repairs the client.
+    string? installed = AppImageClient.EnsureInstalled(
+        appImage, AppContext.BaseDirectory.TrimEnd('/'), version);
+    if (installed is not null) DaemonLog.Write(installed);
+}
 
 DaemonLog.Write($"data {dataDir}{(config.Writable ? "" : " (read-only)")}");
 foreach (string note in config.Notes)

@@ -522,8 +522,12 @@ _vst_kde_install_desktop() {   # <install-dir>
     # Exec opens the WINDOW, not a verb: this is the application-menu entry as
     # well as the shortcut carrier, and an entry that spoke your selection when
     # clicked from the menu would be a surprising thing to hand somebody.
-    local ui="$dir/vibesupertonic-ui"
-    [[ -x "$ui" ]] || ui="$dir/vibesupertonic-ui"
+    #
+    # VST_KB_UI_COMMAND exists for the AppImage, where the window is not a file
+    # in the same directory as vst-ctl: the client is copied to ~/.local/bin and
+    # the window lives inside a squashfs image that only its own runtime can
+    # open. Unset for a tarball install, which is every other case.
+    local ui="${VST_KB_UI_COMMAND:-$dir/vibesupertonic-ui}"
     body="[Desktop Entry]
 Type=Application
 Name=VibeSuperTonic

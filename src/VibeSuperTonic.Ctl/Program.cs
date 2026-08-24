@@ -448,17 +448,59 @@ static Socket? WaitForDaemon(string path, int budgetMs)
     return null;
 }
 
+/// <summary>
+/// One absolute path, written by <c>&lt;AppImage&gt; bind</c> beside this binary.
+/// Absent for a tarball install, which is the common case and needs nothing.
+/// </summary>
+static string SidecarPath() => Path.Combine(AppContext.BaseDirectory, "vst-ctl.appimage");
+
+static string? ReadAppImageSidecar()
+{
+    try
+    {
+        string path = SidecarPath();
+        if (!File.Exists(path)) return null;
+        string value = File.ReadAllText(path).Trim();
+        return value.Length > 0 ? value : null;
+    }
+    catch { return null; }
+}
+
 static bool TryStartDaemon(out string error)
 {
-    // Next to this executable is the only location worth guessing: the tarball
-    // ships both binaries in one directory, so anything else would be looking
-    // for a layout this product does not produce.
-    string exe = Environment.GetEnvironmentVariable("VST_DAEMON")
-        ?? Path.Combine(AppContext.BaseDirectory, "vibesupertonicd");
+    // Three places, in order of how specific they are.
+    //
+    //   1. $VST_DAEMON, which is a person overriding everything.
+    //   2. An AppImage recorded beside this binary. This client was copied out
+    //      of an image to ~/.local/bin so the hotkey would not pay a squashfs
+    //      mount per press, which means there is no vibesupertonicd next to it —
+    //      and starting one on the first press is R-5, the rule that keeps a
+    //      hotkey from silently doing nothing.
+    //   3. Next to this executable, which is what the tarball ships.
+    string exe = Environment.GetEnvironmentVariable("VST_DAEMON") ?? "";
+    string? appImage = exe.Length == 0 ? ReadAppImageSidecar() : null;
+    var arguments = new List<string>();
+
+    if (exe.Length == 0 && appImage is not null)
+    {
+        exe = appImage;
+        arguments.Add("daemon");
+    }
+    else if (exe.Length == 0)
+    {
+        exe = Path.Combine(AppContext.BaseDirectory, "vibesupertonicd");
+    }
 
     if (!File.Exists(exe))
     {
-        error = $"{exe} not found (set VST_DAEMON to override)";
+        // The sidecar case gets its own sentence: the file it names has been
+        // moved or deleted since the hotkeys were bound, and re-binding is the
+        // fix. "vibesupertonicd not found" would send the user looking for a
+        // binary that was never supposed to be there.
+        error = appImage is not null
+            ? $"{exe} is recorded in {SidecarPath()} but is not there any more — " +
+              "the AppImage was moved or deleted. Run `<AppImage> bind` again from where it is now."
+            : $"{exe} not found (set VST_DAEMON to override)";
         return false;
     }
 
@@ -475,6 +517,8 @@ static bool TryStartDaemon(out string error)
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+
+        foreach (string argument in arguments) psi.ArgumentList.Add(argument);
 
         var proc = Process.Start(psi);
         if (proc is null) { error = "Process.Start returned null"; return false; }
