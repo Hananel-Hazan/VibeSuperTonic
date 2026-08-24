@@ -1064,11 +1064,31 @@ proves this stack has opinions about lifetimes.
   device batteries and three USB-C supplies, one of which reports itself as
   charging, and a name-matching implementation would have had four candidates to
   be wrong about.
-- **Click the Tune tab's button once.** The window renders, the tab is
-  constructed, and the exact client path the button uses was driven headlessly
-  against a real daemon — seven progress replies, then the payload. What could
-  not be automated is the click: this is a Wayland session with no input-injection
-  tool installed, and adding one to test a button is a worse trade than asking.
+- ~~**Click the Tune tab's button once.**~~ **Done 2026-08-24, and it passes.**
+  The window attached at 18:49:34 and the sweep began fifteen seconds later, which
+  is what makes this the *button* rather than the verb — the daemon logs what was
+  asked of it, not who asked, so the only proof available is that no other client
+  existed at the time. 32 s, eight rows, `picked cuda 2 threads`, saved.
+
+  The table is also the third independent reproduction of [8a](#phase-8a)'s
+  finding, on a rebuilt tree and a fresh sweep:
+
+  ```
+    threads   median      RTF   cores
+    1          1432 ms  0.254     1.0
+    2           772 ms  0.137     2.3
+    3           767 ms  0.136     3.4     <- best CPU row
+    4           815 ms  0.144     4.6
+    6          1012 ms  0.179     6.8
+    8          1692 ms  0.300     8.5
+    auto        932 ms  0.165    14.8
+    cuda (2)    101 ms  0.018     1.0     <- picked
+  ```
+
+  Eight threads remain slower than one, and `auto` still spends **fifteen cores to
+  finish slower than two**. CUDA wins by 7.6x rather than by a margin, so
+  `PickAcross`'s tie band was never asked to adjudicate — which is the outcome the
+  band was written down early to be safe from, not evidence that it is right.
 
 <a name="phase-7-landed"></a>
 
