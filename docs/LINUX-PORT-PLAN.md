@@ -9,8 +9,13 @@ screen, with every exit criterion verified on hardware
 **the models download on Linux now**, through Core's own downloader, behind the
 licence acceptance.
 **[Phase 7](#phase-7) is done — 2026-08-22**: `build/pack-tar.sh`, `install.sh`,
-and a 51 MB tarball verified by extracting it and running what came out. 8b has
-not started. 881 Core tests. See [What to do next](#next).
+and a 51 MB tarball verified by extracting it and running what came out.
+**[Phase 8b](#phase-8b-landed) is done — 2026-08-24, and with it the port.** Its
+gated GPU spike passed by a mile — first audio **802 ms → 77 ms** on an RTX
+A2000 — so CUDA is a shipped path behind an opt-in 3.1 GB provider pack, the
+daemon changes provider between utterances (on battery, on a setting, on a fresh
+benchmark) without restarting, and the Tune tab's benchmark button is wired.
+895 Core tests. See [What to do next](#next).
 
 **The target machine changed underneath this document on 2026-08-22, and two of
 its assumptions died with it.** It was reinstalled as **Ubuntu 26.04 / KDE Plasma
@@ -107,7 +112,7 @@ before changing it.
 | 8a · `vst-ctl benchmark` | **Done 2026-08-16.** The sweep, the profile, the verb, and `config`'s provenance. Two guards were wrong on first contact with a real machine and both are fixed. [The record](#phase-8a) |
 | 6 · App + tray | **Done 2026-08-18.** Window, Reader, tray (rung 1 held), Tune and Pronunciations as writers, and the first-run screen — which downloads the models. Every exit criterion verified on hardware; one D-Bus trap cost most of a day. [The record](#phase-6-landed) |
 | 7 · Packaging | **Done 2026-08-22.** [build/pack-tar.sh](../build/pack-tar.sh) publishes all three binaries into emptied directories, composes the layout, writes `install.sh`/`uninstall.sh`/`INSTALL.txt`/`LICENSE-MODELS.txt`, ships `models-manifest.json` and no models, and asserts three things against the composed tree. 51 MB, 238 files, verified by extracting and running it. **Not yet released as 0.3.0** — the user took it as a personal install at 0.2.7.5, so the release number is still unspent. [The record](#phase-7-landed) |
-| 8b · Fit the machine, the rest | Not started. Battery rule, the gated GPU spike, wiring Phase 6's Tune control — see [Phase 8](#phase-8) |
+| 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
 
 <a name="windows-check"></a>
 
@@ -786,6 +791,183 @@ invisible.
 **Still open:** GNOME refuses to implement ext-data-control on security grounds,
 so a GNOME/Wayland box has no path at all and the source says so in one sentence
 rather than failing silently.
+
+<a name="phase-8b-landed"></a>
+
+### Phase 8b landed, and the GPU gate passed by a mile — 2026-08-24
+
+The last phase, and the one whose central question was open when it started:
+whether a GPU is worth anything to a model this small. [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) had the
+same shape and the same treatment — a spike and a gate before any commitment —
+and this is the answer.
+
+**The gate, measured on the development machine** (RTX A2000 8GB Laptop, driver
+595.84, `TotalStep` 6, CPU at four threads), by
+[spike/gpu-cuda](../spike/gpu-cuda):
+
+| Gate | Result |
+| --- | --- |
+| ≥ 30% off first-audio latency | **PASS — 90% off.** 802 ms → 77 ms |
+| No RTF regression | **PASS.** 0.180 → 0.018, ten times faster than real time instead of five |
+| Clean fall back to CPU when the driver or libraries are missing | **PASS.** A catchable exception naming the missing library, with the CPU path unaffected in the same process — run with the libraries hidden, twice, deliberately |
+
+That first row is the ~600 ms fixed model cost [Phase 3](LINUX-PORT-ARCHIVE.md#phase-3) measured and called
+the only remaining lever on first audio. It turns out a GPU moves it, and the
+plan's own note 5 had the shape of the question exactly right — "does a GPU win
+on a single small inference, including everything it costs to get there" — while
+guessing the wrong answer, which is what gates are for.
+
+<a name="r13-corrected"></a>
+
+**[R-13](LINUX-PORT-ARCHIVE.md#r-13) does not apply to CUDA on Linux, and the package graph is the
+proof.** The rule says a GPU backend must be a separate project because the GPU
+package publishes the same managed assembly name with a *different managed
+surface*. That is exactly true of DirectML: `AppendExecutionProvider_DML` does
+not exist in the CPU package, so the split has to be made at build time. It is
+not true here — `Microsoft.ML.OnnxRuntime` and
+`Microsoft.ML.OnnxRuntime.Gpu.Linux` both depend on the **same**
+`Microsoft.ML.OnnxRuntime.Managed 1.22.1`. One managed assembly, one API,
+`AppendExecutionProvider_CUDA` in both.
+
+So the split moved down a layer, to the native files, where two measurements
+settled the shape:
+
+- **The CPU package's `libonnxruntime.so` does not export the CUDA entry point.**
+  Building the mixture — CPU runtime, GPU provider library beside it — fails with
+  `EntryPointNotFoundException`. So a GPU-capable build has to ship even for
+  CPU-only users. It costs them **1 MB**, 21 → 22, and the archive went 51 → 52 MB.
+- **A native library loads once per process**, and the battery rule needs the
+  provider to change *between utterances* in a daemon that runs for a week. Two
+  `libonnxruntime.so` files in two directories cannot both be live, so "ship both
+  and pick one" was never available.
+
+`VibeSuperTonic.Onnx.Cpu` is therefore now `VibeSuperTonic.Onnx.Ort`, with
+`OrtSynthesizer(modelsRoot, provider, threads)` — one backend, provider chosen at
+runtime. The name lost its provider suffix because the provider stopped being a
+build-time axis.
+
+**The 330 MB that must not ship.** `libonnxruntime_providers_cuda.so` arrives
+with the GPU package and is useless without CUDA and cuDNN, which are gigabytes
+more. `build/install-gpu.sh` fetches all of it on request — the provider from
+nuget.org, CUDA and cuDNN from PyPI, which is where NVIDIA publishes them —
+into `runtime/cuda/` and the install root. 2.8 GB installed, 22 libraries,
+verified by installing it into an extracted tarball and running what came out.
+
+The removal is in [Directory.Build.targets](../Directory.Build.targets), repo-wide,
+**and that is the finding**: the first version was a target inside the backend
+csproj, it looked right, `dotnet build` was clean — and the packer caught 330 MB
+sitting in the composed tree. A target in a project governs that project's
+output, not the publish of the daemon that references it. Assertion 4 in
+[build/pack-tar.sh](../build/pack-tar.sh) is what fired, and it is now permanent,
+along with a fifth check that the ORT version `install-gpu.sh` downloads equals
+the one the daemon links — they are one build split across two files, and a drift
+between them fails on the user's machine and nowhere else.
+
+<a name="preload-heap"></a>
+
+**Pre-loading the CUDA libraries corrupts the heap; `LD_LIBRARY_PATH` does not.**
+`libonnxruntime_providers_cuda.so` carries no RPATH, so its seven NEEDED sonames
+are resolved by the loader or not at all. Loading them first by absolute path
+*does* satisfy those references — measured, it works, CUDA initialises and
+renders — and then the process aborts at exit with `malloc(): unsorted double
+linked list corrupted` in three runs out of three. The identical directory
+reached through `LD_LIBRARY_PATH` ran clean in three out of three. Tried with
+`NativeLibrary.Load`, and again with `dlopen(RTLD_GLOBAL | RTLD_NODELETE)` to
+rule out unloading order: same abort. Something in that stack expects to be
+brought in by the loader as a dependency.
+
+So the daemon **re-execs itself once** when it finds a provider pack, with the
+pack on `LD_LIBRARY_PATH` — `execv`, so same pid, same parent, and
+`/proc/<pid>/exe` still points at the binary `install.sh` looks for. It is one
+`execv` on a daemon that starts once per login, and it buys the arrangement that
+was actually measured not to die. Every ordinary install skips it: no pack, no
+re-exec, one directory check.
+
+**A guard that always fires is as bad as one that never does.** `install-gpu.sh`
+reported *"No NVIDIA driver found"* on the first run, on a machine with an RTX
+A2000 in it: `ldconfig -p | grep -q` under `set -o pipefail` — `grep -q` exits on
+the first match, `ldconfig` dies of SIGPIPE, and the pipeline returns 141. The
+mirror image of the [KDE conflict scanner](#kde-wayland) that could never fire,
+found the same way — by running the guard against the case it is supposed to
+pass. `grep -c` reads its input to the end; the packer's version of the same
+construct is now `awk`.
+
+#### What the daemon does with all this
+
+**One decision, four ways to lose the GPU, and a different sentence for each.**
+`ExecutionDecision.Decide` layers preference (`auto | cpu | gpu`), the probe's
+answer, and the power lead — and the vetoes compose in one direction only, so
+nothing can talk a machine onto a GPU it does not have:
+
+```
+CUDA, 2 threads (benchmark 2026-08-24)
+CPU, 2 threads (on battery, benchmark 2026-08-24)
+CPU, 2 threads (cpu requested, benchmark 2026-08-24)
+CPU, 2 threads (no GPU available — OnnxRuntimeException: ... Failed to load shared library, benchmark 2026-08-24)
+CPU, 4 threads (20% of 20 logical processors, never benchmarked)
+```
+
+All five are real output from the shipped binary. The GPU-availability answer is
+the **probe's own sentence** — `AppendExecutionProvider_CUDA` on a throwaway
+`SessionOptions` — not an inventory of hardware, because "the pack is not
+installed", "cuDNN is missing", "the driver is too old" and "there is no device"
+all have to be told apart and only that call knows.
+
+**A vetoed GPU lands on a measured thread count, not back on the percentage.**
+The sweep measures every CPU row on its way to picking the GPU, so unplugging
+applies the best CPU row from the same profile. Throwing a measurement away
+because of an unrelated one would be the same mistake staleness handling exists
+to avoid.
+
+**The provider changes between utterances, and so does the thread count — which
+means `vst-ctl benchmark` now applies without a restart.** This is the sentence
+that was in [Program.cs](../src/VibeSuperTonic.Daemon/Program.cs) as a fact of
+life since Phase 3: *ORT sizes its thread pool when the session is built, so a
+benchmark run at 11:00 governs the daemon started at 12:00.* It is still true of
+a session; the answer was to build another one.
+`ProviderSwitchingSynthesizer` sits behind `ISynthesizer` — so `SpeechSession`,
+the boundary planner and every test above them are untouched — asks again at the
+start of each utterance, and rebuilds only when the answer changed. **Never
+inside an utterance**: it returns immediately unless the session is idle, which
+is the same rule, for the same reason, as the audio-device reconnect.
+
+**It costs nothing at acknowledge time, and that is not luck — it is the lazy
+load.** Measured on the shipped binary: an ordinary press acknowledges in 32 ms,
+a press that switches provider in **17 ms**. Building an `OrtSynthesizer` does
+not load the model; the first render does, on the session's worker thread. So a
+switch moves ~0.4 s of model load to where a cold first press already pays it,
+and R-3's 100 ms budget is never in danger. The old session is disposed off the
+gate, after the swap.
+
+**Tearing down a CUDA session in a live process is safe** — the thing that had to
+be true for any of this. Three rounds of build CUDA → render → dispose → build
+CPU → render → dispose in one process, then four more switches through the real
+daemon, no crash. Worth measuring rather than assuming: the heap corruption above
+proves this stack has opinions about lifetimes.
+
+#### Exit criteria
+
+| Criterion | State |
+| --- | --- |
+| `benchmark` completes in about a minute and reproduces itself | **Held.** Eight rows now, seven CPU and one CUDA, ~40 s |
+| No GPU, and a GPU with a broken driver, both benchmark cleanly to a CPU profile | **Done, both halves.** The broken half was measured by hiding `libcudnn.so.9` from an installed pack: the probe fails, the daemon says so, the sweep runs seven CPU rows and exits 0 |
+| Unplugging changes the provider on the next utterance, visible in `status`, no glitch in the utterance in progress | **Done through `VST_POWER`**, which is a diagnosis hook of the same family as `VST_SELECTION` and exists because the alternative is a test nobody can run twice. `status` grew an `Inference` field. **The physical unplug is not yet done** — see below |
+| The profile survives a portable-folder copy as a *stale* profile | Done in [8a](#phase-8a); unchanged |
+| The Tune tab's benchmark control is enabled and calls the verb, and `config` reports the profile with its reason | **Wired.** The button calls the same verb `vst-ctl` does, over a new streaming client that reports each row as it lands, with a "measure anyway" button for the load guard's refusal. The tab also grew the `Provider` and `GpuOnBattery` controls, because a setting with no surface is the parity rule's other failure mode |
+
+**Two things a person has to do**, both a few seconds, neither blocking:
+
+- **Unplug the laptop and press the hotkey.** The rule is verified through the
+  override and by unit tests; what is not verified is that this machine's
+  `/sys/class/power_supply/AC/online` goes to 0 when the lead comes out. It reads
+  1 now, and `MachineFacts` selects the supply by `type == Mains` rather than by
+  name, which is already better than the plan's `AC*/online` — the box also has
+  three USB-C supplies and one of them reports itself as charging.
+- **Click the Tune tab's button once.** The window renders, the tab is
+  constructed, and the exact client path the button uses was driven headlessly
+  against a real daemon — seven progress replies, then the payload. What could
+  not be automated is the click: this is a Wayland session with no input-injection
+  tool installed, and adding one to test a button is a worse trade than asking.
 
 <a name="phase-7-landed"></a>
 
@@ -2035,6 +2217,15 @@ a failure means.
 > (~1 day) run **before** Phase 6; the battery rule, the GPU spike and wiring
 > Phase 6's Tune control stay here. See note 1 below.
 >
+> **8b is done too — 2026-08-24, and the sections below are what it was measured
+> against rather than what remains. Read [the record](#phase-8b-landed) first:**
+> the GPU spike passed its gate by a mile and turned into a shipped CUDA path,
+> R-13 turned out not to apply to CUDA on Linux, and the "a benchmark applies at
+> the next daemon start" constraint below is no longer true — the daemon rebuilds
+> its session between utterances. What is left of this section is the reasoning
+> that produced those decisions, kept because the numbers in it are still the
+> ones that justify the defaults.
+>
 > **8a is done — 2026-08-16, on estimate.** The sweep, the profile, the verb and
 > `config`'s provenance all landed; [the record](#phase-8a) carries the resulting
 > table, the two guards that were wrong on real hardware, and the one exit
@@ -2309,9 +2500,9 @@ same days — and that belongs in an effort table, not in a phase list.
 | — · Seam fixes, before 6 | 0.5 | **done, on estimate** | notice on the stream, `[JsonExtensionData]`, the log file, the PRIMARY measurement, `InterChunkSilenceMs` — [the record](#seam-fixes) |
 | 8a · `vst-ctl benchmark`, before 6 | 1 | **done, on estimate** | the sweep, the profile format, the verb, `config` provenance. Split out by decision — [the record](#phase-8a) |
 | 6 · App + tray | 3–4 | **done** | The second binary, the Reader against the stream, `hello`, R-1 by process boundary, finding 5 measured, finding 6 instrumented, the tray on rung 1, both settings writers, and the first-run screen with the model download |
-| 7 · Packaging | 1.5–2 | not started | AOT publish, `fetch-models`, build provenance, three binaries |
-| 8b · Fit the machine, the rest | 0.5 + spike | not started | battery rule, wiring the Tune control; GPU is a gated spike, not in the estimate |
-| **Remaining** | **2–2.5** | | Phase 7 and the rest of 8b. Every contingency ladder in the plan is now spent |
+| 7 · Packaging | 1.5–2 | **done 2026-08-22** | the packer, its three assertions, `install.sh` / `uninstall.sh`, the layout — [the record](#phase-7-landed) |
+| 8b · Fit the machine, the rest | 0.5 + spike | **done 2026-08-24** | battery rule, the provider switch, the Tune control; the GPU spike passed its gate and turned into a shipped CUDA path plus an opt-in provider pack — [the record](#phase-8b-landed) |
+| **Remaining** | **0** | | The port is done. What is left is not a phase: [the Windows convergence](#convergence) and [the Way 3 gate](#the-gate), both deliberately deferred until v1 ships |
 
 **The seam fixes came in on their half day**, and the reason is the one Phases 2
 and 3 already demonstrated: new code against interfaces that already existed,

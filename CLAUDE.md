@@ -32,10 +32,10 @@ Written 2026-08-22. `bash build/pack-tar.sh [-v X.Y.Z]`. It publishes all three
 binaries into freshly emptied directories, composes the portable layout
 (binaries at the root, `models/` and `data/` beside them — no `engine/` split,
 because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
-`INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` to the
-root, and archives it.
+`INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
+`install-gpu.sh` to the root, and archives it.
 
-Three assertions run against the **composed tree**, not the build outputs, and
+Five assertions run against the **composed tree**, not the build outputs, and
 each exists because the failure it catches is silent:
 
 - **All three binaries report the same version**, asked of the shipped files via
@@ -48,6 +48,22 @@ each exists because the failure it catches is silent:
   ~4 MB. A `grep ELF` check (which is what CI does) cannot tell them apart.
 - **No models in the archive.** They download on first run behind the
   OpenRAIL-M acceptance; shipping them would make that screen a lie.
+- **No `libonnxruntime_providers_cuda.so` in the archive** (Phase 8b). It is
+  330 MB against a 52 MB tarball and arrives by default with the GPU package the
+  backend links; `Directory.Build.targets` removes it at publish. The first
+  version of that removal lived in the backend csproj, looked correct and built
+  clean — a target in a project governs *that project's* output, not the publish
+  of the daemon referencing it — and this assertion is what caught the 330 MB.
+- **`install-gpu.sh` fetches the same ONNX Runtime version the daemon links.**
+  The provider library and `libonnxruntime.so` are one build split across two
+  files; a drift between them fails on the user's machine and nowhere else, and
+  this is the only place both numbers are visible at once.
+
+**The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
+ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
+nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a
+3 GB one for a machine that may have no NVIDIA GPU. Never bundle it. If it
+appears in the tree, assertion 4 is what will tell you.
 
 `install.sh` **stops a running daemon before doing anything**, found by
 `/proc/<pid>/exe` and never `pkill -f`, and `INSTALL.txt` says to do the same
