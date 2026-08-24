@@ -131,7 +131,7 @@ before changing it.
 | 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
 | — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
 | — · **Release 0.2.8 — the tarball** | **Next, and it is not code.** Everything is built and verified except [two things only a person can do](#phase-8b-landed): unplug the laptop and press the hotkey, and click the Tune tab's benchmark button once |
-| 9 · [AppImage](#phase-9) | **Not started.** Ships as 0.2.9. 2 days plus a gated latency spike — the hotkey is the part that can fail |
+| 9 · [AppImage](#phase-9) | **In progress.** The gate is measured and it passes — **+14.7 ms**, not the disqualifying number it might have been ([the record](#appimage-gate)) — and [the store no longer lives beside the executable](#appimage-store), verified against a real AppImage. What is left: the packer, `bind`, and the `~/.local/bin` copy |
 | — · [Piper](PIPER-PLAN.md) | **Not started.** Ships as 0.3. Its own plan, with P0/P1 as pure research and a go/no-go on phoneme parity before anything is committed |
 
 <a name="windows-check"></a>
@@ -1028,6 +1028,53 @@ be true for any of this. Three rounds of build CUDA → render → dispose → b
 CPU → render → dispose in one process, then four more switches through the real
 daemon, no crash. Worth measuring rather than assuming: the heap corruption above
 proves this stack has opinions about lifetimes.
+
+<a name="appimage-store"></a>
+
+#### What has landed — 2026-08-24
+
+**The store.** `LinuxDataPaths` grew `StoreRoot` beside `BaseDir`, and the rule
+above is implemented with the existing-store preference as its first clause. The
+daemon, `config` and the first-run download all follow it; every install that is
+not an AppImage sees the same directory it always did.
+
+Verified by running an AppImage built from the composed tree, in an isolated
+runtime directory, in the three states that matter:
+
+| Case | Result |
+| --- | --- |
+| Fresh | Store created beside the file — *"new, beside the AppImage"* — and XDG untouched |
+| Moved with its folder to another directory | Store **found**, not recreated: the reason came back as *"beside the AppImage"* rather than *"new"*, and a `settings.json` written before the move (`DefaultVoice: F3`) was read back after it |
+| From a `chmod a-w` directory | Falls back to XDG **and starts**, naming the reason — refusing would be a hotkey that silently does nothing |
+
+`config` now answers with `BaseDir /tmp/.mount_VibeSuJEEDga/usr/lib/vibesupertonic`
+beside `StoreRoot /tmp/vst9/apps2/VibeSuperTonic`, which is the phase in one line
+of output: two different answers to what used to be one question.
+
+**A test project came with it** — `VibeSuperTonic.Daemon.Tests`, Linux-only and
+in the Linux solution alone. Core.Tests is package-free so that it runs on both
+CI runners, which is why it pins the Linux settings type through a replica; that
+is the right tool for a *mechanism* and the wrong one for a *rule*, because a
+copied rule agrees with itself. Nine tests, and the ones worth having are the
+moved AppImage and the read-only directory.
+
+**Known limit, and it belongs in `INSTALL.txt`:** moving the `.AppImage` *without*
+its `VibeSuperTonic` folder orphans the store and starts a new one. Remembering
+the last store in a marker file would cover it, at the cost of state outside the
+two places state lives today. Not worth it — but the sentence "keep the AppImage
+and its folder together" is.
+
+#### Still to do
+
+- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
+- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
+  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
+  is the product's first icon *file*, and one definition would be better than two.
+- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
+- `install-gpu.sh` writing into the store rather than the install root, and
+  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
+  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
+- Building the AppDir in a container against an older glibc, and naming the floor.
 
 #### Exit criteria
 
@@ -2550,6 +2597,53 @@ the spike the GPU would be idle whenever it is unplugged. That is not an argumen
 against measuring; it is an argument for measuring *first* and cheaply, which is
 what [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) did with the same shape of question.
 
+<a name="appimage-store"></a>
+
+#### What has landed — 2026-08-24
+
+**The store.** `LinuxDataPaths` grew `StoreRoot` beside `BaseDir`, and the rule
+above is implemented with the existing-store preference as its first clause. The
+daemon, `config` and the first-run download all follow it; every install that is
+not an AppImage sees the same directory it always did.
+
+Verified by running an AppImage built from the composed tree, in an isolated
+runtime directory, in the three states that matter:
+
+| Case | Result |
+| --- | --- |
+| Fresh | Store created beside the file — *"new, beside the AppImage"* — and XDG untouched |
+| Moved with its folder to another directory | Store **found**, not recreated: the reason came back as *"beside the AppImage"* rather than *"new"*, and a `settings.json` written before the move (`DefaultVoice: F3`) was read back after it |
+| From a `chmod a-w` directory | Falls back to XDG **and starts**, naming the reason — refusing would be a hotkey that silently does nothing |
+
+`config` now answers with `BaseDir /tmp/.mount_VibeSuJEEDga/usr/lib/vibesupertonic`
+beside `StoreRoot /tmp/vst9/apps2/VibeSuperTonic`, which is the phase in one line
+of output: two different answers to what used to be one question.
+
+**A test project came with it** — `VibeSuperTonic.Daemon.Tests`, Linux-only and
+in the Linux solution alone. Core.Tests is package-free so that it runs on both
+CI runners, which is why it pins the Linux settings type through a replica; that
+is the right tool for a *mechanism* and the wrong one for a *rule*, because a
+copied rule agrees with itself. Nine tests, and the ones worth having are the
+moved AppImage and the read-only directory.
+
+**Known limit, and it belongs in `INSTALL.txt`:** moving the `.AppImage` *without*
+its `VibeSuperTonic` folder orphans the store and starts a new one. Remembering
+the last store in a marker file would cover it, at the cost of state outside the
+two places state lives today. Not worth it — but the sentence "keep the AppImage
+and its folder together" is.
+
+#### Still to do
+
+- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
+- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
+  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
+  is the product's first icon *file*, and one definition would be better than two.
+- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
+- `install-gpu.sh` writing into the store rather than the install root, and
+  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
+  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
+- Building the AppDir in a container against an older glibc, and naming the floor.
+
 #### Exit criteria
 
 - ~~`vst-ctl benchmark` completes in under a minute~~ **in about a minute —
@@ -2647,13 +2741,82 @@ that makes it hold:
    true by the time the sentence is read. Never silently: this writes to the
    user's `~/.local/bin` and their shortcut configuration, and both are stated.
 
-**The gate, and it is worth measuring even though the decision is made:**
-press → acknowledge through `App.AppImage ctl toggle`, against the **28 ms**
-Phase 3 measured and the **32 ms** 8b measured on the shipped binary. If a
-wrapped invocation lands inside budget it becomes the documented zero-install
-fallback for someone who will not have anything written to `~/.local/bin`. If it
-does not, the number is recorded and the question is closed with evidence rather
-than by assertion — [trap 13](#traps).
+<a name="appimage-gate"></a>
+
+**The gate is measured — 2026-08-24 — and it passes.** 20 runs each against a
+live daemon, warm:
+
+| path | median | min | p90 | max |
+| --- | --- | --- | --- | --- |
+| native `vst-ctl` | **5.3 ms** | 3.5 | 7.2 | 7.9 |
+| `App.AppImage ctl` | **20.0 ms** | 16.3 | 24.6 | 25.6 |
+| `--appimage-extract-and-run` | 82 ms warm, 247 ms first | | | |
+
+**+14.7 ms, 3.8x — and comfortably inside budget.** Against R-3's 100 ms
+acknowledge budget the wrapped path lands around 45 ms end to end, so **binding
+the hotkey directly at the AppImage is viable**, which this plan wrote down as an
+open question. That does not change the decision: the copy is free and 15 ms is
+15 ms. It changes what the documentation may honestly say — the fallback is a
+measured option rather than a hope, which matters for anyone who will not have a
+binary written into `~/.local/bin`.
+
+`--appimage-extract-and-run` is the one to keep off the default path: four times
+the wrapped cost, 247 ms on a cold cache, and 125 MB left extracted in `/tmp`.
+It is the answer when FUSE is missing, and it must say so rather than being
+chosen silently.
+
+*How it was measured, so the number can be re-taken rather than trusted:* a
+type-2 runtime concatenated onto a zstd squashfs of the composed tarball tree,
+`ctl status` — one socket round trip, the same shape as a toggle's acknowledge —
+with three warm-up runs discarded. The AppImage came out **48 MB against the
+tarball's 52**, because zstd beats the tarball's gzip.
+
+<a name="appimage-store"></a>
+
+#### What has landed — 2026-08-24
+
+**The store.** `LinuxDataPaths` grew `StoreRoot` beside `BaseDir`, and the rule
+above is implemented with the existing-store preference as its first clause. The
+daemon, `config` and the first-run download all follow it; every install that is
+not an AppImage sees the same directory it always did.
+
+Verified by running an AppImage built from the composed tree, in an isolated
+runtime directory, in the three states that matter:
+
+| Case | Result |
+| --- | --- |
+| Fresh | Store created beside the file — *"new, beside the AppImage"* — and XDG untouched |
+| Moved with its folder to another directory | Store **found**, not recreated: the reason came back as *"beside the AppImage"* rather than *"new"*, and a `settings.json` written before the move (`DefaultVoice: F3`) was read back after it |
+| From a `chmod a-w` directory | Falls back to XDG **and starts**, naming the reason — refusing would be a hotkey that silently does nothing |
+
+`config` now answers with `BaseDir /tmp/.mount_VibeSuJEEDga/usr/lib/vibesupertonic`
+beside `StoreRoot /tmp/vst9/apps2/VibeSuperTonic`, which is the phase in one line
+of output: two different answers to what used to be one question.
+
+**A test project came with it** — `VibeSuperTonic.Daemon.Tests`, Linux-only and
+in the Linux solution alone. Core.Tests is package-free so that it runs on both
+CI runners, which is why it pins the Linux settings type through a replica; that
+is the right tool for a *mechanism* and the wrong one for a *rule*, because a
+copied rule agrees with itself. Nine tests, and the ones worth having are the
+moved AppImage and the read-only directory.
+
+**Known limit, and it belongs in `INSTALL.txt`:** moving the `.AppImage` *without*
+its `VibeSuperTonic` folder orphans the store and starts a new one. Remembering
+the last store in a marker file would cover it, at the cost of state outside the
+two places state lives today. Not worth it — but the sentence "keep the AppImage
+and its folder together" is.
+
+#### Still to do
+
+- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
+- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
+  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
+  is the product's first icon *file*, and one definition would be better than two.
+- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
+- `install-gpu.sh` writing into the store rather than the install root, and
+  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
+  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
+- Building the AppDir in a container against an older glibc, and naming the floor.
 
 #### Exit criteria
 
