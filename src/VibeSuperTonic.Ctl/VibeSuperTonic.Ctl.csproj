@@ -34,6 +34,14 @@
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishAot>true</PublishAot>
+
+    <!--
+      Was missing while the other two carried it, so this binary reported 1.0.0
+      and the "all three agree" assertion in build/pack-tar.sh could never have
+      passed. Same source of truth as the daemon and the UI: one number produces
+      all three, which is the point of the shared <VstVersion>.
+    -->
+    <Version>$(VstVersion)</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -40,6 +40,23 @@ string? voice = null;
 string? language = null;
 bool preload = false;
 
+// From <VstVersion> via the csproj, not a literal. `status` reports it so a
+// stale client is diagnosable, and a version that has to be edited by hand is
+// one that will eventually lie — which is worse than reporting nothing.
+// InformationalVersion carries "+<sha>" when a build adds source metadata;
+// the part before it is the number the packers and the user talk about.
+//
+// Computed HERE, above the argument loop, because `--version` is answered inside
+// it. build/pack-tar.sh runs all three binaries and refuses to build an archive
+// whose parts disagree, so this is not merely informational — it is the guard
+// against a stale binary surviving in an output folder and shipping a UI that
+// disagrees with its daemon.
+string version = Assembly.GetEntryAssembly()
+    ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+    ?.InformationalVersion
+    ?.Split('+')[0]
+    ?? "unknown";
+
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -49,6 +66,9 @@ for (int i = 0; i < args.Length; i++)
         case "--voice" when i + 1 < args.Length: voice = args[++i]; break;
         case "--lang" when i + 1 < args.Length: language = args[++i]; break;
         case "--preload": preload = true; break;
+        case "--version":
+            Console.WriteLine(version);
+            return 0;
         case "--help" or "-h":
             Console.WriteLine(
                 "vibesupertonicd [--data <dir>] [--models <dir>] [--voice M1] [--lang en] [--preload]");
@@ -103,17 +123,6 @@ if (!Directory.Exists(Path.Combine(modelsRoot, "onnx")))
         "speech will fail until the models are downloaded. " +
         "Pass --models <dir> or set VST_MODELS if they are elsewhere.");
 }
-
-// From <VstVersion> via the csproj, not a literal. `status` reports it so a
-// stale client is diagnosable, and a version that has to be edited by hand is
-// one that will eventually lie — which is worse than reporting nothing.
-// InformationalVersion carries "+<sha>" when a build adds source metadata;
-// the part before it is the number the packers and the user talk about.
-string version = Assembly.GetEntryAssembly()
-    ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-    ?.InformationalVersion
-    ?.Split('+')[0]
-    ?? "unknown";
 
 var options = new DaemonOptions(voice, language, Version: version);
 

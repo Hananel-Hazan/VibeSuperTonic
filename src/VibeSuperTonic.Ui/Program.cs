@@ -1,3 +1,4 @@
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Themes.Fluent;
@@ -18,8 +19,25 @@ namespace VibeSuperTonic.Ui;
 internal static class Program
 {
     [STAThread]
-    public static int Main(string[] args) => BuildAvaloniaApp()
-        .StartWithClassicDesktopLifetime(args);
+    public static int Main(string[] args)
+    {
+        // Answered before Avalonia is touched, so it works with no display —
+        // build/pack-tar.sh asks all three binaries their version and refuses to
+        // archive a tree whose parts disagree, and a packer that needed an X
+        // server to check that would be useless on a build machine.
+        if (args.Contains("--version"))
+        {
+            Console.WriteLine(
+                Assembly.GetEntryAssembly()
+                    ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    ?.InformationalVersion
+                    ?.Split('+')[0]
+                    ?? "unknown");
+            return 0;
+        }
+
+        return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
 
     // Named and public-shaped because Avalonia's tooling looks for it.
     public static AppBuilder BuildAvaloniaApp() => AppBuilder

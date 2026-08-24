@@ -10,7 +10,7 @@ obvious; the project ships two products from one repository.
 | Target | Script | Output |
 | --- | --- | --- |
 | Windows | [build/pack-zip.ps1](build/pack-zip.ps1) | `dist/VibeSuperTonic-<version>-win.zip` |
-| Linux | `build/pack-tar.sh` — **does not exist yet**, see below | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
+| Linux | [build/pack-tar.sh](build/pack-tar.sh) | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
 
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:
@@ -26,43 +26,35 @@ artifacts, on either platform. The Windows script is canonical because it:
 - Generates `LICENSE-MODELS.txt` (the OpenRAIL-M acceptance note the user
   agrees to when models download from Hugging Face) and `INSTALL.txt`.
 
-### The Linux packer does not exist yet
+### The Linux packer — what it asserts, and why
 
-`build/pack-tar.sh` is **Phase 7** of
-[docs/LINUX-PORT-PLAN.md](docs/LINUX-PORT-PLAN.md), and Phase 6 comes first.
-Until it is written there is **no supported way to produce a Linux release** —
-so if the user asks for one, say that, and offer to build the packer as the
-actual task. Publishing the three binaries by hand and tarring the result is
-precisely the ad-hoc route this section forbids: it produces a tree the user
-cannot drop on a fresh machine.
+Written 2026-08-22. `bash build/pack-tar.sh [-v X.Y.Z]`. It publishes all three
+binaries into freshly emptied directories, composes the portable layout
+(binaries at the root, `models/` and `data/` beside them — no `engine/` split,
+because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
+`INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` to the
+root, and archives it.
 
-What it must do when it is written, all of it settled in the port plan:
+Three assertions run against the **composed tree**, not the build outputs, and
+each exists because the failure it catches is silent:
 
-- Publish **three** binaries in one run — `vibesupertonicd` (self-contained),
-  `vibesupertonic-ui` (self-contained), `vst-ctl` (**NativeAOT**) — and assert
-  they report the same version. The guard is against a stale binary surviving in
-  an output folder and shipping a UI that disagrees with its daemon.
-- Assert the shipped `vst-ctl` is a **native ELF**. A `dotnet build` leaves a
-  managed one that works and costs ~100 ms on every hotkey press, so the slow
-  one ships silently.
-- Compose the portable layout — binaries at the root, `models/` and `data/`
-  beside them. No `engine/` split: Linux has no COM bitness problem.
-- Generate `LICENSE-MODELS.txt` and `INSTALL.txt`, and ship **no models**. They
-  download on first run, because the OpenRAIL-M acceptance has to be a human
-  agreeing to something — that screen exists as of Phase 6 and works.
-- **Copy `models-manifest.json` to the root of the layout**, as
-  [build/pack-zip.ps1](build/pack-zip.ps1) already does for Windows. It is what
-  the first-run download reads; without it a release cannot fetch anything and
-  says so, which is correct behaviour for a broken archive and a silly way to
-  ship one.
-- **Stop the daemon before replacing anything**, in `install.sh` and in the
-  `INSTALL.txt` instructions for a hand-untar. Added 2026-08-17 from trap 16 in
-  the port plan: `vibesupertonicd` is long-lived by design, Linux lets you
-  replace a running executable without complaint, and the result is a new binary
-  on disk with the old one still serving every hotkey press — and `status`
-  truthfully reporting the old version.
+- **All three binaries report the same version**, asked of the shipped files via
+  `--version`. Guards a stale binary surviving in an output folder and a UI
+  shipping that disagrees with its daemon.
+- **The shipped `vst-ctl` is native, not a managed apphost.** `file` reports
+  *byte-identical* output for both — verified — so the check is the absence of a
+  companion `vst-ctl.dll` plus a size floor. A managed apphost is ~78 KB and
+  works perfectly while costing ~100 ms on every hotkey press; the AOT binary is
+  ~4 MB. A `grep ELF` check (which is what CI does) cannot tell them apart.
+- **No models in the archive.** They download on first run behind the
+  OpenRAIL-M acceptance; shipping them would make that screen a lie.
 
-Add it to the table above and delete this section once it exists.
+`install.sh` **stops a running daemon before doing anything**, found by
+`/proc/<pid>/exe` and never `pkill -f`, and `INSTALL.txt` says to do the same
+before a hand-untar. `vibesupertonicd` is long-lived by design, Linux lets you
+replace a running executable without complaint, and the result is a new binary
+on disk with the old one still serving every hotkey press — and `status`
+truthfully reporting the old version.
 
 ### Before you run it: settle the version
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Synthesis;
@@ -34,6 +35,25 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     PrintUsage();
     return args.Length == 0 ? 2 : 0;
+}
+
+// Answered here, before the verb check, because it is a question about this
+// binary rather than a request to the daemon — asking a daemon its version to
+// learn this one's would defeat the purpose. Note which flag this is: until
+// 2026-08-18 `vst-ctl --version` was the exact input that reached the empty
+// positional array below and turned into SIGABRT. It now has a meaning.
+//
+// build/pack-tar.sh runs this on the SHIPPED ELF and refuses to build an archive
+// whose three binaries disagree, which is what makes this more than cosmetic.
+if (args.Contains("--version"))
+{
+    Console.WriteLine(
+        Assembly.GetEntryAssembly()
+            ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+            ?.Split('+')[0]
+            ?? "unknown");
+    return 0;
 }
 
 bool noStart = args.Contains("--no-start");
