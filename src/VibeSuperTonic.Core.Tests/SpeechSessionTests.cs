@@ -398,4 +398,71 @@ public class SpeechSessionTests
         }
         return condition();
     }
+
+    // ------------------------------------------- a stop that outlives its utterance
+
+    [Fact]
+    public async Task An_utterance_never_inherits_a_flush_request()
+    {
+        // REPORTED FROM DAILY USE, twice now, and the same symptom both times:
+        // press the key, the text appears in the window, the highlight never
+        // moves, no sound — and the press after it works.
+        //
+        // The flush flag is set by Stop() from the stopping thread and consumed
+        // by the writer between blocks. If it is still set when the NEXT
+        // utterance starts, that utterance's first write trips it, flushes, and
+        // throws — so it dies silently, and tripping the flag is also what
+        // clears it, which is why the following press is fine.
+        //
+        // This asserts the invariant rather than the race that produces it: an
+        // utterance must not begin under a flush request, however one came to be
+        // outstanding.
+        var (session, _, sink, log) = Build();
+        using var _s = session;
+
+        sink.RequestFlush();
+
+        Assert.True(session.Speak("This must be heard.", Voice));
+        await session.Completion;
+
+        Assert.True(sink.WriteCount > 0, "the utterance produced no audio at all");
+        Assert.Contains(log.OfKind(SessionEventKind.Finished), _ => true);
+        Assert.DoesNotContain(log.OfKind(SessionEventKind.Stopped), _ => true);
+    }
+
+    [Fact]
+    public async Task A_stop_racing_the_end_of_an_utterance_does_not_silence_the_next_one()
+    {
+        // The race that leaves the flag outstanding, driven rather than waited
+        // for. Stop() sets the flag AFTER cancelling, so an utterance already in
+        // its last moments can complete its whole teardown in between — and the
+        // teardown is the only thing that would have cleared it.
+        //
+        // On a desktop this is a press that lands as the reading ends, which is
+        // exactly when people press: to cut off the tail, or to read something
+        // new. The gate below stands in for that few-instruction window.
+        var (session, synth, sink, log) = Build();
+        using var _s = session;
+
+        using var flushArrives = new ManualResetEventSlim(false);
+        sink.DelayFlushRequest = flushArrives;
+
+        synth.FramesPerChunk = 4410;
+        Assert.True(session.Speak("Short one.", Voice));
+
+        var stopping = Task.Run(() => session.Stop());   // blocks inside RequestFlush
+        await session.Completion;                        // the worker finishes and unwinds
+
+        flushArrives.Set();                              // ...and only now does the flag land
+        await stopping;
+
+        sink.DelayFlushRequest = null;
+        sink.WriteCount = 0;
+
+        Assert.True(session.Speak("The press after it.", Voice));
+        await session.Completion;
+
+        Assert.True(sink.WriteCount > 0, "the utterance after the stop produced no audio");
+        Assert.Contains(log.OfKind(SessionEventKind.WordBoundary), _ => true);
+    }
 }

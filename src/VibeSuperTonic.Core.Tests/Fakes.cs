@@ -48,7 +48,7 @@ public sealed class FakeSink : IAudioSink
 
     public int FlushCount { get; private set; }
     public int DrainCount { get; private set; }
-    public int WriteCount { get; private set; }
+    public int WriteCount { get; set; }
     public bool Disposed { get; private set; }
 
     /// <summary>
@@ -93,7 +93,20 @@ public sealed class FakeSink : IAudioSink
         WriteCount++;
     }
 
-    public void RequestFlush() => _flushRequested = true;
+    /// <summary>
+    /// Held closed by a test that needs <c>Stop()</c>'s flush request to arrive
+    /// LATE — after the worker it was meant for has finished unwinding. That
+    /// interleaving is a few instructions wide in production and is the whole
+    /// mechanism behind an utterance that dies silently, so it is driven rather
+    /// than waited for.
+    /// </summary>
+    public ManualResetEventSlim? DelayFlushRequest { get; set; }
+
+    public void RequestFlush()
+    {
+        DelayFlushRequest?.Wait();
+        _flushRequested = true;
+    }
 
     public void Flush()
     {

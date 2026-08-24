@@ -345,6 +345,31 @@ public sealed class SpeechSession : IDisposable
         bool started = false;
         bool cancelled = false;
 
+        // AN UTTERANCE NEVER BEGINS UNDER A FLUSH REQUEST. Reported from daily
+        // use twice: press the key, the text appears in the window, the highlight
+        // never moves, no sound — and the press after it works.
+        //
+        // Stop() sets the sink's flush flag from the stopping thread, and only
+        // the writer consumes it. The teardown below clears one the writer never
+        // saw, which covers a stop that lands during Preparing. It does not cover
+        // a stop that lands as the utterance ENDS: Stop() reads the state, finds
+        // Speaking, cancels — and sets the flag afterwards, by which time a
+        // worker in its last moments has already run that teardown and gone. The
+        // flag then belongs to nobody, the next utterance's first write trips it,
+        // flushes and throws, and that utterance dies silently. Tripping it is
+        // also what clears it, which is why the press after always works.
+        //
+        // On a desktop that window is not exotic — it is a press landing as the
+        // reading ends, which is exactly when people press: to cut off the tail,
+        // or to read something new.
+        //
+        // Clearing it here, on the writer thread, at the start of the one
+        // operation that must not inherit it, makes the invariant independent of
+        // how any two threads happened to interleave. Flush is the right verb
+        // rather than a new one: dropping whatever the device still holds from a
+        // previous utterance is also correct, and after a stop it is required.
+        try { _sink.Flush(); } catch { /* not open yet, or going away; either way there is nothing held */ }
+
         // Bounded at one so the renderer stays exactly one chunk ahead. Deeper
         // buys nothing — the device is the bottleneck, and every extra rendered
         // chunk is work to throw away on stop.
@@ -514,6 +539,17 @@ public sealed class SpeechSession : IDisposable
         catch (OperationCanceledException)
         {
             cancelled = true;
+
+            // A cancellation with no stop behind it is the defect above coming
+            // back: Stop() is the only thing that cancels this token or requests
+            // a flush, and it sets Stopping before doing either. Anything else
+            // that ends an utterance early is a silent hotkey, so it says so on
+            // the event stream — which the daemon logs — rather than presenting
+            // as a stop nobody asked for.
+            if (State != SpeechState.Stopping)
+                Emit(SessionEvent.Error(
+                    "the utterance was interrupted without a stop request — " +
+                    "this is the stale-flush defect, and it should not be reachable"));
         }
         catch (Exception ex)
         {
