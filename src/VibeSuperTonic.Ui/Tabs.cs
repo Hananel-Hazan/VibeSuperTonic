@@ -115,6 +115,18 @@ public sealed class StatusTab : UserControl
 /// <summary>What this is and how it is driven.</summary>
 public sealed class AboutTab : UserControl
 {
+    /// <summary>
+    /// Kept in step with the Windows Control Panel's About tab, deliberately:
+    /// two products out of one repository, and a user who reads one of them
+    /// should not learn something different from the other. What differs between
+    /// the two screens is only what is genuinely different — how the engine is
+    /// hosted, and which GPU providers exist on that platform.
+    ///
+    /// <para>What is IN FORCE lives on the Status tab, which asks the daemon.
+    /// This screen says what the product is, and it must not paraphrase a live
+    /// value: an About tab claiming "CUDA" while the machine is on battery would
+    /// be wrong in exactly the way the provider work exists to prevent.</para>
+    /// </summary>
     public AboutTab()
     {
         string version = typeof(AboutTab).Assembly.GetName().Version?.ToString(3) ?? "unknown";
@@ -124,6 +136,9 @@ public sealed class AboutTab : UserControl
             Content = Ui.Page(
                 new TextBlock { Text = "VibeSuperTonic", FontSize = 20, FontWeight = FontWeight.SemiBold },
                 Ui.Body($"""
+                    Reads what you select, out loud, in a neural voice that runs entirely on
+                    this machine. Nothing is sent anywhere.
+
                     window      {version}
 
                     Select text anywhere and press the hotkey. The engine loads itself on the
@@ -132,6 +147,26 @@ public sealed class AboutTab : UserControl
                     This window is a client. Everything it does, `vst-ctl` does too — and
                     the tray icon belongs to the engine, so it is there whether this window
                     is open or not.
+
+                    SPEED. The engine measures this machine and uses what it measured:
+                    `vst-ctl benchmark`, or the button on the Tune tab, tries every thread
+                    count worth trying and keeps the whole table in data/benchmark.json. It
+                    applies to the next thing you ask it to read — no restart.
+
+                    An NVIDIA GPU can do the work instead, and on the machine this was
+                    developed on it takes the wait before the first word from 802 ms to
+                    77 ms. It is not in the download: run ./install-gpu.sh once, which
+                    fetches about 3.1 GB, then benchmark again. ON BATTERY THE ENGINE STAYS
+                    ON THE CPU — a discrete GPU is the difference between a laptop that
+                    lasts an afternoon and one that does not — unless you set GpuOnBattery.
+                    The Status tab says which is in force and why.
+
+                    LICENCES. The program is MIT. The voice models are not part of it: they
+                    are downloaded from Hugging Face on first run and are distributed by
+                    Supertone, Inc. under the OpenRAIL-M licence, which you accepted on the
+                    first-run screen. See LICENSE-MODELS.txt beside the program.
+
+                    https://github.com/Hananel-Hazan/VibeSuperTonic
                     """))
         };
     }

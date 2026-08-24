@@ -22,6 +22,12 @@ namespace VibeSuperTonic.Launcher.Ui;
 /// is always worth acting on. Before 2026-08-19 the Windows projects stamped no
 /// version at all and this tab reported the .NET default, <c>1.0.0.0</c>, for
 /// every release up to and including 0.2.8.</para>
+///
+/// <para><b>The prose is kept in step with the Linux window's About tab</b>,
+/// deliberately: two products out of one repository, and a user who reads one of
+/// them should not learn something different from the other. What differs
+/// between the two screens is only what is genuinely different — how the engine
+/// is hosted, and which GPU providers exist on that platform.</para>
 /// </summary>
 internal sealed class AboutTab : UserControl
 {
@@ -34,6 +40,7 @@ internal sealed class AboutTab : UserControl
         // run from bin\ finds none of them and says so, which is correct: those
         // components genuinely are not beside this exe.
         var components = VersionInfo.Components(baseDir);
+        string provider = TryReadProvider();
 
         var stack = new TableLayoutPanel
         {
@@ -47,6 +54,16 @@ internal sealed class AboutTab : UserControl
             Text = "VibeSuperTonic Control Panel",
             Font = new Font(SystemFonts.DefaultFont.FontFamily, 14, FontStyle.Bold),
             AutoSize = true,
+        });
+        stack.Controls.Add(new Label
+        {
+            Text = "Reads what you select, out loud, in a neural voice that runs entirely on\r\n"
+                 + "this machine. Nothing is sent anywhere.\r\n\r\n"
+                 + "It is a SAPI 5 voice, so it speaks through whatever already knows how to\r\n"
+                 + "ask Windows for speech — Narrator, a reader, a script. This panel is where\r\n"
+                 + "it is configured; it does not have to be open for the voice to work.",
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 12),
         });
         stack.Controls.Add(new Label { Text = $"Control Panel: {appVersion}", AutoSize = true });
 
@@ -86,6 +103,15 @@ internal sealed class AboutTab : UserControl
         stack.Controls.Add(new Label { Text = $"BaseDir: {baseDir}", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
         stack.Controls.Add(new Label { Text = $".NET runtime: {Environment.Version}", AutoSize = true });
         stack.Controls.Add(new Label { Text = $"ONNX runtime: {VersionInfo.OnnxRuntime(AppContext.BaseDirectory)}", AutoSize = true });
+        stack.Controls.Add(new Label { Text = $"Execution provider: {provider}", AutoSize = true });
+        stack.Controls.Add(new Label
+        {
+            Text = "\r\nLicences. The program is MIT. The voice models are not part of it: they are\r\n"
+                 + "distributed by Supertone, Inc. under the OpenRAIL-M licence, which you\r\n"
+                 + "accepted when they were downloaded. See LICENSE-MODELS.txt beside the program.",
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 4),
+        });
 
         const string ProjectUrl = "https://github.com/Hananel-Hazan/VibeSuperTonic";
         var link = new LinkLabel { Text = ProjectUrl, AutoSize = true, Margin = new Padding(0, 8, 0, 8) };
@@ -96,6 +122,32 @@ internal sealed class AboutTab : UserControl
         stack.Controls.Add(link);
 
         Controls.Add(stack);
+    }
+
+    /// <summary>
+    /// What the ENGINE will ask ONNX Runtime for on its next load, from the same
+    /// registry the Advanced tab writes.
+    ///
+    /// <para>Deliberately phrased as a setting rather than as an outcome: a SAPI
+    /// engine is loaded by its host, this panel is a different process, and
+    /// DirectML can fail over to the CPU at load time without anything here
+    /// knowing. Reporting "DirectML" as though it were a live fact would be a
+    /// panel claiming something it cannot see — the engine's own log is where
+    /// the outcome is recorded.</para>
+    /// </summary>
+    private static string TryReadProvider()
+    {
+        try
+        {
+            var s = EngineSettingsRegistry.Load();
+            return s.UseDirectML
+                ? $"DirectML (device {s.DirectMLDeviceId}) when available, CPU otherwise"
+                : "CPU";
+        }
+        catch
+        {
+            return "(settings unreadable)";
+        }
     }
 
 }
