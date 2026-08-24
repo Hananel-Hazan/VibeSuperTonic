@@ -11,13 +11,20 @@ obvious; the project ships two products from one repository.
 | --- | --- | --- |
 | Windows | [build/pack-zip.ps1](build/pack-zip.ps1) | `dist/VibeSuperTonic-<version>-win.zip` |
 | Linux | [build/pack-tar.sh](build/pack-tar.sh) | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
-| Linux, AppImage | `build/pack-appimage.sh` — **does not exist yet**, [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | `dist/VibeSuperTonic-<version>-x86_64.AppImage` |
+| Linux, AppImage | [build/pack-appimage.sh](build/pack-appimage.sh) | `dist/VibeSuperTonic-<version>-x86_64.AppImage` |
 
 **Linux ships two artifacts, and the tarball is the canonical one.** Decided
 2026-08-24. The AppImage is built *from the tree pack-tar.sh composed* — it
 publishes nothing itself — so all five of the tarball's assertions are inherited
-rather than copied. A run that produces both is `pack-tar.sh` then
-`pack-appimage.sh`, in that order, and a failed tarball means no AppImage.
+rather than copied. A run that produces both is:
+
+```bash
+bash build/pack-tar.sh -v <X.Y.Z> && bash build/pack-appimage.sh -v <X.Y.Z>
+```
+
+In that order, and a failed tarball means no AppImage. `pack-appimage.sh` refuses
+to run against a composed tree whose binaries report a different version, so the
+two artifacts of one release cannot come from two builds.
 
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:

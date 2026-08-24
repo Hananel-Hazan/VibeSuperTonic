@@ -1064,17 +1064,59 @@ the last store in a marker file would cover it, at the cost of state outside the
 two places state lives today. Not worth it — but the sentence "keep the AppImage
 and its folder together" is.
 
+**The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
+`pack-tar.sh`, from the tree it composed, refusing to run when that tree is
+absent or reports another version. **48 MB against the tarball's 52**, because
+zstd beats gzip and also mounts faster, which is the axis that matters here.
+
+No `appimagetool`: a type-2 AppImage is a 944 KB static runtime concatenated in
+front of a squashfs image, and that is the entire format. The runtime is fetched
+once and checked against a pinned SHA-256 **on every run, cached or fresh** — the
+discipline `models-manifest.json` applies to the weights, because a cache trusted
+because it is a cache can be poisoned once and believed forever.
+
+Four of the tarball's five assertions are re-asked against the tree even though
+they are inherited, and the reason is not belt-and-braces: the sequence that
+actually happens is *a tarball built yesterday, a rebuild since, an AppImage
+packaged from whatever is on disk now*. Then the image is checked by **running
+it** — type-2 magic at offset 8, `--version`, and `ctl --version` separately,
+because the default branch and the hotkey branch are different code and only one
+of them is on the press path.
+
+**`bind`, and the client that lives outside the image.** `<AppImage> bind`
+installs `vst-ctl` to `~/.local/bin`, writes one line naming the image it came
+from, and calls `keybindings.sh` — unchanged code, doing for `~/.local/bin` what
+it already does for a tarball. Its only new input is `VST_KB_UI_COMMAND`, because
+the menu entry has to open the window *inside* the image while every hotkey
+action runs the copy.
+
+The copy is re-checked by **both** the daemon and the window at startup, by
+asking the installed binary its version rather than comparing timestamps. The
+window is the second way in deliberately: the daemon repairs this on its own
+start, but the daemon starts *from a press*, and the case that needs repairing is
+a press that does nothing. One implementation, two callers —
+`vibesupertonicd --ensure-client`, next to `--print-store`, which exists so
+`AppRun` never becomes a second place where the store rule is decided.
+
+Verified against an isolated `HOME` with the key writes in dry-run: the client
+lands and reports this build, the sidecar records the image, the launcher `Exec`
+is the AppImage while both action `Exec`s are the copy, **the copy autostarts a
+daemon through the image and answers `status`** — R-5 intact with no
+`vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
+start put it back.
+
 #### Still to do
 
-- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
-- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
-  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
-  is the product's first icon *file*, and one definition would be better than two.
-- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
-- `install-gpu.sh` writing into the store rather than the install root, and
-  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
-  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
-- Building the AppDir in a container against an older glibc, and naming the floor.
+- Building the AppDir in a container against an older glibc, and naming the floor
+  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
+  which is an AppImage that has given up its one advantage over the tarball.
+- A FUSE-missing message worth reading. The runtime's own is not, and
+  `--appimage-extract-and-run` must be a documented answer rather than a thing
+  someone finds in a forum.
+- Desktop integration beyond the `.desktop` and the icon being present:
+  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
+- Ship it as 0.2.9, and say in the release notes that the AppImage and the
+  tarball are the same product with two front doors.
 
 #### Exit criteria
 
@@ -2632,17 +2674,59 @@ the last store in a marker file would cover it, at the cost of state outside the
 two places state lives today. Not worth it — but the sentence "keep the AppImage
 and its folder together" is.
 
+**The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
+`pack-tar.sh`, from the tree it composed, refusing to run when that tree is
+absent or reports another version. **48 MB against the tarball's 52**, because
+zstd beats gzip and also mounts faster, which is the axis that matters here.
+
+No `appimagetool`: a type-2 AppImage is a 944 KB static runtime concatenated in
+front of a squashfs image, and that is the entire format. The runtime is fetched
+once and checked against a pinned SHA-256 **on every run, cached or fresh** — the
+discipline `models-manifest.json` applies to the weights, because a cache trusted
+because it is a cache can be poisoned once and believed forever.
+
+Four of the tarball's five assertions are re-asked against the tree even though
+they are inherited, and the reason is not belt-and-braces: the sequence that
+actually happens is *a tarball built yesterday, a rebuild since, an AppImage
+packaged from whatever is on disk now*. Then the image is checked by **running
+it** — type-2 magic at offset 8, `--version`, and `ctl --version` separately,
+because the default branch and the hotkey branch are different code and only one
+of them is on the press path.
+
+**`bind`, and the client that lives outside the image.** `<AppImage> bind`
+installs `vst-ctl` to `~/.local/bin`, writes one line naming the image it came
+from, and calls `keybindings.sh` — unchanged code, doing for `~/.local/bin` what
+it already does for a tarball. Its only new input is `VST_KB_UI_COMMAND`, because
+the menu entry has to open the window *inside* the image while every hotkey
+action runs the copy.
+
+The copy is re-checked by **both** the daemon and the window at startup, by
+asking the installed binary its version rather than comparing timestamps. The
+window is the second way in deliberately: the daemon repairs this on its own
+start, but the daemon starts *from a press*, and the case that needs repairing is
+a press that does nothing. One implementation, two callers —
+`vibesupertonicd --ensure-client`, next to `--print-store`, which exists so
+`AppRun` never becomes a second place where the store rule is decided.
+
+Verified against an isolated `HOME` with the key writes in dry-run: the client
+lands and reports this build, the sidecar records the image, the launcher `Exec`
+is the AppImage while both action `Exec`s are the copy, **the copy autostarts a
+daemon through the image and answers `status`** — R-5 intact with no
+`vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
+start put it back.
+
 #### Still to do
 
-- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
-- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
-  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
-  is the product's first icon *file*, and one definition would be better than two.
-- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
-- `install-gpu.sh` writing into the store rather than the install root, and
-  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
-  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
-- Building the AppDir in a container against an older glibc, and naming the floor.
+- Building the AppDir in a container against an older glibc, and naming the floor
+  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
+  which is an AppImage that has given up its one advantage over the tarball.
+- A FUSE-missing message worth reading. The runtime's own is not, and
+  `--appimage-extract-and-run` must be a documented answer rather than a thing
+  someone finds in a forum.
+- Desktop integration beyond the `.desktop` and the icon being present:
+  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
+- Ship it as 0.2.9, and say in the release notes that the AppImage and the
+  tarball are the same product with two front doors.
 
 #### Exit criteria
 
@@ -2806,17 +2890,59 @@ the last store in a marker file would cover it, at the cost of state outside the
 two places state lives today. Not worth it — but the sentence "keep the AppImage
 and its folder together" is.
 
+**The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
+`pack-tar.sh`, from the tree it composed, refusing to run when that tree is
+absent or reports another version. **48 MB against the tarball's 52**, because
+zstd beats gzip and also mounts faster, which is the axis that matters here.
+
+No `appimagetool`: a type-2 AppImage is a 944 KB static runtime concatenated in
+front of a squashfs image, and that is the entire format. The runtime is fetched
+once and checked against a pinned SHA-256 **on every run, cached or fresh** — the
+discipline `models-manifest.json` applies to the weights, because a cache trusted
+because it is a cache can be poisoned once and believed forever.
+
+Four of the tarball's five assertions are re-asked against the tree even though
+they are inherited, and the reason is not belt-and-braces: the sequence that
+actually happens is *a tarball built yesterday, a rebuild since, an AppImage
+packaged from whatever is on disk now*. Then the image is checked by **running
+it** — type-2 magic at offset 8, `--version`, and `ctl --version` separately,
+because the default branch and the hotkey branch are different code and only one
+of them is on the press path.
+
+**`bind`, and the client that lives outside the image.** `<AppImage> bind`
+installs `vst-ctl` to `~/.local/bin`, writes one line naming the image it came
+from, and calls `keybindings.sh` — unchanged code, doing for `~/.local/bin` what
+it already does for a tarball. Its only new input is `VST_KB_UI_COMMAND`, because
+the menu entry has to open the window *inside* the image while every hotkey
+action runs the copy.
+
+The copy is re-checked by **both** the daemon and the window at startup, by
+asking the installed binary its version rather than comparing timestamps. The
+window is the second way in deliberately: the daemon repairs this on its own
+start, but the daemon starts *from a press*, and the case that needs repairing is
+a press that does nothing. One implementation, two callers —
+`vibesupertonicd --ensure-client`, next to `--print-store`, which exists so
+`AppRun` never becomes a second place where the store rule is decided.
+
+Verified against an isolated `HOME` with the key writes in dry-run: the client
+lands and reports this build, the sidecar records the image, the launcher `Exec`
+is the AppImage while both action `Exec`s are the copy, **the copy autostarts a
+daemon through the image and answers `status`** — R-5 intact with no
+`vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
+start put it back.
+
 #### Still to do
 
-- `build/pack-appimage.sh`, consuming the tree `pack-tar.sh` composed.
-- `AppRun` dispatch, the `.desktop` entry and an icon — the tray draws its own in
-  code ([TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs)), so this
-  is the product's first icon *file*, and one definition would be better than two.
-- `bind`, the `~/.local/bin` copy, and the re-check on every daemon and UI start.
-- `install-gpu.sh` writing into the store rather than the install root, and
-  `vst-ctl` autostarting the daemon *through* the AppImage — a copied `vst-ctl`
-  has no `vibesupertonicd` beside it, which is what the sidecar file is for.
-- Building the AppDir in a container against an older glibc, and naming the floor.
+- Building the AppDir in a container against an older glibc, and naming the floor
+  in `INSTALL.txt`. Until then the image runs on Ubuntu 26.04 and nothing older,
+  which is an AppImage that has given up its one advantage over the tarball.
+- A FUSE-missing message worth reading. The runtime's own is not, and
+  `--appimage-extract-and-run` must be a documented answer rather than a thing
+  someone finds in a forum.
+- Desktop integration beyond the `.desktop` and the icon being present:
+  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
+- Ship it as 0.2.9, and say in the release notes that the AppImage and the
+  tarball are the same product with two front doors.
 
 #### Exit criteria
 
