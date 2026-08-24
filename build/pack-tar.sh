@@ -150,6 +150,12 @@ cp "$root/models-manifest.json" "$staging/models-manifest.json"
 cp "$root/build/keybindings.sh" "$staging/keybindings.sh"
 chmod 755 "$staging/keybindings.sh"
 
+# The optional GPU pack's installer. The pack itself is ~3.1 GB against a 51 MB
+# archive, so it is fetched on request from nuget.org and PyPI rather than
+# shipped — see assertion 4, which is what stops it arriving by accident.
+cp "$root/build/install-gpu.sh" "$staging/install-gpu.sh"
+chmod 755 "$staging/install-gpu.sh"
+
 [[ -f "$root/README.md" ]] && cp "$root/README.md" "$staging/README.md"
 [[ -f "$root/LICENSE" ]]   && cp "$root/LICENSE"   "$staging/LICENSE.txt"
 
@@ -221,6 +227,40 @@ if find "$staging" -name '*.onnx' -print -quit | grep -q .; then
     die "an .onnx file is in the staging tree; the archive must ship no models"
 fi
 info "models/ is empty, as it must be"
+
+# --- 4. the GPU provider is NOT in the archive, and its installer agrees ------
+#
+# libonnxruntime_providers_cuda.so is 330 MB against a 51 MB archive, and it
+# arrives by default with the Gpu.Linux package — the backend csproj removes it
+# with an MSBuild target, which is exactly the kind of thing that stops working
+# quietly under an SDK bump. The archive doubling in size is not something the
+# publish step will complain about.
+for unwanted in libonnxruntime_providers_cuda.so libonnxruntime_providers_tensorrt.so; do
+    if [[ -e "$staging/$unwanted" ]]; then
+        die "$unwanted is in the archive ($(numfmt --to=iec "$(stat -c%s "$staging/$unwanted")")).
+       RemoveOptionalGpuProviders in VibeSuperTonic.Onnx.Ort.csproj is not taking
+       effect. The pack is fetched by install-gpu.sh; it must not ship."
+    fi
+done
+
+# The provider library and libonnxruntime.so are one ORT build split across two
+# files. install-gpu.sh downloads the first and the archive ships the second, so
+# a version drift between them is a load failure on the user's machine and
+# nowhere else — this is the only place both numbers are visible at once.
+# awk rather than `sed | head -1`: head exits early, sed takes SIGPIPE, and with
+# `set -o pipefail` the assignment inherits 141 — which `set -e` turns into a
+# packer that dies with no message on a large enough input file. The same
+# construct in install-gpu.sh made its driver check report "no NVIDIA driver" on
+# a machine with one.
+ort_in_csproj=$(awk -F'"' '/Microsoft.ML.OnnxRuntime.Gpu.Linux" Version=/ { print $4; exit }' \
+    "$root/src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj")
+ort_in_script=$(awk -F'"' '/^ORT_VERSION=/ { print $2; exit }' "$staging/install-gpu.sh")
+[[ -n "$ort_in_csproj" ]] || die "could not read the ONNX Runtime version from the backend csproj"
+if [[ "$ort_in_csproj" != "$ort_in_script" ]]; then
+    die "install-gpu.sh fetches ONNX Runtime $ort_in_script but this build links $ort_in_csproj.
+       The CUDA provider and libonnxruntime.so are one build in two files."
+fi
+info "no GPU provider in the archive; install-gpu.sh fetches ORT $ort_in_script to match"
 
 # ------------------------------------------------------------------- text
 step "Writing INSTALL.txt and LICENSE-MODELS.txt…"
@@ -303,19 +343,44 @@ Checking it works
     ./vst-ctl status            one line of JSON
     ./vst-ctl config            which folder this instance is actually using
     ./vst-ctl speak "hello"     bypasses the selection entirely
-    ./vst-ctl benchmark         measure this machine (~1 min), then shutdown
+    ./vst-ctl benchmark         measure this machine (~1 min) and use the result
 
 If a hotkey does nothing, the daemon's log is the place to look:
 
     tail -f data/logs/daemon.log
 
 
+Optional: use an NVIDIA GPU
+---------------------------
+    ./install-gpu.sh
+
+Downloads about 3.1 GB — the ONNX Runtime CUDA provider, CUDA and cuDNN — which
+is why it is not in this archive. It needs a working NVIDIA driver, which it
+checks for before downloading anything.
+
+Measured on an RTX A2000 8GB laptop GPU: the wait before the first word drops
+from 802 ms to 77 ms, and synthesis runs about ten times faster than real time
+instead of five. Run `./vst-ctl benchmark` afterwards — the sweep measures the
+GPU as another row and only picks it if it actually wins.
+
+ON BATTERY THE DAEMON USES THE CPU, deliberately: a discrete GPU is the
+difference between a laptop that lasts an afternoon and one that does not, and
+the CPU path is fast enough that only the first word arrives later. Set
+GpuOnBattery in data/settings.json (or the Tune tab) if you are permanently on a
+dock. `./vst-ctl status` says which is in force and why.
+
+    ./install-gpu.sh --remove   puts the machine back on the CPU
+
+
 Known limits
 ------------
-- Selection capture reads the X11 PRIMARY selection. Under a Wayland session
-  this reaches applications running through Xwayland; native Wayland clients may
-  not be visible to it.
-- A few applications never claim PRIMARY at all — some in-frame document
+- Selection capture uses ext-data-control-v1 on a Wayland session, which reads
+  both native Wayland clients and anything running through Xwayland, and the X11
+  PRIMARY selection on an X11 session. The daemon logs which one it chose.
+- GNOME declines to implement ext-data-control on security grounds, so on
+  GNOME/Wayland there is no way for a background process to read the selection.
+  The daemon says so in one line rather than failing silently.
+- A few applications never publish a selection at all — some in-frame document
   viewers. Copy with Ctrl+C first, then press the key.
 - Screen lockers and some fullscreen games hold a keyboard grab, and no global
   shortcut fires under one. That is a property of the display server.
