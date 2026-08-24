@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 8b's gated GPU spike, and nothing else.
+
+    The plan's question is narrow and answerable before any provider-pack,
+    portable-folder or fallback work is designed: FIRST AUDIO is ~750 ms of which
+    ~600 ms is the model's fixed cost for one inference (Phase 3), so the gate —
+    30% off first-audio latency, no RTF regression, clean fall back to CPU — is
+    really "does a GPU win on a single small inference, including everything it
+    costs to get there". That is the least favourable shape for a GPU and the
+    most favourable for a decision.
+
+    NOT a backend project. The plan says the GPU backend gets built only if the
+    gate passes, so building it first would be committing to the answer before
+    measuring it — the exact move Phase 0 was structured to avoid. (The gate
+    passed, and what it turned into is in the port plan's 8b record; this
+    remains the thing that measured it, and is how the question gets re-asked on
+    other hardware.)
+
+    Why it references no backend project: at the time this was written the
+    backend pinned the CPU-only Microsoft.ML.OnnxRuntime, and the GPU package
+    publishes the same managed assembly name. Two packages, one assembly name,
+    one output directory — the later copy wins silently. So this compiles
+    SupertonicSdk.cs itself, and keeps its own answer independent of whatever the
+    product currently links.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>vst-gpu-spike</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.GpuCuda</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The Linux GPU package: onnxruntime_providers_cuda.so plus the shared
+      provider bridge. It does NOT carry CUDA or cuDNN — those are the
+      gigabytes the plan says cannot ride in the default download, and this
+      spike finds them through LD_LIBRARY_PATH rather than pretending otherwise.
+      Version-matched to the CPU package (see the pin warning in the Engine).
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.22.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\VibeSuperTonic.Engine\Synth\SupertonicSdk.cs" Link="Shared\SupertonicSdk.cs" />
+  </ItemGroup>
+
+</Project>
