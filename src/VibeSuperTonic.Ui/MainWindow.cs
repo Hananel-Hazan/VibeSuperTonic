@@ -130,7 +130,13 @@ public sealed class MainWindow : Window
         _firstRunDecided = true;
         if (Directory.Exists(Path.Combine(c.ModelsRoot, "onnx"))) return;
 
-        var first = new FirstRunView(c.BaseDir, c.ModelsRoot);
+        // BaseDir for the manifest, StoreRoot for the bytes. Identical on every
+        // install that is not an AppImage; an older daemon sends no StoreRoot at
+        // all, and BaseDir is then the right answer by construction.
+        var first = new FirstRunView(
+            c.BaseDir,
+            string.IsNullOrWhiteSpace(c.StoreRoot) ? c.BaseDir : c.StoreRoot,
+            c.ModelsRoot);
         first.Completed += () => Content = _shell;
         Content = first;
     }

@@ -35,7 +35,17 @@ public sealed class FirstRunView : UserControl
     /// <summary>Raised once the models are on disk, so the window can become the Reader.</summary>
     public event Action? Completed;
 
-    public FirstRunView(string installRoot, string modelsRoot)
+    /// <param name="programRoot">
+    /// Where <c>models-manifest.json</c> ships — beside the binaries, which for
+    /// an AppImage is a read-only mount.
+    /// </param>
+    /// <param name="storeRoot">
+    /// Where the bytes go. The same directory as <paramref name="programRoot"/>
+    /// for every install that is not an AppImage; the manifest's paths are
+    /// relative to it.
+    /// </param>
+    /// <param name="modelsRoot">Shown to the user, so they know what is about to fill up.</param>
+    public FirstRunView(string programRoot, string storeRoot, string modelsRoot)
     {
         _accept = new CheckBox
         {
@@ -50,7 +60,7 @@ public sealed class FirstRunView : UserControl
         };
 
         _accept.IsCheckedChanged += (_, _) => _download.IsEnabled = _accept.IsChecked == true;
-        _download.Click += async (_, _) => await DownloadAsync(installRoot);
+        _download.Click += async (_, _) => await DownloadAsync(programRoot, storeRoot);
 
         _logScroller = new ScrollViewer { Content = _log, Height = 180 };
 
@@ -110,18 +120,18 @@ public sealed class FirstRunView : UserControl
         },
     };
 
-    private async Task DownloadAsync(string installRoot)
+    private async Task DownloadAsync(string programRoot, string storeRoot)
     {
         _download.IsEnabled = false;
         _accept.IsEnabled = false;
 
-        var manifest = Manifest.TryLoad(installRoot);
+        var manifest = Manifest.TryLoad(programRoot);
         if (manifest is null)
         {
             // The manifest ships beside the binaries. Saying which file is
             // missing beats "download failed", because the fix is to unpack the
             // release properly rather than to try again.
-            Write($"models-manifest.json was not found in {installRoot}, so there is nothing to fetch.");
+            Write($"models-manifest.json was not found in {programRoot}, so there is nothing to fetch.");
             Write("This folder is not a complete release — unpack the published archive and run it from there.");
             return;
         }
@@ -131,7 +141,7 @@ public sealed class FirstRunView : UserControl
         // The same downloader the Windows launcher uses, from Core: one
         // implementation of resume, mirrors and hash checking rather than a
         // second one written for this window.
-        var downloader = new ModelDownloader(installRoot, manifest);
+        var downloader = new ModelDownloader(storeRoot, manifest);
         var progress = new Progress<string>(Write);
 
         try

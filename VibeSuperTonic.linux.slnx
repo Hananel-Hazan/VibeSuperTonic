@@ -18,6 +18,7 @@
     <Project Path="src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj" />
     <Project Path="src/VibeSuperTonic.Linux.Audio/VibeSuperTonic.Linux.Audio.csproj" />
     <Project Path="src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />
+    <Project Path="src/VibeSuperTonic.Daemon.Tests/VibeSuperTonic.Daemon.Tests.csproj" />
     <Project Path="src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj" />
     <Project Path="src/VibeSuperTonic.Ui/VibeSuperTonic.Ui.csproj" />
   </Folder>

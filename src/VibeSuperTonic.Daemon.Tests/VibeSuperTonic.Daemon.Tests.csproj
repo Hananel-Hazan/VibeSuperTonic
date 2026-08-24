@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Linux-only coverage for daemon logic that Core.Tests deliberately cannot
+    reach.
+
+    Core.Tests is package-free and runs on BOTH CI runners, which is why it
+    tests the Linux settings type through a hand-written replica rather than by
+    referencing this daemon: the daemon pulls in ONNX Runtime and libpulse, and
+    a Windows runner cannot restore or load them (R-3).
+
+    A replica is the right tool for pinning a MECHANISM — that the source
+    generator still emits extension-data handling. It is the wrong tool for
+    pinning a RULE, because a copied rule is a rule that agrees with itself. The
+    AppImage store resolution is a rule with four branches and a failure mode
+    (a moved AppImage orphaning 383 MB of models) that no replica would catch,
+    so it is tested against the real code here.
+
+    In VibeSuperTonic.linux.slnx only. The Windows solution and the Windows CI
+    job never see this project.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Daemon\VibeSuperTonic.Daemon.csproj" />
+  </ItemGroup>
+
+</Project>

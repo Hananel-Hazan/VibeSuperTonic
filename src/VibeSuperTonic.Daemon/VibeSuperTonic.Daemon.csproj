@@ -62,6 +62,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      So VibeSuperTonic.Daemon.Tests can reach LinuxDataPaths, which is internal
+      and should stay that way: it is this process's own path policy (R-12), not
+      an API. The test project is Linux-only and lives in the Linux solution.
+    -->
+    <InternalsVisibleTo Include="VibeSuperTonic.Daemon.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
     <ProjectReference Include="..\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
     <ProjectReference Include="..\VibeSuperTonic.Onnx.Ort\VibeSuperTonic.Onnx.Ort.csproj" />

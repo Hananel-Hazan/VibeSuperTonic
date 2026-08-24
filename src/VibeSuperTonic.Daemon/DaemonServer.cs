@@ -486,7 +486,21 @@ public sealed class DaemonServer : IDisposable
             _session.Options = _config.SessionOptions;
     }
 
-    private ConfigPayload ConfigSnapshot() => new(
+    private ConfigPayload ConfigSnapshot()
+    {
+        // The store's reason belongs with the other non-fatal explanations
+        // rather than in the field itself: FirstRunView writes 383 MB to this
+        // path, and a client that has to strip a parenthesis off it before
+        // calling Path.Combine is a client that will one day forget.
+        var notes = LinuxDataPaths.IsAppImage
+            ? _config.Notes
+                .Append($"running from {LinuxDataPaths.AppImageFile} — models and data are in " +
+                        $"{LinuxDataPaths.StoreRoot} ({LinuxDataPaths.Store.Reason}), " +
+                        "not beside the program, because an AppImage is read-only.")
+                .ToList()
+            : _config.Notes;
+
+        return new ConfigPayload(
         LinuxDataPaths.BaseDir,
         _config.DataDir,
         _config.ModelsRoot,
@@ -501,11 +515,13 @@ public sealed class DaemonServer : IDisposable
         _config.Settings.MaxChunkChars,
         _config.Settings.MinChunkChars,
         _config.Settings.InterChunkSilenceMs,
-        _config.Notes,
+        notes,
         Execution.Provider,
         Execution.Threads,
         Execution.Reason,
-        BenchmarkSnapshot());
+        BenchmarkSnapshot(),
+        LinuxDataPaths.StoreRoot);
+    }
 
     /// <summary>
     /// The stored profile as reported, re-tested against the machine as it is

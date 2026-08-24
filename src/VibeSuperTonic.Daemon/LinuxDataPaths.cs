@@ -47,6 +47,150 @@ internal static class LinuxDataPaths
     public const string DefaultFolderName = "data";
 
     /// <summary>
+    /// The folder that holds <c>models/</c> and <c>data/</c> when the product is
+    /// an AppImage and cannot put them beside its executable. Named for the
+    /// product rather than for the file, so renaming
+    /// <c>VibeSuperTonic-0.2.9-x86_64.AppImage</c> to <c>tts.AppImage</c> does not
+    /// orphan 383 MB of models.
+    /// </summary>
+    public const string AppImageStoreFolderName = "VibeSuperTonic";
+
+    /// <summary>Where the store went, and the sentence <c>config</c> reports.</summary>
+    public sealed record StorePick(string Root, string Reason);
+
+    private static StorePick? _store;
+
+    /// <summary>
+    /// The <c>.AppImage</c> file this process was started from, or null for an
+    /// ordinary install.
+    ///
+    /// <para>The AppImage runtime exports <c>$APPIMAGE</c>. It is validated
+    /// rather than trusted — an absolute path to a file that exists — because
+    /// this variable decides where 383 MB of models are written, it is inherited
+    /// by every child process, and a daemon started by <c>vst-ctl</c> from a
+    /// shell that once ran an AppImage would otherwise adopt a store belonging
+    /// to something else.</para>
+    /// </summary>
+    public static string? AppImageFile { get; } = ReadAppImageFile();
+
+    /// <summary>True when <see cref="BaseDir"/> is a read-only squashfs mount.</summary>
+    public static bool IsAppImage => AppImageFile is not null;
+
+    private static string? ReadAppImageFile()
+    {
+        string? raw = Environment.GetEnvironmentVariable("APPIMAGE");
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        try
+        {
+            string full = Path.GetFullPath(raw.Trim());
+            return File.Exists(full) ? full : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Where <c>models/</c> and <c>data/</c> live, with the reason it is there.
+    ///
+    /// <para>For an ordinary install this is <see cref="BaseDir"/> and always was:
+    /// everything beside the executable, which is the whole portability
+    /// story.</para>
+    /// </summary>
+    public static StorePick Store => _store ??= ResolveStore(
+        AppImageFile,
+        BaseDir,
+        Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        Directory.Exists,
+        CanCreateIn);
+
+    public static string StoreRoot => Store.Root;
+
+    /// <summary>
+    /// The rule, as a pure function so it can be tested without an AppImage, a
+    /// home directory or a read-only mount.
+    ///
+    /// <para><b>An existing store beats a preferred location, and that is the
+    /// whole subtlety.</b> The obvious implementation picks "beside the AppImage
+    /// if writable, else XDG" and is wrong in a way nobody would report as a
+    /// bug: move the file from <c>~/Downloads</c> to <c>~/Apps</c> — which is
+    /// exactly what a person does after trying it — and the models, the settings,
+    /// the pronunciation rules and the benchmark profile all vanish, the
+    /// first-run screen returns, and 383 MB downloads again into the new
+    /// location. Looking for a store that already exists before choosing where a
+    /// new one goes costs two <c>stat</c> calls and removes that failure
+    /// entirely.</para>
+    ///
+    /// <para>Beside the file comes first when neither exists, because that is the
+    /// portable promise the tarball makes and the reason this product resolves
+    /// everything from its own directory: an AppImage on a USB stick with its
+    /// store beside it still travels. XDG is the fallback for the case that
+    /// cannot work — a read-only medium, or a directory owned by someone
+    /// else.</para>
+    /// </summary>
+    public static StorePick ResolveStore(
+        string? appImageFile,
+        string baseDir,
+        string? xdgDataHome,
+        string? home,
+        Func<string, bool> dirExists,
+        Func<string, bool> canCreateIn)
+    {
+        if (appImageFile is null)
+            return new StorePick(baseDir, "beside the executable");
+
+        string beside = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(appImageFile)) ?? "/",
+            AppImageStoreFolderName);
+
+        string xdgRoot = !string.IsNullOrWhiteSpace(xdgDataHome)
+            ? xdgDataHome!
+            : Path.Combine(string.IsNullOrWhiteSpace(home) ? "/tmp" : home!, ".local", "share");
+        string xdg = Path.Combine(xdgRoot, "vibesupertonic");
+
+        // Existing first, in both places, before either is created.
+        if (HasStore(beside, dirExists)) return new StorePick(beside, "beside the AppImage");
+        if (HasStore(xdg, dirExists))    return new StorePick(xdg, "under XDG data — nothing beside the AppImage");
+
+        return canCreateIn(beside)
+            ? new StorePick(beside, "new, beside the AppImage")
+            : new StorePick(xdg, "new, under XDG data — the AppImage's own directory is not writable");
+    }
+
+    /// <summary>
+    /// A directory counts as a store when it holds either half of one. Models
+    /// alone happens on a fresh install whose first run was interrupted before
+    /// anything was saved; data alone happens whenever someone changes a setting
+    /// before downloading. Requiring both would discard a store in exactly the
+    /// two states a person is most likely to be in.
+    /// </summary>
+    private static bool HasStore(string root, Func<string, bool> dirExists) =>
+        dirExists(Path.Combine(root, "models")) || dirExists(Path.Combine(root, DefaultFolderName));
+
+    /// <summary>
+    /// Whether <paramref name="dir"/> could be created and written. Probes the
+    /// nearest existing ancestor, because the store itself usually does not exist
+    /// yet — asking whether a non-existent directory is writable always answers
+    /// no, which would send every fresh AppImage to XDG.
+    /// </summary>
+    private static bool CanCreateIn(string dir)
+    {
+        try
+        {
+            string? probe = Directory.Exists(dir) ? dir : Path.GetDirectoryName(dir);
+            while (!string.IsNullOrEmpty(probe) && !Directory.Exists(probe))
+                probe = Path.GetDirectoryName(probe);
+            if (string.IsNullOrEmpty(probe)) return false;
+
+            string file = Path.Combine(probe, $".vst-write-probe-{Environment.ProcessId}");
+            File.WriteAllText(file, "");
+            File.Delete(file);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// Directory holding the daemon executable — the anchor for everything
     /// else, and the reason this install is portable.
     ///
@@ -112,7 +256,12 @@ internal static class LinuxDataPaths
         return sb.ToString();
     }
 
-    public static string DefaultModelsDir => Path.Combine(BaseDir, "models");
+    /// <summary>
+    /// <c>models/</c> under <see cref="StoreRoot"/> — which is
+    /// <see cref="BaseDir"/> for every install that is not an AppImage, so this
+    /// is unchanged for the tarball and for a portable folder on a stick.
+    /// </summary>
+    public static string DefaultModelsDir => Path.Combine(StoreRoot, "models");
 
     public static string SettingsFile(string dataDir) => Path.Combine(dataDir, "settings.json");
     public static string PronunciationsFile(string dataDir) => Path.Combine(dataDir, "pronunciations.json");

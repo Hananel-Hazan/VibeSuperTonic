@@ -350,6 +350,17 @@ public sealed record StatusPayload(
 /// a settings file with no provenance is a number nobody dares change.
 /// </param>
 /// <param name="Benchmark">The stored profile, or null when this machine has never been swept.</param>
+/// <param name="StoreRoot">
+/// The directory holding <c>models/</c> and <c>data/</c>, followed by the reason
+/// it is that one, in parentheses.
+///
+/// <para>Equal to <c>BaseDir</c> for every install that is not an AppImage, and
+/// reported separately precisely because of the case where it is not: an
+/// AppImage runs from a read-only mount at a path that changes every start, so
+/// "where is my install" and "where is my 383 MB of models" stop being the same
+/// question. A client that needs to write beside the models — the first-run
+/// download is the only one — must use this and not <c>BaseDir</c>.</para>
+/// </param>
 public sealed record ConfigPayload(
     string BaseDir,
     string DataDir,
@@ -369,7 +380,8 @@ public sealed record ConfigPayload(
     string Provider = "cpu",
     int IntraOpThreads = 0,
     string ThreadsReason = "",
-    BenchmarkSummary? Benchmark = null);
+    BenchmarkSummary? Benchmark = null,
+    string StoreRoot = "");
 
 /// <summary>
 /// The stored profile as <c>config</c> reports it — enough to judge it without

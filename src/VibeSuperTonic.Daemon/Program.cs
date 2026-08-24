@@ -93,7 +93,11 @@ for (int i = 0; i < args.Length; i++)
 // Start anyway, answer status, and fail the speak with something actionable.
 // The models are downloaded on first run of the app, never by install.sh,
 // because the OpenRAIL-M acceptance has to be something a human agrees to.
-string dataDir = LinuxDataPaths.ResolveDataDir(dataArg, LinuxDataPaths.BaseDir);
+// StoreRoot, not BaseDir. They are the same directory for every install that is
+// not an AppImage — the tarball, a portable folder on a stick — and different
+// exactly once: an AppImage's BaseDir is a read-only squashfs mount at a path
+// that changes on every start, so nothing writable can be anchored to it.
+string dataDir = LinuxDataPaths.ResolveDataDir(dataArg, LinuxDataPaths.StoreRoot);
 string modelsRoot = string.IsNullOrWhiteSpace(modelsArg)
     ? LinuxDataPaths.DefaultModelsDir
     : Path.GetFullPath(modelsArg);
@@ -110,7 +114,7 @@ DaemonLog.Initialize(dataDir);
 // libraries on the loader's path — the only arrangement measured not to corrupt
 // the heap at exit. Returns immediately when there is no pack, which is every
 // ordinary install.
-GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.BaseDir, DaemonLog.Write);
+GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.StoreRoot, DaemonLog.Write);
 
 // Load whatever the last usage left in the folder, before anything can speak.
 // This is the "first run picks up where it left off" half of being portable:
@@ -118,6 +122,10 @@ GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.BaseDir, DaemonLog.Write);
 // applied no pronunciation rules at all, whatever its settings.json said.
 var config = new HostConfig(dataDir, modelsRoot);
 config.Reload(force: true);
+
+if (LinuxDataPaths.IsAppImage)
+    DaemonLog.Write($"appimage {LinuxDataPaths.AppImageFile}, store {LinuxDataPaths.StoreRoot} " +
+                    $"({LinuxDataPaths.Store.Reason})");
 
 DaemonLog.Write($"data {dataDir}{(config.Writable ? "" : " (read-only)")}");
 foreach (string note in config.Notes)
