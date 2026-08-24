@@ -11,6 +11,13 @@ obvious; the project ships two products from one repository.
 | --- | --- | --- |
 | Windows | [build/pack-zip.ps1](build/pack-zip.ps1) | `dist/VibeSuperTonic-<version>-win.zip` |
 | Linux | [build/pack-tar.sh](build/pack-tar.sh) | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
+| Linux, AppImage | `build/pack-appimage.sh` — **does not exist yet**, [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | `dist/VibeSuperTonic-<version>-x86_64.AppImage` |
+
+**Linux ships two artifacts, and the tarball is the canonical one.** Decided
+2026-08-24. The AppImage is built *from the tree pack-tar.sh composed* — it
+publishes nothing itself — so all five of the tarball's assertions are inherited
+rather than copied. A run that produces both is `pack-tar.sh` then
+`pack-appimage.sh`, in that order, and a failed tarball means no AppImage.
 
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:
@@ -91,11 +98,18 @@ Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
-**The next release is already settled at `0.3.0`** — decided 2026-08-16 for the
-first Linux release, and the number is shared, so the next Windows ZIP carries
-it too. That is a deliberate jump from `0.2.7.5`, and it belongs in the release
-notes rather than looking like a numbering accident. Confirm it rather than
-re-deriving a bump; the rule to ask still governs everything after it.
+**The next three releases are settled — 2026-08-24, superseding the earlier
+`0.3.0` decision**, which Windows spent while the Linux side was still working:
+`<VstVersion>` is already `0.2.8`.
+
+| Version | What it is |
+| --- | --- |
+| `0.2.8` | The Linux tarball. Inherits the number Windows already shipped, which is the shared-version rule working rather than an accident |
+| `0.2.9` | The AppImage — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) |
+| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md) |
+
+Confirm the number rather than re-deriving a bump; the rule to ask still governs
+everything after `0.3`.
 
 After a release ships, update `<VstVersion>` in
 [Directory.Build.props](Directory.Build.props) to the version just shipped, so

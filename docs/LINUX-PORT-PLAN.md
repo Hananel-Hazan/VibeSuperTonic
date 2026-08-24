@@ -15,7 +15,21 @@ gated GPU spike passed by a mile — first audio **802 ms → 77 ms** on an RTX
 A2000 — so CUDA is a shipped path behind an opt-in 3.1 GB provider pack, the
 daemon changes provider between utterances (on battery, on a setting, on a fresh
 benchmark) without restarting, and the Tune tab's benchmark button is wired.
-895 Core tests. See [What to do next](#next).
+956 Core tests. See [What to do next](#next).
+
+**The port is done; two more Linux phases follow it, and neither is a port.**
+Decided 2026-08-24 with the user. This branch was rebased onto the Windows-side
+work the same day (`origin/Dev` — [WINDOWS-PLAN.md](WINDOWS-PLAN.md), W0–W2),
+which moved `BenchmarkStore`, `Measurement`, `ModelSet` and `BenchSwitches` into
+Core and stamps `<VstVersion>` on every assembly in the tree. 956 tests green
+after the rebase, 897 of them ours.
+
+- **[Phase 9](#phase-9) — an AppImage beside the tarball.** Both artifacts, not
+  one. It is a phase rather than a packer edit because it defeats the invariant
+  the whole product is built on: *everything lives beside the executable*.
+- **Piper as a second engine** — its own document,
+  [PIPER-PLAN.md](PIPER-PLAN.md), written 2026-08-19 and given its settled
+  decisions 2026-08-24. Nothing in it starts before Phase 9 ships.
 
 **The target machine changed underneath this document on 2026-08-22, and two of
 its assumptions died with it.** It was reinstalled as **Ubuntu 26.04 / KDE Plasma
@@ -80,7 +94,8 @@ before changing it.
 | **A first-run window, triggered by "no models present"** — 2026-08-16 | One screen carries the OpenRAIL-M acceptance, the model download, and the explanation that the daemon self-starts from now on. No marker file: the folder may be read-only |
 | **One version for all three binaries** — 2026-08-16, **widened to every binary 2026-08-19** | `vibesupertonicd`, `vibesupertonic-ui` and `vst-ctl` share `<VstVersion>`. The packer **publishes all of them from source in one run and asserts the versions match** — the guard is against a stale binary surviving in an output folder, which is the same hazard the win-x86 and native-ELF assertions already cover. `Directory.Build.props` now stamps it on the **Windows** assemblies too, which it never did: 0.2.8 shipped a Control Panel whose About tab read `1.0.0.0`. See [W0](WINDOWS-PLAN.md#w0) |
 | **Configuration is a file, not a verb** | There is deliberately no `config set`: the UI writes `settings.json`, the daemon only reads it, so there is exactly one writer and no concurrency story. The CLI equivalent is editing the file — the daemon picks it up on mtime with nothing sent. Parity above is about *actions*, and this is the one stated exception |
-| **First Linux release is 0.3.0** — 2026-08-16 | `<VstVersion>` is shared so one number produces both artifacts, so the next Windows ZIP is 0.3.0 too — a deliberate jump from 0.2.7.5. Bumped *after* the release ships, per [CLAUDE.md](../CLAUDE.md) |
+| ~~**First Linux release is 0.3.0** — 2026-08-16~~ **Superseded 2026-08-24** | The number is shared with Windows and Windows spent it: `<VstVersion>` is already **0.2.8**, which shipped there. So the three releases now in front of us are **0.2.8 — the Linux tarball**, **0.2.9 — [the AppImage](#phase-9)**, **0.3 — [Piper](PIPER-PLAN.md)**. The rule underneath is unchanged: the user decides the bump, the packer is told the number, and `<VstVersion>` is updated *after* the release ships, per [CLAUDE.md](../CLAUDE.md) |
+| **Two Linux artifacts, permanently** — 2026-08-24, by the user | The tarball **and** an AppImage. The tarball stays the canonical one — `install.sh`, the GPU pack and all five packer assertions are verified against it, and a headless or server install has no use for a single-file GUI bundle. The AppImage is what a person downloads. Neither is allowed to become the only one that is tested |
 | **`InterChunkSilenceMs` is implemented, not dropped** — 2026-08-16 | Windows parity. It changes chunk timing and therefore boundary scheduling, so it landed *before* Phase 6 and the highlight is verified once, not twice. **Built the same day**; the gap is written through the same paced, cancellable, clocked path as speech, and counted into the stream position before the next chunk is planned — which is the half that would otherwise have made every boundary early |
 | **The benchmark is a verb first, a button later** — 2026-08-16 | **The verb shipped 2026-08-16** and works headless. The Tune tab ships the control disabled with a note, and wiring it to this same verb is an [8b](#phase-8) exit criterion — the parity rule does not allow a dead button to ship in v1 |
 | **Core takes zero `PackageReference`s** | The DirectML and CPU builds of ORT ship the same managed assembly name with different managed API surfaces. A hard constraint, not a preference — [R-13](#constraints) |
@@ -114,6 +129,10 @@ before changing it.
 | 7 · Packaging | **Done 2026-08-22.** [build/pack-tar.sh](../build/pack-tar.sh) publishes all three binaries into emptied directories, composes the layout, writes `install.sh`/`uninstall.sh`/`INSTALL.txt`/`LICENSE-MODELS.txt`, ships `models-manifest.json` and no models, and asserts three things against the composed tree. 51 MB, 238 files, verified by extracting and running it. **Not yet released as 0.3.0** — the user took it as a personal install at 0.2.7.5, so the release number is still unspent. [The record](#phase-7-landed) |
 | — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
 | 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
+| — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
+| — · **Release 0.2.8 — the tarball** | **Next, and it is not code.** Everything is built and verified except [two things only a person can do](#phase-8b-landed): unplug the laptop and press the hotkey, and click the Tune tab's benchmark button once |
+| 9 · [AppImage](#phase-9) | **Not started.** Ships as 0.2.9. 2 days plus a gated latency spike — the hotkey is the part that can fail |
+| — · [Piper](PIPER-PLAN.md) | **Not started.** Ships as 0.3. Its own plan, with P0/P1 as pure research and a go/no-go on phoneme parity before anything is committed |
 
 <a name="windows-check"></a>
 
@@ -391,9 +410,30 @@ Two corrections it produced, both found by doing the work:
   uses it. Measured: 383 MB fetched and hash-verified in about two minutes, and
   a daemon that started with no models loaded them afterwards without a restart.
 
-**4 · [Phase 7](#phase-7) — packaging**, then **the rest of
-[Phase 8](#phase-8)**: the GPU spike behind its gate, the battery rule, and
-wiring the Tune tab's benchmark control.
+**4 · ~~[Phase 7](#phase-7) — packaging, then the rest of [Phase 8](#phase-8).~~
+Both done — 2026-08-22 and 2026-08-24.** [The tarball](#phase-7-landed);
+[the GPU path, the battery rule and the Tune control](#phase-8b-landed).
+
+**5 · Ship 0.2.8 — the tarball.** The only work left in it is two manual checks
+that need hands on the machine, both listed at the end of
+[the 8b record](#phase-8b-landed): unplug the laptop and press the hotkey (the
+rule is verified through `VST_POWER` and by unit tests; what is unverified is
+that *this* box's `/sys/class/power_supply/AC/online` goes to 0 when the lead
+comes out), and click the Tune tab's benchmark button once (the client path was
+driven headlessly against a real daemon; the click could not be, on a Wayland
+session with no input-injection tool installed).
+
+Then `bash build/pack-tar.sh -v 0.2.8`, and update `<VstVersion>` after it
+ships — except that Windows already moved it to 0.2.8, so this release *inherits*
+the number rather than spending a new one. That is the shared-version rule
+working, not an accident.
+
+**6 · [Phase 9](#phase-9) — the AppImage.** Ships as 0.2.9.
+
+**7 · [Piper](PIPER-PLAN.md).** Ships as 0.3. Start at P0, which is half a day
+and can only produce good news or a dead end — and do not start it before 9 is
+out, because Piper's per-voice store has to be designed against the data
+directory the AppImage decides on, not the one it replaces.
 
 ### What exists today, and how to drive it
 
@@ -2504,6 +2544,100 @@ what [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) did with the same shape of questio
 
 <a name="convergence"></a>
 
+<a name="phase-9"></a>
+
+### Phase 9 — AppImage · 2 days + a gated latency spike · **added 2026-08-24**
+
+**Two artifacts, permanently.** `build/pack-appimage.sh` consumes the tree
+[build/pack-tar.sh](../build/pack-tar.sh) already composed — it does not publish
+anything itself — so all five of Phase 7's assertions are inherited by
+construction rather than copied and left to drift. If the tarball is wrong the
+AppImage is never built, which is the correct order of failure.
+
+**Why AppImage and not Flatpak**, settled here so it is not re-opened: the daemon
+reads selections over `ext-data-control-v1` and binds keys by writing
+`kglobalshortcutsrc`. Both are privileged from inside a Flatpak sandbox, and
+neither has a portal that does what this product does. An AppImage is a mounted
+filesystem and an ordinary process, so nothing the port depends on changes.
+
+**What it does change is the one invariant everything here is built on.**
+[LinuxDataPaths](../src/VibeSuperTonic.Daemon/LinuxDataPaths.cs) resolves
+everything relative to the directory holding the executable — `models/` beside
+it, `data/` beside it — and inside an AppImage that directory is a read-only
+squashfs at `/tmp/.mount_XXXXXX`, different on every run. Every row below is a
+consequence of that one sentence.
+
+| What breaks | What it becomes |
+| --- | --- |
+| Where `models/` and `data/` live | `$APPIMAGE` is the path of the `.AppImage` file itself. Resolve in this order: `--data` / `$VST_DATA_DIR`, then **an existing store** beside the AppImage, then an existing `$XDG_DATA_HOME/vibesupertonic`, then create beside the AppImage if that directory is writable, else create under XDG. **Prefer an existing store over a preferred location** — otherwise moving the AppImage to another folder makes 383 MB of models vanish and re-opens the first-run screen, which reads as data loss. `config` reports which of the two it found and why |
+| One entry point, three binaries | `AppRun` dispatches on the first argument: nothing → the UI, `ctl <verb>` → vst-ctl, `daemon` → the daemon, plus `bind`, `gpu-install`, `--version`. It also honours `argv[0]` when symlinked, which is the convention and costs one `basename` |
+| **The hotkey** | The interesting one. See below |
+| The GPU pack | `install-gpu.sh` writes into the install root today; the install root is now read-only. It targets the data directory, and `GpuProviderPack.ReexecIfNeeded` looks for it there. The `execv` of `/proc/self/exe` still works — the process holds the mount alive — so the arrangement measured not to corrupt the heap is unchanged |
+| Replacing the file while it is running | Worse than the tarball's version of this hazard: overwriting a squashfs image that a week-old daemon has mounted is not "an old binary still serving presses", it is a corrupt mount. `install.sh`'s `/proc/<pid>/exe` trick also stops identifying us, because that path is inside the mount. The answer is the verb that already exists: **`vst-ctl shutdown` before replacing the file**, in `INSTALL.txt` and in whatever the AppImage prints on `--help` |
+| "Runs on any distro" | A self-contained .NET publish built on Ubuntu 26.04 links that box's glibc, so it would run on nothing older. The AppDir is therefore built in a container on an older base. This is the difference between an AppImage and a tarball with extra steps |
+| FUSE | Type-2 runtimes want libfuse2, which recent Ubuntu does not install by default. Settle in the spike which runtime is used and what the failure text says; `--appimage-extract-and-run` exists but must never be the silent default, because it is slow in exactly the place this phase is measuring |
+
+<a name="appimage-hotkey"></a>
+
+#### The hotkey, which is the part that can fail
+
+`vst-ctl` is NativeAOT for one reason, and the packer asserts it in as many
+words: a managed apphost works perfectly and costs **~100 ms on every press**
+against a 150 ms press-to-feedback budget. Binding the key to
+`/path/to/VibeSuperTonic.AppImage ctl toggle` pays a squashfs mount on every
+press instead, which is the same mistake with a different cause.
+
+**Decided 2026-08-24 by the user: the AppImage installs `vst-ctl` to
+`~/.local/bin/` and the hotkey points there.** It is a 4 MB static binary with no
+dependencies, so a copy is a complete client rather than a shim, and the hotkey
+path stays exactly what Phase 3 measured. Three parts, and the second is the one
+that makes it hold:
+
+1. **`bind` copies it** — `App.AppImage bind` writes `~/.local/bin/vst-ctl`, then
+   calls `build/keybindings.sh` against that path, which is unchanged code doing
+   what it already does. A sidecar file records which AppImage the copy came
+   from, because a `vst-ctl` with no daemon beside it must still be able to
+   autostart one ([R-5](LINUX-PORT-ARCHIVE.md#r-5)).
+2. **Every start re-checks it.** The daemon and the UI both verify, at startup,
+   that `~/.local/bin/vst-ctl` exists and reports this build's version — and
+   re-copy it when it does not. A copy is a thing that goes stale, and a stale
+   client talking to a fresh daemon is exactly the failure the packer's
+   version-agreement assertion exists to prevent, arriving through a door the
+   packer cannot see. Deleting the file and starting the daemon must bring it
+   back; that is a test.
+3. **The first-run screen says so.** It already teaches the two keys; under an
+   AppImage it also runs the bind and reports the result, so "press Ctrl+`" is
+   true by the time the sentence is read. Never silently: this writes to the
+   user's `~/.local/bin` and their shortcut configuration, and both are stated.
+
+**The gate, and it is worth measuring even though the decision is made:**
+press → acknowledge through `App.AppImage ctl toggle`, against the **28 ms**
+Phase 3 measured and the **32 ms** 8b measured on the shipped binary. If a
+wrapped invocation lands inside budget it becomes the documented zero-install
+fallback for someone who will not have anything written to `~/.local/bin`. If it
+does not, the number is recorded and the question is closed with evidence rather
+than by assertion — [trap 13](#traps).
+
+#### Exit criteria
+
+| Criterion | How it is checked |
+| --- | --- |
+| One file, no .NET, no unpacking | Copy the `.AppImage` to a machine with no dotnet installed, `chmod +x`, run it, get the window |
+| The hotkey is not slower than the tarball's | Measured press → acknowledge, both paths, stated as numbers |
+| The store is found, not guessed | Download the models, move the AppImage to another directory, run it again: it finds the same models and does not re-open the first-run screen. Then run it from a read-only mount: it falls back to XDG and `config` says so |
+| The GPU pack still works | `App.AppImage gpu-install` into the data dir, then `status` reports CUDA after the re-exec |
+| The tray icon still appears | Free, and confirm it: [TrayPixmap](../src/VibeSuperTonic.Daemon/Tray/TrayPixmap.cs) draws the icon in-process, so there is no themed name and no file path to lose |
+| A stale client cannot survive | Delete `~/.local/bin/vst-ctl`, start the daemon, press the key. Then overwrite it with an older build's copy and do it again |
+| The five Phase 7 assertions still hold | By construction — the AppDir is the composed tarball tree. Assert *that*, so nobody later rewrites the packer to publish its own |
+| It runs on an older distro than it was built on | The reason the AppDir is built in a container. Name the glibc floor in `INSTALL.txt` |
+
+**What not to do.** Do not hand-roll the AppDir out of `dotnet publish` — that is
+[CLAUDE.md](../CLAUDE.md)'s standing rule with a new way to break it, and the
+composition step is most of what makes either artifact droppable. Do not let the
+AppImage become the only tested path: `install.sh`, the GPU pack and every
+assertion are verified against the tarball, and a headless install has no use for
+a single-file GUI bundle.
+
 ### Not a phase, and no longer this document's — the Windows convergence
 
 **Moved 2026-08-19 to [WINDOWS-PLAN.md](WINDOWS-PLAN.md), phase W6.** It was
@@ -2546,6 +2680,7 @@ same days — and that belongs in an effort table, not in a phase list.
 | 6 · App + tray | 3–4 | **done** | The second binary, the Reader against the stream, `hello`, R-1 by process boundary, finding 5 measured, finding 6 instrumented, the tray on rung 1, both settings writers, and the first-run screen with the model download |
 | 7 · Packaging | 1.5–2 | **done 2026-08-22** | the packer, its three assertions, `install.sh` / `uninstall.sh`, the layout — [the record](#phase-7-landed) |
 | — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
+| 9 · AppImage | 2 + spike | not started | a second artifact, a data directory that is no longer beside the binary, and a hotkey that must not get slower — [Phase 9](#phase-9) |
 | 8b · Fit the machine, the rest | 0.5 + spike | **done 2026-08-24** | battery rule, the provider switch, the Tune control; the GPU spike passed its gate and turned into a shipped CUDA path plus an opt-in provider pack — [the record](#phase-8b-landed) |
 | **Remaining** | **0** | | The port is done. What is left is not a phase: [the Windows convergence](#convergence) and [the Way 3 gate](#the-gate), both deliberately deferred until v1 ships |
 
