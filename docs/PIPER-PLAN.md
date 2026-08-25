@@ -611,6 +611,29 @@ is the silent divergence this project keeps writing traps about. Empirically
 inversion is per tier or per voice is [P3](#p3)'s to settle, and it needs the
 same measurement run against more than one voice before it becomes a constant.
 
+**And it saturates. There is a hard ceiling just under 2× that no
+`length_scale` can pass.**
+
+| `length_scale` | high | medium |
+| --- | --- | --- |
+| 0.50 | 1.60× | 1.56× |
+| 0.25 | 1.97× | 1.85× |
+| 0.15 | **1.97×** | — |
+| 0.05 | **1.97×** | **1.88×** |
+| 0.01 | **1.97×** | — |
+
+Below roughly 0.15 the output stops changing — 0.15, 0.05 and 0.01 produce
+*byte-for-byte the same duration*, 1.27 s. The wall is **~1.97× for `high` and
+~1.88× for `medium`**, so it is per tier and probably per voice.
+
+**This is the one case the *speed comes from Piper* decision cannot cover**, and
+it is a capability limit rather than a quality one: past ~1.9× the model
+physically will not go faster, so a user asking for 2.5× can only be served by
+the time-stretch — which makes [the 44.1 kHz bug above](#stretch-samplerate) a
+thing that *will* be reached rather than a curiosity. Note the difference in kind
+from Supertonic: its split at 1.3 exists because quality degrades, and this one
+exists because the number stops moving.
+
 <a name="stretch-samplerate"></a>
 
 #### A latent bug in the shared path, found by measuring against it

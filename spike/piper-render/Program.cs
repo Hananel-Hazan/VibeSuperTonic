@@ -37,6 +37,11 @@ var lengthScaleOverride = ArgValue("--length-scale") is { } ls ? float.Parse(ls)
 var noiseScaleOverride = ArgValue("--noise-scale") is { } ns ? float.Parse(ns) : (float?)null;
 var noiseWOverride = ArgValue("--noise-w") is { } nw ? float.Parse(nw) : (float?)null;
 var rawOut = args.Contains("--no-normalize");
+// Applied AFTER the model, at the voice's own sample rate. length_scale
+// saturates just under 2x (measured), so anything past that has to come from
+// here — which is the one case the "speed comes from Piper" decision does not
+// cover, because Piper cannot deliver it.
+var stretch = ArgValue("--stretch") is { } st ? double.Parse(st) : 1.0;
 
 if (!File.Exists(model))
 {
@@ -178,6 +183,16 @@ var gain = rawOut ? 1f : peak < 1e-8f ? 0f : 1f / peak;
 var pcm = new short[raw.Length];
 for (var i = 0; i < raw.Length; i++)
     pcm[i] = (short)Math.Clamp(raw[i] * gain * 32767f, -32767f, 32767f);
+
+if (Math.Abs(stretch - 1.0) > 0.001)
+{
+    var sonic = new VibeSuperTonic.Core.Audio.Sonic(sampleRate, (float)stretch);
+    sonic.WriteSamples(pcm, 0, pcm.Length);
+    sonic.Flush();
+    var buf = new short[(int)(pcm.Length / stretch) + 4096];
+    pcm = buf[..sonic.ReadSamples(buf, 0, buf.Length)];
+    Console.WriteLine($"stretch      x{stretch:F2} at {sampleRate} Hz");
+}
 
 WriteWav(outPath, pcm, sampleRate);
 
