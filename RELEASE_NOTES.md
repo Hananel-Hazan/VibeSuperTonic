@@ -30,9 +30,22 @@ VibeSuperTonic-0.2.9-linux-x64.tar.gz     52 MB
 - **Runs on Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+** — glibc 2.34 and
   above. Measured rather than assumed, and the packer now refuses to build an
   archive whose floor has risen.
+- **The optional GPU pack works from the AppImage**:
+  `./VibeSuperTonic-0.2.9-x86_64.AppImage gpu-install`. It installs beside your
+  models rather than beside the program, which an AppImage cannot write to, and
+  `--remove` now takes the whole 3.1 GB away in one directory.
 - **Needs FUSE**, like every AppImage. Without it the image cannot be mounted and
   nothing inside it runs; `vst-ctl` and `bind` both say so now, and name
   `--appimage-extract-and-run` as the way through.
+
+## Fixed
+
+- **The engine kept its benchmark and its GPU after the first sentence.** A
+  daemon would start on CUDA, say so, and quietly drop to an unbenchmarked CPU
+  setting the moment anything was read — because the profile was being looked up
+  by directory rather than by file, which reads back as "this machine has never
+  been benchmarked". Anyone whose Status tab said CUDA while their reading
+  sounded like CPU was seeing this.
 
 ## Also on Linux since 0.2.7.5
 

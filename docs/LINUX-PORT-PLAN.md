@@ -1155,6 +1155,53 @@ does — and the case that matters is a hotkey press, which has no terminal. So
 `--appimage-extract-and-run` as the way through and what it costs, rather than
 leaving it to a forum.
 
+<a name="appimage-migration"></a>
+
+#### Migrating the development machine, and the three defects it found
+
+Done 2026-08-24, immediately after shipping, and it is the reason this phase has
+a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
+AppImage at `~/Apps/VibeSuperTonic.AppImage` with the old install directory kept
+**as the store** — `data/`, `models/` and the 2.8 GB CUDA pack moved in place,
+nothing copied, nothing re-downloaded.
+
+**1 · The benchmark profile was being read from a directory.** The daemon
+started on CUDA, announced it, and fell back to *"CPU, 4 threads (never
+benchmarked)"* on the first utterance. `BenchmarkStore` moved into Core on
+2026-08-19 and its `Load` took a file path instead of the data directory;
+`Program.cs` conflicted during the rebase and was fixed, and
+`ProviderSwitchingSynthesizer` **auto-merged clean and kept passing the
+directory** — both are strings, and a directory reads back as null, which is
+indistinguishable from *"this machine has never been benchmarked"*.
+
+So the GPU, the battery rule and every benchmark stopped applying after the
+first utterance of every session, behind a green build, 956 passing tests, and a
+startup line that still said CUDA. **That startup line is what let it survive:**
+the first decision is made in `Program.cs`, which was correct, so every start
+announced the right provider and every utterance then silently discarded it.
+*A log line saying CUDA is not evidence that CUDA is in use.* The guard went
+where it could be tested — `Load` now refuses a directory rather than reporting
+no profile, because a directory is a caller bug in every case and never a
+missing file.
+
+**2 · `gpu-install` could not work on an AppImage at all.** The provider library
+went to the install root, where a tarball keeps `libonnxruntime.so` and ORT finds
+it through that library's `RUNPATH`. An AppImage has no writable directory there.
+It now goes **inside the pack**, which works for both, because the daemon
+re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
+name — measured by moving the 330 MB file and watching the same daemon go from
+*"no GPU available"* to *"CUDA, 2 threads"*.
+
+**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+runtime redirects `$HOME` into that directory if it exists — which sounds like
+the portable-config feature this product wants and is the opposite. The store is
+anchored to the AppImage's *directory*, so config does not move there; what does
+move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
+`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
+**so KDE never sees the shortcuts and the hotkeys silently stop working.**
+Measured with a dry run rather than reasoned about. Do not use it; the store
+beside the image already is the portable arrangement.
+
 <a name="appimage-untested"></a>
 
 #### What was not tested, and why
@@ -2828,6 +2875,53 @@ does — and the case that matters is a hotkey press, which has no terminal. So
 `--appimage-extract-and-run` as the way through and what it costs, rather than
 leaving it to a forum.
 
+<a name="appimage-migration"></a>
+
+#### Migrating the development machine, and the three defects it found
+
+Done 2026-08-24, immediately after shipping, and it is the reason this phase has
+a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
+AppImage at `~/Apps/VibeSuperTonic.AppImage` with the old install directory kept
+**as the store** — `data/`, `models/` and the 2.8 GB CUDA pack moved in place,
+nothing copied, nothing re-downloaded.
+
+**1 · The benchmark profile was being read from a directory.** The daemon
+started on CUDA, announced it, and fell back to *"CPU, 4 threads (never
+benchmarked)"* on the first utterance. `BenchmarkStore` moved into Core on
+2026-08-19 and its `Load` took a file path instead of the data directory;
+`Program.cs` conflicted during the rebase and was fixed, and
+`ProviderSwitchingSynthesizer` **auto-merged clean and kept passing the
+directory** — both are strings, and a directory reads back as null, which is
+indistinguishable from *"this machine has never been benchmarked"*.
+
+So the GPU, the battery rule and every benchmark stopped applying after the
+first utterance of every session, behind a green build, 956 passing tests, and a
+startup line that still said CUDA. **That startup line is what let it survive:**
+the first decision is made in `Program.cs`, which was correct, so every start
+announced the right provider and every utterance then silently discarded it.
+*A log line saying CUDA is not evidence that CUDA is in use.* The guard went
+where it could be tested — `Load` now refuses a directory rather than reporting
+no profile, because a directory is a caller bug in every case and never a
+missing file.
+
+**2 · `gpu-install` could not work on an AppImage at all.** The provider library
+went to the install root, where a tarball keeps `libonnxruntime.so` and ORT finds
+it through that library's `RUNPATH`. An AppImage has no writable directory there.
+It now goes **inside the pack**, which works for both, because the daemon
+re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
+name — measured by moving the 330 MB file and watching the same daemon go from
+*"no GPU available"* to *"CUDA, 2 threads"*.
+
+**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+runtime redirects `$HOME` into that directory if it exists — which sounds like
+the portable-config feature this product wants and is the opposite. The store is
+anchored to the AppImage's *directory*, so config does not move there; what does
+move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
+`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
+**so KDE never sees the shortcuts and the hotkeys silently stop working.**
+Measured with a dry run rather than reasoned about. Do not use it; the store
+beside the image already is the portable arrangement.
+
 <a name="appimage-untested"></a>
 
 #### What was not tested, and why
@@ -3110,6 +3204,53 @@ does — and the case that matters is a hotkey press, which has no terminal. So
 `bind` says it while there is still a terminal to read. Both name
 `--appimage-extract-and-run` as the way through and what it costs, rather than
 leaving it to a forum.
+
+<a name="appimage-migration"></a>
+
+#### Migrating the development machine, and the three defects it found
+
+Done 2026-08-24, immediately after shipping, and it is the reason this phase has
+a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
+AppImage at `~/Apps/VibeSuperTonic.AppImage` with the old install directory kept
+**as the store** — `data/`, `models/` and the 2.8 GB CUDA pack moved in place,
+nothing copied, nothing re-downloaded.
+
+**1 · The benchmark profile was being read from a directory.** The daemon
+started on CUDA, announced it, and fell back to *"CPU, 4 threads (never
+benchmarked)"* on the first utterance. `BenchmarkStore` moved into Core on
+2026-08-19 and its `Load` took a file path instead of the data directory;
+`Program.cs` conflicted during the rebase and was fixed, and
+`ProviderSwitchingSynthesizer` **auto-merged clean and kept passing the
+directory** — both are strings, and a directory reads back as null, which is
+indistinguishable from *"this machine has never been benchmarked"*.
+
+So the GPU, the battery rule and every benchmark stopped applying after the
+first utterance of every session, behind a green build, 956 passing tests, and a
+startup line that still said CUDA. **That startup line is what let it survive:**
+the first decision is made in `Program.cs`, which was correct, so every start
+announced the right provider and every utterance then silently discarded it.
+*A log line saying CUDA is not evidence that CUDA is in use.* The guard went
+where it could be tested — `Load` now refuses a directory rather than reporting
+no profile, because a directory is a caller bug in every case and never a
+missing file.
+
+**2 · `gpu-install` could not work on an AppImage at all.** The provider library
+went to the install root, where a tarball keeps `libonnxruntime.so` and ORT finds
+it through that library's `RUNPATH`. An AppImage has no writable directory there.
+It now goes **inside the pack**, which works for both, because the daemon
+re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
+name — measured by moving the 330 MB file and watching the same daemon go from
+*"no GPU available"* to *"CUDA, 2 threads"*.
+
+**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+runtime redirects `$HOME` into that directory if it exists — which sounds like
+the portable-config feature this product wants and is the opposite. The store is
+anchored to the AppImage's *directory*, so config does not move there; what does
+move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
+`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
+**so KDE never sees the shortcuts and the hotkeys silently stop working.**
+Measured with a dry run rather than reasoned about. Do not use it; the store
+beside the image already is the portable arrangement.
 
 <a name="appimage-untested"></a>
 
