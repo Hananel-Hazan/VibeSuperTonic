@@ -32,5 +32,6 @@
     <Project Path="spike/avalonia-bigtext/BigText.csproj" />
     <Project Path="spike/wayland-selection/WlSel.csproj" />
     <Project Path="spike/gpu-cuda/GpuSpike.csproj" />
+    <Project Path="spike/piper-render/PiperRender.csproj" />
   </Folder>
 </Solution>

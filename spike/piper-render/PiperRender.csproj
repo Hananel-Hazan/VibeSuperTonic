@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase P0 of docs/PIPER-PLAN.md — prove a Piper voice's graph runs on the
+    ONNX Runtime this repository already ships, called from C#, with no Piper
+    code in the process.
+
+    If it does, three routes die permanently: linking libpiper, hosting a native
+    piper process, and shipping a portable Python. What is left is a VITS graph
+    with four inputs, which is the whole reason that route was chosen.
+
+    REFERENCES ONNX RUNTIME DIRECTLY, which a spike may and Core may not. The
+    package is Gpu.Linux at the same 1.22.1 the product links, for one reason
+    beyond matching: its libonnxruntime.so exports the CUDA entry point, so the
+    `cuda` flag can answer whether this graph is accepted by the provider the
+    product already ships. The 330 MB libonnxruntime_providers_cuda.so lands in
+    bin/ here; Directory.Build.targets strips it from every publish, and nothing
+    in this directory is ever published.
+
+    Throwaway. PiperSynthesizer in P3 is what replaces it, against ISynthesizer,
+    in a platform-neutral project — this spike deliberately depends on neither.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-piper-render</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.PiperRender</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.22.1" />
+  </ItemGroup>
+
+</Project>

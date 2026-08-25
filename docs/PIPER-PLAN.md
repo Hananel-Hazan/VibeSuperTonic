@@ -1,12 +1,11 @@
 # Piper as a second engine — plan
 
-Status: **Not started. Investigation done 2026-08-19; the open decisions settled
-2026-08-24. Nothing written, no dependency added, no file in `src/` touched.**
-This document is the handoff. It is written so the next agent can start at
-[Phase P0](#p0) without re-reading the upstream repository. **It is now the next
-thing to do** — 0.2.8 (the tarball) and 0.2.9
-([the AppImage](LINUX-PORT-PLAN.md#phase-9)) both shipped 2026-08-24, which was
-the whole of what stood in front of it.
+Status: **[P0](#p0) passed 2026-08-25 and [P1](#p1) is next — the go/no-go.**
+Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8 and
+0.2.9 shipped, which was the whole of what stood in front of this. What exists is
+[one spike](../spike/piper-render) and this document. **No dependency added and
+no file in `src/` touched** — that is still true and stays true until P1 has a
+number, because P0 and P1 are pure research that commit us to nothing.
 
 The proposal is to add [Piper](https://github.com/OHF-Voice/piper1-gpl) **beside**
 Supertonic, not in place of it. Supertonic stays the default and keeps the
@@ -100,8 +99,8 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 
 | Phase | State |
 | --- | --- |
-| P0 · Prove the graph runs | **Next.** Half a day. Kills routes A/B/C permanently if it passes |
-| P1 · Phoneme parity | Not started. **The go/no-go.** Everything after it is ordinary work |
+| P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
+| P1 · Phoneme parity | **Next, and it is the go/no-go.** Everything after it is ordinary work. The toolchain is provisioned and both references run |
 | P2 · Measure | Not started. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
 | P3 · `PiperSynthesizer` + the options refactor | Not started. Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | Not started. The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
@@ -156,7 +155,7 @@ won — never off a path computed a second time.
 
 <a name="p0"></a>
 
-### Phase P0 — Prove the graph runs · half a day
+### Phase P0 — Prove the graph runs · half a day · **done 2026-08-25**
 
 **Work.** A new spike beside the existing ones — `spike/piper-render`, modelled on
 [spike/linux-render](../spike/linux-render), which is platform-neutral for the
@@ -187,15 +186,71 @@ you will chase a level difference that is not a bug.
 
 - A WAV that sounds like the voice, rendered by our ORT, with no Piper code in
   the process.
-- The same spike runs on **both** boxes — Windows and Mint — from the same
-  source. This is the "one seam" decision being tested on day one rather than
-  assumed.
-- Written down: does DirectML accept this graph, and is it faster than CPU? Free
-  to learn here, expensive to discover in P3.
+- ~~The same spike runs on **both** boxes — Windows and Mint — from the same
+  source.~~ **Restated 2026-08-25, by the user: Linux now, Windows when they say
+  so.** The decision it was testing does not change and neither does the code —
+  the spike is platform-neutral by construction, referencing only
+  `Microsoft.ML.OnnxRuntime` and no Linux type — but *running* it on Windows
+  moves to whenever that box is in the loop. What this costs is honest to state:
+  the "one seam" claim is now argued from the project file rather than
+  demonstrated, and the demonstration is deferred, not cancelled. The box the
+  original criterion named no longer exists either way — this machine has been
+  KDE/Wayland since 2026-08-22, not Mint.
+- ~~Written down: does DirectML accept this graph, and is it faster than CPU?~~
+  **Deferred with the Windows run**, since DirectML ships only in the Windows
+  package. The question is still free to answer there and still expensive to
+  discover in P3 — it moves, it does not disappear. What the Linux run answers in
+  its place: does CUDA accept the graph, on the provider pack this repository
+  already ships.
 
 **If this passes**, `libpiper`, a native host process, and portable Python are all
 off the table permanently and this document's [route comparison](#routes) becomes
 history rather than a decision.
+
+<a name="p0-landed"></a>
+
+#### It passed, and by more than the criterion asked — 2026-08-25
+
+[spike/piper-render](../spike/piper-render) renders `en_US-lessac-medium` on the
+ONNX Runtime this repository already links, from C#, with no Piper code in the
+process. **Routes A, B and C are dead**: no `libpiper`, no native host process,
+no portable Python, ever.
+
+**The graph is what the plan said it was**, confirmed from the session rather
+than from the documentation: `input` `int64[-1,-1]`, `input_lengths` `int64[-1]`,
+`scales` `float32[3]`, one output. **Three inputs, not four** — `sid` is absent
+because `num_speakers` is 1, and sending it anyway is an error rather than a
+no-op, which is the kind of thing that reads as "the route does not work".
+
+**Verified against piper itself, not against an ear.** With `noise_scale` and
+`noise_w` at zero the graph is deterministic, so our render and
+`python -m piper`'s can be compared directly — and they are **byte-identical,
+WAV header included**, 105,516 bytes each. `cmp` returns nothing. That is the
+difference between *it made speech* and *we are calling it exactly the way piper
+does*, and it retires every question about scale order, the id interleave and
+upstream's peak-normalise in one comparison. It also renders and plays with the
+default scales, which is the criterion as written.
+
+| | Cold | Warm (5 runs) | RTF warm |
+| --- | --- | --- | --- |
+| CPU | 79 ms | **70 ms** | 0.029 |
+| CUDA | 301 ms | **18 ms** | 0.008 |
+
+2.39 s of audio each. **CUDA accepts this graph** on the provider pack the
+product already ships — that is the Linux half of the criterion, [the Windows
+half having moved](#p0) with the box. It is ~4× faster warm and 4× *slower*
+cold, which is the shape Phase 8b already measured for Supertonic and the reason
+the daemon holds a session rather than building one per utterance.
+
+**One number P1 needs to know:** the two providers do **not** agree
+bit-for-bit — 15,916 of 52,736 samples identical, max deviation 367 of 32,767,
+about 1%, inaudible and entirely ordinary for different float kernels. So a
+parity test that compares *audio* has to pin its provider. P1 compares **id
+sequences**, which is exactly why that is the right thing to compare.
+
+**What it cost:** an afternoon, against the half day estimated, and most of that
+was fetching a 61 MB voice and writing the comparison rather than the 60 lines
+that call the session.
 
 <a name="p1"></a>
 
