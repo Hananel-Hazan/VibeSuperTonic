@@ -1157,7 +1157,7 @@ leaving it to a forum.
 
 <a name="appimage-migration"></a>
 
-#### Migrating the development machine, and the three defects it found
+#### Migrating the development machine, and the four defects it found
 
 Done 2026-08-24, immediately after shipping, and it is the reason this phase has
 a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
@@ -1192,7 +1192,17 @@ re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
 name — measured by moving the 330 MB file and watching the same daemon go from
 *"no GPU available"* to *"CUDA, 2 threads"*.
 
-**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+**3 · A rebound key keeps launching the command it used to.** Plasma stores a
+shortcut against a `.desktop` id and launches the action's `Exec`; rewriting that
+`Exec` does not reach a `kglobalaccel` that is already running. `bind` reported
+two shortcuts written, the file on disk was correct, and every press said
+*"Could not find the program /home/hananel/Apps/VibeSuperTonic/vst-ctl"* — the
+tarball path this upgrade had just moved aside. **Only pressing the key finds
+this.** `bind` now reads what the keys ran before it rewrites them and links the
+old path to the new client when it has been vacated; the alternative was telling
+every upgrader to log out first.
+
+**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
 runtime redirects `$HOME` into that directory if it exists — which sounds like
 the portable-config feature this product wants and is the opposite. The store is
 anchored to the AppImage's *directory*, so config does not move there; what does
@@ -2877,7 +2887,7 @@ leaving it to a forum.
 
 <a name="appimage-migration"></a>
 
-#### Migrating the development machine, and the three defects it found
+#### Migrating the development machine, and the four defects it found
 
 Done 2026-08-24, immediately after shipping, and it is the reason this phase has
 a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
@@ -2912,7 +2922,17 @@ re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
 name — measured by moving the 330 MB file and watching the same daemon go from
 *"no GPU available"* to *"CUDA, 2 threads"*.
 
-**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+**3 · A rebound key keeps launching the command it used to.** Plasma stores a
+shortcut against a `.desktop` id and launches the action's `Exec`; rewriting that
+`Exec` does not reach a `kglobalaccel` that is already running. `bind` reported
+two shortcuts written, the file on disk was correct, and every press said
+*"Could not find the program /home/hananel/Apps/VibeSuperTonic/vst-ctl"* — the
+tarball path this upgrade had just moved aside. **Only pressing the key finds
+this.** `bind` now reads what the keys ran before it rewrites them and links the
+old path to the new client when it has been vacated; the alternative was telling
+every upgrader to log out first.
+
+**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
 runtime redirects `$HOME` into that directory if it exists — which sounds like
 the portable-config feature this product wants and is the opposite. The store is
 anchored to the AppImage's *directory*, so config does not move there; what does
@@ -3207,7 +3227,7 @@ leaving it to a forum.
 
 <a name="appimage-migration"></a>
 
-#### Migrating the development machine, and the three defects it found
+#### Migrating the development machine, and the four defects it found
 
 Done 2026-08-24, immediately after shipping, and it is the reason this phase has
 a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
@@ -3242,7 +3262,17 @@ re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
 name — measured by moving the 330 MB file and watching the same daemon go from
 *"no GPU available"* to *"CUDA, 2 threads"*.
 
-**3 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
+**3 · A rebound key keeps launching the command it used to.** Plasma stores a
+shortcut against a `.desktop` id and launches the action's `Exec`; rewriting that
+`Exec` does not reach a `kglobalaccel` that is already running. `bind` reported
+two shortcuts written, the file on disk was correct, and every press said
+*"Could not find the program /home/hananel/Apps/VibeSuperTonic/vst-ctl"* — the
+tarball path this upgrade had just moved aside. **Only pressing the key finds
+this.** `bind` now reads what the keys ran before it rewrites them and links the
+old path to the new client when it has been vacated; the alternative was telling
+every upgrader to log out first.
+
+**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
 runtime redirects `$HOME` into that directory if it exists — which sounds like
 the portable-config feature this product wants and is the opposite. The store is
 anchored to the AppImage's *directory*, so config does not move there; what does
