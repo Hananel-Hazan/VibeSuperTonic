@@ -3,8 +3,10 @@
 Status: **[P0](#p0), [P1](#p1) and [P2](#p2)'s measurements all landed
 2026-08-25.** The go/no-go is answered — phoneme parity, 327 sentences across 8
 languages, zero divergences — and nothing that can kill this project is left.
-What P2 still owes is a **listening verdict** on the speed question, which is the
-one thing in this plan that cannot be measured.
+[P2](#p2) is closed too, including [the listening verdict](#speed-verdict) that
+was the one thing in this plan that could not be measured. **[P3](#p3) is next,
+and it is ordinary engineering** — the first phase whose failure would be a bug
+rather than the end of the project.
 Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8 and
 0.2.9 shipped, which was the whole of what stood in front of this. What exists is
 [one spike](../spike/piper-render) and this document. **No dependency added and
@@ -107,8 +109,8 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | --- | --- |
 | P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
 | P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
-| P2 · Measure | **Numbers done 2026-08-25** — [the table](#p2-landed). The speed question is rendered and waiting on a listening verdict, which is the one thing that cannot be measured. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
-| P3 · `PiperSynthesizer` + the options refactor | Not started. Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
+| P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed), and [the listening verdict](#speed-verdict): no quality ceiling at any rate, on either path. Three items handed to P3 | RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
+| P3 · `PiperSynthesizer` + the options refactor | **Next.** Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | Not started. The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
 | P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage lands in [Phase 9](LINUX-PORT-PLAN.md#phase-9). What is left here is the GPL obligations and a second `LICENSE-MODELS` story |
 
@@ -633,6 +635,54 @@ the time-stretch — which makes [the 44.1 kHz bug above](#stretch-samplerate) a
 thing that *will* be reached rather than a curiosity. Note the difference in kind
 from Supertonic: its split at 1.3 exists because quality degrades, and this one
 exists because the number stops moving.
+
+<a name="speed-verdict"></a>
+
+#### The listening verdict — 2026-08-25, by the user
+
+[P2](#p2)'s exit criterion asked for *"a stated speed ceiling per quality tier or
+a statement that there is not one."* **There is not one.** Nothing tested sounded
+degraded, at any rate, by either mechanism:
+
+| Rendered | Verdict |
+| --- | --- |
+| 1.0× reference | fine |
+| 1.6× via calibrated `length_scale` | fine |
+| 1.6× via the stretch, correct sample rate | fine |
+| 1.6× via the stretch, **wrong** sample rate | fine — and **indistinguishable** from the correct one, A/B'd twice |
+| 1.9× model alone vs 1.9× stretch alone | both fine, no difference heard |
+| 2.5×, model-at-saturation + stretch, and stretch alone | *"much faster, nothing sounds broken, they are usable"* |
+
+**The 44.1 kHz bug is inaudible, which is worse news than it sounds.** The two
+renders differ in **35,156 of 35,675 samples** and a person cannot tell them
+apart, A/B'd twice. So [that hardcode](#stretch-samplerate) will never be caught
+by listening, will never produce a field report, and is exactly the class of
+thing this project fixes by assertion rather than by ear.
+
+**And the decision's premise did not survive the test, though the decision
+does.** *Speed comes from Piper, not from our DSP* was chosen because
+`RateClampCeiling` exists to stop **quality** degrading — and at every rate
+tested, on both paths, quality did not discriminate. So the choice is no longer
+about how it sounds. What is left to choose on:
+
+| | `length_scale` | The time-stretch |
+| --- | --- | --- |
+| Rate delivered | **non-linear**, needs calibration per voice | linear and exact |
+| Ceiling | **~1.9×, hard** | none |
+| Cost | free — and *cheaper* the faster you go, since less audio is generated | a DSP pass over every sample |
+| Correctness today | fine | [wrong sample rate](#stretch-samplerate) |
+
+**The decision stands, and now for the right reason: cost, not quality.**
+`length_scale` is free and gets cheaper as it speeds up, where the stretch is a
+pass over every sample. What [P3](#p3) owes is the part that follows from the
+measurements rather than from the premise:
+
+1. **Calibrate `length_scale` per voice** — measure its curve once at install and
+   store it with the voice, because 1.6× must mean 1.6×.
+2. **Hand off to the stretch past saturation**, which is the only way to serve a
+   rate above ~1.9× and which the user has now confirmed sounds fine there.
+3. **Fix the sample rate before that handoff exists**, since the listening test
+   just proved nobody will notice if it is wrong.
 
 <a name="stretch-samplerate"></a>
 
