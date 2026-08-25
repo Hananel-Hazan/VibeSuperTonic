@@ -78,9 +78,15 @@ internal static class AppImageClient
 
             File.WriteAllText(SidecarPath, appImageFile + "\n");
 
+            // Three reasons to have done work, and they are not the same event.
+            // Saying "replaced: it reported 0.2.9, this build is 0.2.9" — which
+            // is what one sentence for all three produced — reads as a bug in
+            // the sentence, and invites the reader to distrust the next one.
             return installed is null
                 ? $"installed {ClientPath} ({version}) for the hotkeys"
-                : $"replaced {ClientPath}: it reported {installed}, this build is {version}";
+                : installed != version
+                    ? $"replaced {ClientPath}: it reported {installed}, this build is {version}"
+                    : $"repointed {ClientPath} at {appImageFile}";
         }
         catch (Exception ex)
         {
