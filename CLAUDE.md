@@ -113,18 +113,17 @@ Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
-**The next three releases are settled — 2026-08-24, superseding the earlier
-`0.3.0` decision**, which Windows spent while the Linux side was still working:
-`<VstVersion>` is already `0.2.8`.
+**The three-release sequence settled on 2026-08-24 is two-thirds spent.**
+`<VstVersion>` is `0.2.9`.
 
-| Version | What it is |
-| --- | --- |
-| `0.2.8` | The Linux tarball. Inherits the number Windows already shipped, which is the shared-version rule working rather than an accident |
-| `0.2.9` | The AppImage — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) |
-| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md) |
+| Version | What it is | State |
+| --- | --- | --- |
+| `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
+| `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
+| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md) | next |
 
-Confirm the number rather than re-deriving a bump; the rule to ask still governs
-everything after `0.3`.
+`0.3` is the next number and it is settled. **Everything after it is a decision
+to ask about** — propose a bump from what changed, and use `AskUserQuestion`.
 
 After a release ships, update `<VstVersion>` in
 [Directory.Build.props](Directory.Build.props) to the version just shipped, so

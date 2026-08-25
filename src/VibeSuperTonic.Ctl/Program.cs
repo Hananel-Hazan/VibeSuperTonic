@@ -147,7 +147,7 @@ if (socket is null)
         return 1;
     }
 
-    if (!TryStartDaemon(out string startError))
+    if (!TryStartDaemon(out string startError, out string? startedFrom))
     {
         Console.Error.WriteLine($"no daemon listening on {path} and could not start one: {startError}");
         return 1;
@@ -158,6 +158,11 @@ if (socket is null)
     {
         Console.Error.WriteLine(
             $"started a daemon but it did not accept a connection within {AutoStartBudgetMs} ms");
+
+        // The AppImage case has one failure this sentence cannot name, and it is
+        // the one a user cannot diagnose: no FUSE means the image never mounted,
+        // so nothing inside it ran at all. See AppImageStartHint.
+        if (startedFrom is { } image) Console.Error.WriteLine(AppImageStartHint(image));
         return 1;
     }
 }
@@ -466,8 +471,36 @@ static string? ReadAppImageSidecar()
     catch { return null; }
 }
 
-static bool TryStartDaemon(out string error)
+/// <summary>
+/// Why an AppImage-hosted daemon might have gone nowhere, in the one case the
+/// generic message cannot name.
+///
+/// <para>Without <c>/dev/fuse</c> the image never mounts, so <c>AppRun</c> never
+/// runs and neither does anything inside it — <c>Process.Start</c> still
+/// succeeds, the child exits immediately, and all this process can honestly say
+/// is that nothing connected. A hotkey press has no terminal to print any of
+/// this to, which is why the sentence has to be worth reading when someone
+/// finally runs the verb by hand.</para>
+/// </summary>
+static string AppImageStartHint(string image)
 {
+    if (File.Exists("/dev/fuse"))
+        return $"The daemon is started from {image}. Run `{image} daemon` in a terminal to see why it stopped.";
+
+    return $"/dev/fuse is not present, so {image} cannot be mounted and nothing inside it can run.\n" +
+           "Install FUSE — libfuse2 on Debian and Ubuntu — or start the daemon once with:\n" +
+           $"    {image} --appimage-extract-and-run daemon &\n" +
+           "which unpacks to /tmp instead. That is four times slower to start and leaves\n" +
+           "about 125 MB there, so it is a way through rather than a way to live.";
+}
+
+/// <param name="startedFrom">
+/// The AppImage the daemon was launched from, or null for an ordinary install.
+/// Carried out so the caller can say something useful when nothing connects.
+/// </param>
+static bool TryStartDaemon(out string error, out string? startedFrom)
+{
+    startedFrom = null;
     // Three places, in order of how specific they are.
     //
     //   1. $VST_DAEMON, which is a person overriding everything.
@@ -484,6 +517,7 @@ static bool TryStartDaemon(out string error)
     if (exe.Length == 0 && appImage is not null)
     {
         exe = appImage;
+        startedFrom = appImage;
         arguments.Add("daemon");
     }
     else if (exe.Length == 0)

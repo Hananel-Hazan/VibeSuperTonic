@@ -65,6 +65,21 @@ case ":${PATH}:" in
        warn "full path — but typing 'vst-ctl' in a terminal will not find it." ;;
 esac
 
+# FUSE, checked here because here is the only place with a terminal. Without it
+# the image cannot be mounted, so the client copied above still works — it is a
+# plain binary — but the daemon it autostarts on the first press lives INSIDE the
+# image and will not start. That is a hotkey that does nothing, discovered by
+# pressing it, which is the exact failure R-5 exists to prevent.
+if [[ ! -e /dev/fuse ]]; then
+    warn "/dev/fuse is not present on this machine."
+    warn ""
+    warn "This AppImage is running unpacked, so binding works — but the first hotkey"
+    warn "press has to START the daemon, and the daemon is inside the image."
+    warn "Install FUSE (libfuse2 on Debian and Ubuntu), or start the daemon yourself"
+    warn "after each login with:"
+    warn "    $APPIMAGE --appimage-extract-and-run daemon &"
+fi
+
 printf '\n\033[36m>>> Binding the keys\033[0m\n'
 
 # The window is inside the image, so the menu entry has to launch the image.

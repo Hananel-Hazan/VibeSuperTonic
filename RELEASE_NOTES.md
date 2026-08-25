@@ -1,3 +1,66 @@
+# VibeSuperTonic v0.2.9
+
+*Linux gets a second front door: one file you download, make executable, and run.*
+
+The tarball is unchanged and is still the canonical Linux artifact — `install.sh`,
+the optional GPU pack and all six packer assertions are verified against it, and a
+headless or server install has no use for a single-file GUI bundle. The AppImage
+is for everyone else.
+
+```
+VibeSuperTonic-0.2.9-x86_64.AppImage      48 MB
+VibeSuperTonic-0.2.9-linux-x64.tar.gz     52 MB
+```
+
+## The AppImage
+
+- **One file, no .NET, no unpacking.** `chmod +x` and run it. The window opens;
+  `./VibeSuperTonic-0.2.9-x86_64.AppImage bind` sets up the two hotkeys.
+- **Models and data live beside the file**, in a `VibeSuperTonic/` folder. Keep
+  the two together — moving the AppImage on its own leaves the store behind, and
+  the next run starts a new one. If the directory is not writable (`/opt`, a
+  read-only medium), everything moves to `~/.local/share/vibesupertonic` instead
+  and the Status tab says so.
+- **The hotkeys do not go through the AppImage.** `bind` installs `vst-ctl` into
+  `~/.local/bin` and points the keys there, because reaching it through the image
+  costs a filesystem mount on every press — 20.0 ms against 5.3 measured, which
+  is inside budget and still not worth paying forever for a 4 MB copy. Both the
+  daemon and the window re-check that copy at startup and replace it when it is
+  out of date, so upgrading is still replacing one file.
+- **Runs on Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+** — glibc 2.34 and
+  above. Measured rather than assumed, and the packer now refuses to build an
+  archive whose floor has risen.
+- **Needs FUSE**, like every AppImage. Without it the image cannot be mounted and
+  nothing inside it runs; `vst-ctl` and `bind` both say so now, and name
+  `--appimage-extract-and-run` as the way through.
+
+## Also on Linux since 0.2.7.5
+
+These shipped in 0.2.7.6 and 0.2.8 and had no notes of their own.
+
+- **An NVIDIA GPU can do the inference.** Measured on an RTX A2000: the wait
+  before the first word goes from **802 ms to 77 ms**. It is not in the download —
+  `./install-gpu.sh` fetches about 3.1 GB on request — and **on battery the engine
+  stays on the CPU** unless you set `GpuOnBattery`, because a discrete GPU is the
+  difference between a laptop that lasts an afternoon and one that does not.
+- **The engine measures this machine and uses what it measured.** `vst-ctl
+  benchmark`, or the button on the Tune tab, tries every thread count worth
+  trying and keeps the whole table. It applies to the next thing you ask it to
+  read, with no restart — as does unplugging the power lead.
+- **A press is no longer silenced by the stop before it.** Reported twice from
+  daily use: the text appeared, the highlight never moved, nothing was spoken,
+  and the next press worked.
+- **KDE and Wayland are supported properly.** Hotkeys are bound the way Plasma
+  binds them, and the selection is read from the compositor rather than from X11 —
+  on a Wayland session the old path could see almost nothing.
+
+## Windows
+
+Unchanged by this release. The AppImage is a Linux artifact; the Windows ZIP
+continues to ship from the same version number.
+
+---
+
 # VibeSuperTonic v0.2.7.5
 
 *The harness found a bug on its first run. This is that bug.*

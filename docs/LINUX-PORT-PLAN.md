@@ -131,7 +131,7 @@ before changing it.
 | 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
 | — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
 | — · **Release 0.2.8 — the tarball** | **Next, and it is not code.** Everything is built and verified except [two things only a person can do](#phase-8b-landed): unplug the laptop and press the hotkey, and click the Tune tab's benchmark button once |
-| 9 · [AppImage](#phase-9) | **In progress.** The gate is measured and it passes — **+14.7 ms**, not the disqualifying number it might have been ([the record](#appimage-gate)) — and [the store no longer lives beside the executable](#appimage-store), verified against a real AppImage. What is left: the packer, `bind`, and the `~/.local/bin` copy |
+| 9 · [AppImage](#phase-9) | **Done — shipped as 0.2.9 on 2026-08-24.** The gate passed by more than expected (+14.7 ms), the store left the executable's directory, the packer builds from the tarball's own tree, and the hotkey client is copied out and kept current. The one piece of planned work that disappeared was the container build — [measured away](#glibc-floor) |
 | — · [Piper](PIPER-PLAN.md) | **Not started.** Ships as 0.3. Its own plan, with P0/P1 as pure research and a go/no-go on phoneme parity before anything is committed |
 
 <a name="windows-check"></a>
@@ -1147,15 +1147,39 @@ premise ("a self-contained publish compiles against this libc") was true of one
 file out of two hundred. Ten minutes of `objdump` replaced a day of container
 plumbing.
 
-#### Still to do
+**FUSE has two sentences now, in the two places that can say them.** Without
+`/dev/fuse` the image never mounts, so `AppRun` never runs and nothing inside it
+does — and the case that matters is a hotkey press, which has no terminal. So
+`vst-ctl` says it when an autostart through an AppImage produces no daemon, and
+`bind` says it while there is still a terminal to read. Both name
+`--appimage-extract-and-run` as the way through and what it costs, rather than
+leaving it to a forum.
 
-- A FUSE-missing message worth reading. The runtime's own is not, and
-  `--appimage-extract-and-run` must be a documented answer rather than a thing
-  someone finds in a forum.
-- Desktop integration beyond the `.desktop` and the icon being present:
-  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
-- Ship it as 0.2.9, and say in the release notes that the AppImage and the
-  tarball are the same product with two front doors.
+<a name="appimage-untested"></a>
+
+#### What was not tested, and why
+
+**Desktop integration by `appimaged` or AppImageLauncher.** Neither is installed
+on this machine, and installing a daemon that rewrites `~/.local/share/applications`
+in order to watch it do so is a worse trade than saying this plainly. What *was*
+verified is everything those tools read, by extracting the shipped image:
+
+| They read | Present |
+| --- | --- |
+| `VibeSuperTonic.desktop` at the root | yes, and `desktop-file-validate` passes |
+| `.DirIcon` | yes — the icon, so a file manager can show it without mounting |
+| `Icon=vibesupertonic` resolving to a file | yes, at the root *and* under `usr/share/icons/hicolor/256x256/apps/` |
+| `--appimage-offset` | 944632, the runtime's size |
+| `--appimage-extract` | yes |
+
+**A machine with no FUSE.** This one has `/dev/fuse`. The code path was written
+from the failure's shape rather than from watching it, which is worth knowing
+before trusting it — though `--appimage-extract-and-run` *was* measured (82 ms
+warm, 247 ms cold) on the way to the gate.
+
+**An older distro.** [The floor is 2.34 and asserted](#glibc-floor); no Ubuntu
+22.04 box was available to run the image on. The assertion is what makes that
+gap bounded rather than open.
 
 #### Exit criteria
 
@@ -2796,15 +2820,39 @@ premise ("a self-contained publish compiles against this libc") was true of one
 file out of two hundred. Ten minutes of `objdump` replaced a day of container
 plumbing.
 
-#### Still to do
+**FUSE has two sentences now, in the two places that can say them.** Without
+`/dev/fuse` the image never mounts, so `AppRun` never runs and nothing inside it
+does — and the case that matters is a hotkey press, which has no terminal. So
+`vst-ctl` says it when an autostart through an AppImage produces no daemon, and
+`bind` says it while there is still a terminal to read. Both name
+`--appimage-extract-and-run` as the way through and what it costs, rather than
+leaving it to a forum.
 
-- A FUSE-missing message worth reading. The runtime's own is not, and
-  `--appimage-extract-and-run` must be a documented answer rather than a thing
-  someone finds in a forum.
-- Desktop integration beyond the `.desktop` and the icon being present:
-  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
-- Ship it as 0.2.9, and say in the release notes that the AppImage and the
-  tarball are the same product with two front doors.
+<a name="appimage-untested"></a>
+
+#### What was not tested, and why
+
+**Desktop integration by `appimaged` or AppImageLauncher.** Neither is installed
+on this machine, and installing a daemon that rewrites `~/.local/share/applications`
+in order to watch it do so is a worse trade than saying this plainly. What *was*
+verified is everything those tools read, by extracting the shipped image:
+
+| They read | Present |
+| --- | --- |
+| `VibeSuperTonic.desktop` at the root | yes, and `desktop-file-validate` passes |
+| `.DirIcon` | yes — the icon, so a file manager can show it without mounting |
+| `Icon=vibesupertonic` resolving to a file | yes, at the root *and* under `usr/share/icons/hicolor/256x256/apps/` |
+| `--appimage-offset` | 944632, the runtime's size |
+| `--appimage-extract` | yes |
+
+**A machine with no FUSE.** This one has `/dev/fuse`. The code path was written
+from the failure's shape rather than from watching it, which is worth knowing
+before trusting it — though `--appimage-extract-and-run` *was* measured (82 ms
+warm, 247 ms cold) on the way to the gate.
+
+**An older distro.** [The floor is 2.34 and asserted](#glibc-floor); no Ubuntu
+22.04 box was available to run the image on. The assertion is what makes that
+gap bounded rather than open.
 
 #### Exit criteria
 
@@ -2839,7 +2887,11 @@ plumbing.
 
 <a name="phase-9"></a>
 
-### Phase 9 — AppImage · 2 days + a gated latency spike · **added 2026-08-24**
+### Phase 9 — AppImage · **done 2026-08-24, in one day** · added 2026-08-24
+
+**Shipped as 0.2.9**, beside the tarball. `dist/VibeSuperTonic-0.2.9-x86_64.AppImage`,
+48 MB against the tarball's 52. Every exit criterion below is met except the two
+that need software this machine does not have — see [what was not tested](#appimage-untested).
 
 **Two artifacts, permanently.** `build/pack-appimage.sh` consumes the tree
 [build/pack-tar.sh](../build/pack-tar.sh) already composed — it does not publish
@@ -3051,15 +3103,39 @@ premise ("a self-contained publish compiles against this libc") was true of one
 file out of two hundred. Ten minutes of `objdump` replaced a day of container
 plumbing.
 
-#### Still to do
+**FUSE has two sentences now, in the two places that can say them.** Without
+`/dev/fuse` the image never mounts, so `AppRun` never runs and nothing inside it
+does — and the case that matters is a hotkey press, which has no terminal. So
+`vst-ctl` says it when an autostart through an AppImage produces no daemon, and
+`bind` says it while there is still a terminal to read. Both name
+`--appimage-extract-and-run` as the way through and what it costs, rather than
+leaving it to a forum.
 
-- A FUSE-missing message worth reading. The runtime's own is not, and
-  `--appimage-extract-and-run` must be a documented answer rather than a thing
-  someone finds in a forum.
-- Desktop integration beyond the `.desktop` and the icon being present:
-  `appimaged` and AppImageLauncher pick those up, and neither has been tried.
-- Ship it as 0.2.9, and say in the release notes that the AppImage and the
-  tarball are the same product with two front doors.
+<a name="appimage-untested"></a>
+
+#### What was not tested, and why
+
+**Desktop integration by `appimaged` or AppImageLauncher.** Neither is installed
+on this machine, and installing a daemon that rewrites `~/.local/share/applications`
+in order to watch it do so is a worse trade than saying this plainly. What *was*
+verified is everything those tools read, by extracting the shipped image:
+
+| They read | Present |
+| --- | --- |
+| `VibeSuperTonic.desktop` at the root | yes, and `desktop-file-validate` passes |
+| `.DirIcon` | yes — the icon, so a file manager can show it without mounting |
+| `Icon=vibesupertonic` resolving to a file | yes, at the root *and* under `usr/share/icons/hicolor/256x256/apps/` |
+| `--appimage-offset` | 944632, the runtime's size |
+| `--appimage-extract` | yes |
+
+**A machine with no FUSE.** This one has `/dev/fuse`. The code path was written
+from the failure's shape rather than from watching it, which is worth knowing
+before trusting it — though `--appimage-extract-and-run` *was* measured (82 ms
+warm, 247 ms cold) on the way to the gate.
+
+**An older distro.** [The floor is 2.34 and asserted](#glibc-floor); no Ubuntu
+22.04 box was available to run the image on. The assertion is what makes that
+gap bounded rather than open.
 
 #### Exit criteria
 
