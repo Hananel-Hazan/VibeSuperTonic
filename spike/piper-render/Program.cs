@@ -118,8 +118,12 @@ if (args.Contains("--calibrate"))
         ? named.Select(n => File.Exists(n) ? n : Path.Combine(voiceDir, n + ".onnx")).ToArray()
         : Directory.GetFiles(voiceDir, "*.onnx").OrderBy(f => f).ToArray();
 
+    // Defaults to what the product does. --deterministic reproduces P2's
+    // noise-off curve for comparison and must not be what gets stored.
     return VibeSuperTonic.Spike.PiperRender.Calibrate.Run(models, ArgValue("--out-dir"),
-        ArgValue("--noisy") is { } nr ? int.Parse(nr) : 0);
+        args.Contains("--deterministic") ? 0
+        : ArgValue("--repeats") is { } nr ? int.Parse(nr)
+        : VibeSuperTonic.Core.Synthesis.Piper.PiperCalibrator.Repeats);
 }
 
 if (args.Contains("--verify-rate"))

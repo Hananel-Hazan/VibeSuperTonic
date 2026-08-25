@@ -31,10 +31,19 @@ after the rebase, 897 of them ours.
 - **Piper as a second engine** — its own document,
   [PIPER-PLAN.md](PIPER-PLAN.md), written 2026-08-19 and given its settled
   decisions 2026-08-24. ~~Nothing in it starts before Phase 9 ships.~~ Phase 9
-  shipped, and **P0, P1 and P2 landed 2026-08-25** — the phoneme-parity go/no-go
-  passed with 0 divergences across 327 sentences.
-  **[P3 is where the next agent starts](PIPER-PLAN.md#next)**, and it is the
-  first phase of either document that writes into `src/` for Piper.
+  shipped, and **P0 through P3 all landed 2026-08-25** — the phoneme-parity
+  go/no-go passed with 0 divergences across 327 sentences, and **a Piper voice
+  now speaks through the daemon**, at its own sample rate, within 2.4% of the
+  requested speaking rate, with Supertonic still the default.
+  **[P4 is where the next agent starts](PIPER-PLAN.md#next)** — the catalog, the
+  download and the Voices tab.
+
+  Two things from P3 bind work in *this* document. The audio sink re-tunes
+  between utterances now (`LazyAudioSink.Retune`), which is the third case of the
+  rule the device reconnect and the provider switch already followed — and it is
+  the sharpest of the three, because the engines do not share a sample rate. And
+  the daemon holds a third layer of "only between utterances": engine, then
+  provider, then device. Anything added below them inherits the rule.
 
 **The target machine changed underneath this document on 2026-08-22, and two of
 its assumptions died with it.** It was reinstalled as **Ubuntu 26.04 / KDE Plasma

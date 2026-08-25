@@ -19,7 +19,16 @@ namespace VibeSuperTonic.Spike.PiperRender;
 /// </summary>
 public static class Calibrate
 {
-    public static int Run(string[] voicePaths, string? outDir, int noisyRepeats = 0)
+    /// <param name="repeats">
+    /// Renders averaged per rung, with the voice's own noise settings — the
+    /// product's default is <see cref="PiperCalibrator.Repeats"/>. Pass 0 for the
+    /// deterministic curve P2 measured, which is worth having for comparison and
+    /// is <b>not</b> what should be stored: noise_w is noise on the duration
+    /// predictor, so a curve measured without it describes a render the product
+    /// never performs. Measured: 6.4% worst delivered-rate error that way, 2.4%
+    /// with the noise on.
+    /// </param>
+    public static int Run(string[] voicePaths, string? outDir, int repeats = PiperCalibrator.Repeats)
     {
         var resolution = EspeakLibrary.Probe();
         Console.WriteLine(resolution.Describe());
@@ -38,8 +47,8 @@ public static class Calibrate
 
             var sw = Stopwatch.StartNew();
             var curve = PiperCalibrator.Measure(
-                scale => noisyRepeats > 0
-                    ? Average(synth, name, scale, synth.Voice, noisyRepeats)
+                scale => repeats > 0
+                    ? Average(synth, name, scale, synth.Voice, repeats)
                     : Seconds(synth, name, scale),
                 DateTimeOffset.UtcNow);
             sw.Stop();

@@ -18,6 +18,28 @@ dotnet run --project spike/piper-render -- --repeat 6         # cold vs warm
 Flags: `--cuda`, `--repeat N`, `--length-scale`, `--noise-scale`, `--noise-w`,
 `--no-normalize`, `-o <path>`.
 
+## P3's two modes, which go through the code that ships
+
+Everything above calls ONNX Runtime directly, because P0 and P1 were research and
+had to depend on nothing. These two are the opposite: the numbers they produce
+became constants in the product, so they come out of `PiperSynthesizer` and
+`EspeakPhonemizer` themselves.
+
+```bash
+export VST_ESPEAK_LIB=… VST_ESPEAK_DATA=…      # bash build-espeak.sh prints both
+
+# measure every voice in voice/ and write each curve beside its .onnx
+dotnet run --project spike/piper-render -c Release -- --calibrate --out-dir voice
+
+# and then check what the curves actually deliver, which is the exit criterion
+dotnet run --project spike/piper-render -c Release -- --verify-rate --repeat 12
+```
+
+`--calibrate` also prints the cross-application table that settled *per voice, not
+per tier*: what each voice would deliver if it were driven by another's curve.
+`--deterministic` reproduces P2's noise-off curve for comparison — it is not what
+should be stored, and [the plan says why](../../docs/PIPER-PLAN.md#p3-calibration).
+
 CUDA needs the provider pack on the loader path, the same way the daemon does:
 
 ```bash
