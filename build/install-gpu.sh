@@ -60,30 +60,79 @@ while [ $# -gt 0 ]; do
 done
 
 pack_dir="$install_dir/runtime/cuda"
-provider="$install_dir/libonnxruntime_providers_cuda.so"
 
-if [ ! -f "$install_dir/vibesupertonicd" ]; then
-  echo "no vibesupertonicd in $install_dir — pass --dir <install directory>." >&2
+# INSIDE the pack, not beside libonnxruntime.so.
+#
+# It used to go in the install root, which for a tarball is the directory
+# holding libonnxruntime.so — so ORT found it through that library's own
+# RUNPATH. An AppImage has no writable directory there at all: the root is a
+# read-only squashfs mount at a path that changes every start. Putting the
+# provider in the pack works for both, because the daemon re-execs itself with
+# the pack on LD_LIBRARY_PATH before ORT is touched, and ORT dlopens this
+# library by bare name.
+#
+# It also means the whole 3.1 GB lives in one directory, which is what --remove
+# always wanted to be able to say.
+provider="$pack_dir/libonnxruntime_providers_cuda.so"
+
+# WHERE THE PACK GOES is the daemon's decision, not this script's: for a tarball
+# it is the install directory, for an AppImage it is the store beside the image.
+# AppRun passes it with --dir, having asked `vibesupertonicd --print-store`.
+# So a directory with no daemon binary in it is legitimate now, as long as it is
+# recognisably ours.
+if [ ! -f "$install_dir/vibesupertonicd" ] && [ ! -d "$install_dir/models" ] && [ ! -d "$install_dir/data" ]; then
+  echo "$install_dir has no vibesupertonicd, models/ or data/ in it, so it is not" >&2
+  echo "an install or a store. Pass --dir <directory>, or run the AppImage as:" >&2
+  echo "    ./VibeSuperTonic-<version>-x86_64.AppImage gpu-install" >&2
   exit 2
 fi
 
-# ---------------------------------------------------------------- removing
-
-if [ "$remove" = 1 ]; then
-  # The daemon holds the provider library open for as long as it runs, and
-  # deleting it underneath a running process leaves a daemon that works until it
-  # restarts and then cannot explain itself. Same rule, and the same /proc
-  # lookup, as install.sh.
+_vst_stop_daemon() {
+  # By /proc/<pid>/exe where that can identify it — a tarball daemon — and
+  # otherwise by asking the client, because an AppImage daemon's exe is a path
+  # inside a mount that this script has no way to predict. Never pkill -f: the
+  # port plan records a session where that matched nothing and an old daemon
+  # answered on behalf of the build under test.
   for pid in $(pgrep -x vibesupertonicd 2>/dev/null || true); do
     if [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" = "$install_dir/vibesupertonicd" ]; then
       echo "stopping the running daemon (pid $pid) first"
       "$install_dir/vst-ctl" shutdown --no-start >/dev/null 2>&1 || kill "$pid" 2>/dev/null || true
       sleep 1
+      return 0
     fi
   done
 
+  for ctl in "$install_dir/vst-ctl" "$HOME/.local/bin/vst-ctl"; do
+    if [ -x "$ctl" ]; then
+      if "$ctl" shutdown --no-start >/dev/null 2>&1; then
+        echo "stopped the running daemon first"
+        sleep 1
+      fi
+      return 0
+    fi
+  done
+}
+
+# ---------------------------------------------------------------- removing
+
+if [ "$remove" = 1 ]; then
+  # Only when there is something to remove. The daemon holds the provider open
+  # while it runs, so it has to stop before the files go — but stopping a
+  # perfectly happy daemon because someone typed --remove against a directory
+  # with no pack in it is a side effect nobody asked for, and the client
+  # fallback cannot tell one daemon from another.
+  if [ -d "$pack_dir" ] || [ -f "$install_dir/libonnxruntime_providers_cuda.so" ]; then
+  # The daemon holds the provider library open for as long as it runs, and
+  # deleting it underneath a running process leaves a daemon that works until it
+  # restarts and then cannot explain itself. Same rule, and the same /proc
+  # lookup, as install.sh.
+    _vst_stop_daemon
+  fi
+
   rm -rf "$pack_dir"
-  rm -f "$provider"
+  # The old location, for anyone who installed the pack before the provider
+  # moved into it. Harmless when it is not there.
+  rm -f "$install_dir/libonnxruntime_providers_cuda.so"
   echo "removed the CUDA provider pack. The next daemon start will use the CPU,"
   echo "and \`vst-ctl config\` will say so."
   exit 0
@@ -196,6 +245,7 @@ for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 \
 done
 
 # ---------------------------------------------------------------- installing
+
 
 # The daemon must not be holding the old files while they are replaced — same
 # reason install.sh stops it, and the same /proc lookup rather than pkill -f.
