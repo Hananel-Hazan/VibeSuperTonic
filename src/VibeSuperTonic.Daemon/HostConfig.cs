@@ -322,7 +322,8 @@ public sealed class HostConfig
     /// more specific than a stored preference.
     /// </summary>
     public SynthesisOptions Synthesis(string? voice, string? language) =>
-        new(voice ?? Settings.DefaultVoice,
+        new SupertonicOptions(
+            voice ?? Settings.DefaultVoice,
             SupertonicLanguages.Normalize(language ?? Settings.Language),
             Settings.TotalStep,
             // The CLAMPED speed, not EngineSpeed: the model is only well behaved

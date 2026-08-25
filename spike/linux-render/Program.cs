@@ -48,7 +48,7 @@ int sampleRate = synth.SampleRate;          // forces the model load
 loadWatch.Stop();
 Console.WriteLine($"load        : {loadWatch.Elapsed.TotalSeconds:F2} s, {sampleRate} Hz");
 
-var options = new SynthesisOptions(VoiceId, Language, TotalStep);
+var options = new SupertonicOptions(VoiceId, Language, TotalStep);
 var pcm = new List<short>();
 int silenceSamples = (int)(InterChunkSilenceSeconds * sampleRate);
 

@@ -175,7 +175,7 @@ static int Speak(string[] args)
     loadWatch.Stop();
     Console.WriteLine($"load        : {loadWatch.Elapsed.TotalSeconds:F2} s, {rate} Hz");
 
-    var options = new SynthesisOptions("M1", "en");
+    var options = new SupertonicOptions("M1", "en");
     var scheduler = new BoundaryScheduler();
     var clock = new PlaybackClock(rate);
     using var sink = new PulseAudioSink(rate, "VibeSuperTonic");

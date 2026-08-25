@@ -38,20 +38,3 @@ public interface ISynthesizer : IDisposable
     /// </summary>
     Task PreloadAsync(CancellationToken cancellationToken = default);
 }
-
-/// <summary>
-/// Per-utterance knobs. Deliberately not the whole settings object: a backend has
-/// no business reading user configuration, and passing only what synthesis
-/// consumes keeps the settings-storage seam (registry vs XDG) on the host side.
-/// </summary>
-/// <param name="VoiceId">Voice style to load, e.g. "M1".</param>
-/// <param name="Language">Supertonic language code.</param>
-/// <param name="TotalStep">Diffusion steps. 8 is the default on both platforms; higher is slower and cleaner.</param>
-/// <param name="Speed">Model-side speed factor, applied before any DSP time-stretch.</param>
-/// <param name="SilenceSeconds">Silence appended between internally-split segments.</param>
-public sealed record SynthesisOptions(
-    string VoiceId,
-    string Language,
-    int TotalStep = 8,
-    float Speed = 1.05f,
-    float SilenceSeconds = 0.3f);

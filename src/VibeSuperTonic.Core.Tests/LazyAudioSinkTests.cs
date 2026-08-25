@@ -17,7 +17,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class LazyAudioSinkTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     [Fact]
     public void Reports_its_sample_rate_without_opening_the_device()

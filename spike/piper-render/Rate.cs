@@ -17,12 +17,18 @@ namespace VibeSuperTonic.Spike.PiperRender;
 ///
 /// <para><b>Three ways, not two</b>, because the obvious two-way comparison
 /// would be unfair to the stretch and would hide something worth knowing:
-/// <see cref="TimeStretch"/> hardcodes 44100 Hz to match Supertonic's output,
-/// and a Piper voice renders at 22050. So the stretch is rendered both as the
-/// product would apply it today — at the wrong rate — and with Sonic given the
-/// voice's real rate. If the second sounds fine and the first does not, the
-/// finding is a latent bug in the shared path rather than an argument about
-/// <c>length_scale</c>.</para>
+/// <see cref="TimeStretch"/> hardcoded 44100 Hz to match Supertonic's output,
+/// and a Piper voice renders at 22050. So the stretch is rendered both the way
+/// the product applied it when this ran — at the wrong rate — and with Sonic
+/// given the voice's real rate. If the second sounds fine and the first does
+/// not, the finding is a latent bug in the shared path rather than an argument
+/// about <c>length_scale</c>.</para>
+///
+/// <para><b>It was the bug, and it is fixed.</b> Neither render was
+/// distinguishable by ear — which is exactly why the fix could not wait for
+/// someone to hear it. <see cref="TimeStretch.Stretch"/> now takes the rate as a
+/// parameter with no default, so the two rows below differ by an argument rather
+/// than by one of them reimplementing the stage.</para>
 /// </summary>
 public static class Rate
 {
@@ -62,11 +68,13 @@ public static class Rate
             // Rendered at 1.0, then stretched — what the Supertonic path does.
             var flat = Render(session, ids, noiseScale, 1.0f, noiseW);
 
-            Write(Path.Combine(outDir, $"{voice}-{rate:0.00}-stretch-as-shipped.wav"),
-                TimeStretch.Stretch(flat, rate), sampleRate);
+            // Kept as it was measured: Supertonic's rate on a 22050 Hz buffer,
+            // which is what the shared stage used to do unconditionally.
+            Write(Path.Combine(outDir, $"{voice}-{rate:0.00}-stretch-wrong-rate.wav"),
+                TimeStretch.Stretch(flat, rate, TimeStretch.SupertonicSampleRate), sampleRate);
 
             Write(Path.Combine(outDir, $"{voice}-{rate:0.00}-stretch-correct-rate.wav"),
-                StretchAt(flat, rate, sampleRate), sampleRate);
+                TimeStretch.Stretch(flat, rate, sampleRate), sampleRate);
         }
     }
 
@@ -92,23 +100,6 @@ public static class Rate
         for (var i = 0; i < raw.Length; i++)
             pcm[i] = (short)Math.Clamp(raw[i] * gain * 32767f, -32767f, 32767f);
         return pcm;
-    }
-
-    /// <summary>
-    /// <see cref="TimeStretch.Stretch"/> with the voice's real sample rate
-    /// instead of Supertonic's — the same Sonic, told the truth about its input.
-    /// </summary>
-    private static short[] StretchAt(short[] input, double factor, int sampleRate)
-    {
-        if (Math.Abs(factor - 1.0) < 0.001 || input.Length < 4096) return input;
-
-        var sonic = new Sonic(sampleRate, (float)factor);
-        sonic.WriteSamples(input, 0, input.Length);
-        sonic.Flush();
-
-        var output = new short[(int)(input.Length / factor) + 4096];
-        var written = sonic.ReadSamples(output, 0, output.Length);
-        return output[..written];
     }
 
     private static void Write(string path, short[] pcm, int sampleRate)

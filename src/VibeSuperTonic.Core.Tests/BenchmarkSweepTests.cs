@@ -23,7 +23,7 @@ public class BenchmarkSweepTests
     private static BenchmarkMachine Machine(int cores = 20, int totalStep = 8) =>
         new("machine-a", "Test CPU", cores, "models-a", totalStep, "M1", "en", "ac", 2.0);
 
-    private static readonly SynthesisOptions Options = new("M1", "en");
+    private static readonly SupertonicOptions Options = new("M1", "en");
 
     // ------------------------------------------------------------- the pick rule
 

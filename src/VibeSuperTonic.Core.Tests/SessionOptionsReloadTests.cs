@@ -27,7 +27,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class SessionOptionsReloadTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     private static PronunciationsConfig Rules(params (string Match, string Replace)[] rules)
     {

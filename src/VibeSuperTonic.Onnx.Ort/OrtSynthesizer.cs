@@ -132,6 +132,7 @@ public sealed class OrtSynthesizer : ISynthesizer
     public short[] Synthesize(string text, SynthesisOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var opts = options.Require<SupertonicOptions>("Supertonic");
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrEmpty(text)) return [];
 
@@ -148,7 +149,7 @@ public sealed class OrtSynthesizer : ISynthesizer
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             tts = EnsureLoadedLocked();
-            style = EnsureStyleLoadedLocked(options.VoiceId);
+            style = EnsureStyleLoadedLocked(opts.VoiceId);
             if (_inFlight++ == 0) _drained.Reset();
         }
 
@@ -165,8 +166,8 @@ public sealed class OrtSynthesizer : ISynthesizer
         try
         {
             var (wav, _) = tts.Call(
-                text, options.Language, style,
-                options.TotalStep, options.Speed, options.SilenceSeconds,
+                text, opts.Language, style,
+                opts.TotalStep, opts.Speed, opts.SilenceSeconds,
                 cancellationToken, runOptions);
 
             // Cancellation between chunks leaves Call returning normally with a

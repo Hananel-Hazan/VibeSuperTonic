@@ -30,7 +30,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class AudioDeviceLossTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     // ------------------------------------------------------- detect before use
 

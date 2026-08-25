@@ -17,7 +17,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class SpeechSessionTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     /// <summary>Prime fast: these tests are not measuring the clock, they assume it.</summary>
     private static SpeechSessionOptions Options() => new(PrimeMs: 10);

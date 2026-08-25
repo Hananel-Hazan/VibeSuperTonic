@@ -22,7 +22,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class InterChunkSilenceTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     private const int Rate = 44100;
     private const int FramesPerChunk = Rate;                 // one second per chunk

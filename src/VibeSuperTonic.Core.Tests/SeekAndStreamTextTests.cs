@@ -32,7 +32,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// </summary>
 public class SeekAndStreamTextTests
 {
-    private static readonly SynthesisOptions Voice = new("M1", "en");
+    private static readonly SupertonicOptions Voice = new("M1", "en");
 
     private static SpeechSessionOptions Options() => new(PrimeMs: 10);
 
