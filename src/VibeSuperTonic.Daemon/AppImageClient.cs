@@ -124,9 +124,19 @@ internal static class AppImageClient
             });
             if (p is null) return null;
 
-            string output = p.StandardOutput.ReadToEnd().Trim();
-            // Bounded: a wedged binary must not hold up a daemon start.
+            // Read ASYNCHRONOUSLY, then wait. ReadToEnd() returns when the
+            // child closes the pipe, so calling it first hands a wedged binary
+            // the power to block a daemon start forever and makes the timeout
+            // below decorative — it would not be reached. Draining stderr as
+            // well, because a child that fills that pipe blocks in write() and
+            // never exits, which is the same hang wearing a different hat.
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+
             if (!p.WaitForExit(2000)) { try { p.Kill(true); } catch { } return null; }
+
+            string output = stdout.Wait(500) ? stdout.Result.Trim() : "";
+            stderr.Wait(500);
             return p.ExitCode == 0 && output.Length > 0 ? output : null;
         }
         catch { return null; }

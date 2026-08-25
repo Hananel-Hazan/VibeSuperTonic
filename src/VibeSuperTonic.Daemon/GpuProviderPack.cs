@@ -6,13 +6,20 @@ namespace VibeSuperTonic.Daemon;
 /// The optional CUDA provider pack, and the one thing that has to happen before
 /// anything else in this process if it is going to work.
 ///
-/// <para><b>What the pack is.</b> <c>libonnxruntime_providers_cuda.so</c> beside
-/// the daemon — 330 MB, which is why it does not ship — and the CUDA and cuDNN
-/// shared libraries it needs, in <c>runtime/cuda/</c>. <c>build/install-gpu.sh</c>
-/// puts both there. The provider library must sit next to
-/// <c>libonnxruntime.so</c> because that is where ORT looks for it, by a path it
-/// builds from its own location; the CUDA libraries can live anywhere the dynamic
-/// loader will look, and this is what makes it look there.</para>
+/// <para><b>What the pack is.</b> <c>libonnxruntime_providers_cuda.so</c> — 330 MB,
+/// which is why it does not ship — and the CUDA and cuDNN shared libraries it
+/// needs. <c>build/install-gpu.sh</c> puts <b>all of it</b> in
+/// <c>runtime/cuda/</c> under the store, and this class is what puts that
+/// directory on the loader's path.</para>
+///
+/// <para><b>The provider used to live beside <c>libonnxruntime.so</c></b>, on the
+/// reasoning that ORT builds a path to it from its own location. That is true of
+/// the path ORT tries FIRST and not of the only one it tries: when the file is
+/// not there it dlopens the bare name, which <c>LD_LIBRARY_PATH</c> answers. The
+/// distinction stopped being academic on 2026-08-24, when an AppImage turned the
+/// daemon's own directory into a read-only squashfs mount and a perfectly
+/// installed 3.1 GB pack reported "no GPU available". One directory works for
+/// both, and it is the one this re-exec already exists to make visible.</para>
 ///
 /// <para><b>Why a re-exec rather than pre-loading them.</b>
 /// <c>libonnxruntime_providers_cuda.so</c> carries no RPATH — checked — so its

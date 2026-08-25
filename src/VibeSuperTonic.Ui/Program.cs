@@ -77,8 +77,16 @@ internal static class Program
             });
             if (p is null) return;
 
-            string said = p.StandardOutput.ReadToEnd().Trim();
+            // Async first, then the wait — see AppImageClient.TryVersionOf. This
+            // one runs BEFORE Avalonia starts, so a blocking read here is a
+            // window that never opens.
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+
             if (!p.WaitForExit(5000)) { try { p.Kill(true); } catch { } return; }
+
+            string said = stdout.Wait(500) ? stdout.Result.Trim() : "";
+            stderr.Wait(500);
             if (said.Length > 0) Console.WriteLine(said);
         }
         catch

@@ -48,6 +48,24 @@ fi
 
 [[ -f "$APPIMAGE" ]] || die "\$APPIMAGE points at $APPIMAGE, which is not there."
 
+# A portable home makes every write below land somewhere the desktop will never
+# read: kwriteconfig6 follows $HOME, and so does the launcher .desktop. Binding
+# would report two shortcuts written and no key would do anything — the worst
+# available outcome, and the reason this refuses rather than warning.
+if [[ "$(cd "$HOME" && pwd)" == "$APPIMAGE.home" ]]; then
+    die "a portable home is in use: $APPIMAGE.home
+
+       The AppImage runtime points \$HOME there, so the shortcut configuration
+       this writes would land inside that directory and your desktop would never
+       read it — two shortcuts written, no key doing anything.
+
+       It also does not do what it looks like it does: models and settings live
+       beside the AppImage either way, in $(dirname "$APPIMAGE")/VibeSuperTonic,
+       which is already the portable arrangement.
+
+       Rename or remove $APPIMAGE.home and run bind again."
+fi
+
 printf '\n\033[36m>>> Installing the hotkey client\033[0m\n'
 
 said="$("$here/vibesupertonicd" --ensure-client)" || die "could not install the client"
@@ -90,7 +108,7 @@ printf '\n\033[36m>>> Binding the keys\033[0m\n'
 # that command was a tarball's vst-ctl which this upgrade has just moved aside,
 # every press reports "Could not find the program" until the next login. Found
 # by doing exactly that upgrade on the development machine.
-desktop="$HOME/.local/share/applications/vibesupertonic.desktop"
+desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/vibesupertonic.desktop"
 previous=""
 if [[ -f "$desktop" ]]; then
     previous="$(awk -F= '/^Exec=.*vst-ctl (read|toggle)$/ { split($2, a, " "); print a[1]; exit }' "$desktop")"
@@ -101,8 +119,13 @@ export VST_KB_UI_COMMAND="$APPIMAGE"
 
 # shellcheck source=/dev/null
 source "$here/keybindings.sh"
-vst_bind "$bindir"
-status=$?
+
+# `set -e` would take the script out on any non-zero return, which is every
+# desktop vst_bind has no backend for — and those are exactly the runs where the
+# migration note below is worth printing, because the user is about to bind the
+# keys by hand and needs to know which path to use.
+status=0
+vst_bind "$bindir" || status=$?
 
 if [[ -n "$previous" && "$previous" != "$bindir/vst-ctl" ]]; then
     printf '\n'

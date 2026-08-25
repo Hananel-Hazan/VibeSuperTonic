@@ -500,6 +500,12 @@ public sealed class DaemonServer : IDisposable
                 .ToList()
             : _config.Notes;
 
+        if (LinuxDataPaths.PortableHome is { } portable)
+            notes = notes.Append(
+                $"a portable home is in use ({portable}): hotkey binding writes into it " +
+                "instead of your desktop's configuration, so keys bound from here do nothing.")
+                .ToList();
+
         return new ConfigPayload(
         LinuxDataPaths.BaseDir,
         _config.DataDir,

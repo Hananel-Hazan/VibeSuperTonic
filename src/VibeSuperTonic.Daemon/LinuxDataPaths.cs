@@ -76,6 +76,38 @@ internal static class LinuxDataPaths
     /// <summary>True when <see cref="BaseDir"/> is a read-only squashfs mount.</summary>
     public static bool IsAppImage => AppImageFile is not null;
 
+    /// <summary>
+    /// The AppImage runtime's "portable home" if one is in use — a directory
+    /// named <c>&lt;image&gt;.home</c>, which makes it set <c>$HOME</c> there —
+    /// and null otherwise.
+    ///
+    /// <para><b>Detected because it breaks the hotkeys silently.</b> It reads
+    /// like the portable-configuration feature this product wants and is the
+    /// opposite of it: the store is anchored to the image's directory, so
+    /// nothing of ours moves into it, while everything <c>bind</c> writes does —
+    /// <c>kglobalshortcutsrc</c> and the launcher <c>.desktop</c> both land
+    /// inside the portable home, where the desktop will never look. Binding then
+    /// reports success and no key does anything.</para>
+    ///
+    /// <para>Compared as an exact path rather than by prefix: a person whose real
+    /// home happens to sit beside the image is not using a portable home, and
+    /// telling them they are would be worse than saying nothing.</para>
+    /// </summary>
+    public static string? PortableHome => DetectPortableHome(
+        AppImageFile, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>Pure, for the test that pins the shape of this.</summary>
+    public static string? DetectPortableHome(string? appImageFile, string? home)
+    {
+        if (appImageFile is null || string.IsNullOrWhiteSpace(home)) return null;
+
+        string expected = appImageFile + ".home";
+        return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(home)),
+                             expected, StringComparison.Ordinal)
+            ? expected
+            : null;
+    }
+
     private static string? ReadAppImageFile()
     {
         string? raw = Environment.GetEnvironmentVariable("APPIMAGE");

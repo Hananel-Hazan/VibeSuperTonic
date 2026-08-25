@@ -158,7 +158,10 @@ cp -a "$staging/." "$appdir/usr/lib/vibesupertonic/"
 #
 # Dispatch on the first argument rather than on argv[0] alone, because the file
 # a user downloads is named for the release and nobody symlinks it. argv[0] is
-# still honoured, so `ln -s App.AppImage vst-ctl` works for anyone who wants it.
+# still honoured through $ARGV0 — the runtime execs AppRun with argv[0] set to
+# AppRun's own path inside the mount and exports the name the user typed
+# separately, so `basename "$0"` is always "AppRun" and a symlink shim would have
+# fallen through to the window.
 cat > "$appdir/AppRun" <<'APPRUN'
 #!/bin/sh
 # VibeSuperTonic AppImage entry point.
@@ -181,7 +184,7 @@ APP="$HERE/usr/lib/vibesupertonic"
 # branches and one owner. See LinuxDataPaths.ResolveStore.
 vst_store() { "$APP/vibesupertonicd" --print-store; }
 
-case "$(basename "$0")" in
+case "$(basename "${ARGV0:-$0}")" in
     vst-ctl) exec "$APP/vst-ctl" "$@" ;;
 esac
 
@@ -203,7 +206,13 @@ case "${1-}" in
     gpu-install)
         shift
         store="$(vst_store)"
-        mkdir -p "$store"
+        # data/ as well as the directory itself: install-gpu.sh checks that what
+        # it is pointed at is recognisably ours before writing 3.1 GB into it,
+        # and an empty directory is not. This is the same directory the daemon
+        # creates on its first start, so fetching the pack before ever running
+        # the product does not have to fail with a sentence telling you to run
+        # the command you just ran.
+        mkdir -p "$store/data"
         exec bash "$APP/install-gpu.sh" --dir "$store" "$@" ;;
     --version) exec "$APP/vibesupertonicd" --version ;;
     -h|--help)

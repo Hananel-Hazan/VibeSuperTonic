@@ -146,6 +146,14 @@ if (LinuxDataPaths.AppImageFile is { } appImage)
     DaemonLog.Write($"appimage {appImage}, store {LinuxDataPaths.StoreRoot} " +
                     $"({LinuxDataPaths.Store.Reason})");
 
+    // A portable home is a trap here, and the daemon is the only thing running
+    // early enough to say so before a person concludes the hotkeys are broken.
+    if (LinuxDataPaths.PortableHome is { } portable)
+        DaemonLog.Write(
+            $"WARNING: a portable home is in use ({portable}), so $HOME points inside it. " +
+            "Hotkey binding writes the desktop's shortcut configuration, which will land " +
+            "there and never be read. Remove or rename that directory to bind keys.");
+
     // The hotkeys point at a copy of vst-ctl in ~/.local/bin, and upgrading is
     // replacing one file that has nothing to do with that copy. Re-checked here
     // so that every way of waking this product up also repairs the client.

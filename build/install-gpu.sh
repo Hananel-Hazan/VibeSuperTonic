@@ -249,21 +249,18 @@ done
 
 # The daemon must not be holding the old files while they are replaced — same
 # reason install.sh stops it, and the same /proc lookup rather than pkill -f.
-for pid in $(pgrep -x vibesupertonicd 2>/dev/null || true); do
-  if [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" = "$install_dir/vibesupertonicd" ]; then
-    echo "stopping the running daemon (pid $pid) so it picks the pack up"
-    "$install_dir/vst-ctl" shutdown --no-start >/dev/null 2>&1 || kill "$pid" 2>/dev/null || true
-    sleep 1
-  fi
-done
+_vst_stop_daemon
 
 rm -rf "$pack_dir"
 mkdir -p "$(dirname "$pack_dir")"
 mv "$staging/flat" "$pack_dir"
 
-# NOT into runtime/cuda with the others: ORT looks for the provider library next
-# to libonnxruntime.so, by a path it builds from its own location, and nothing
-# on LD_LIBRARY_PATH changes that.
+# INTO runtime/cuda with the others, as of 2026-08-24. It used to go beside
+# libonnxruntime.so, which for a tarball is the install root — and an AppImage
+# has no writable directory there at all, so the pack installed perfectly and
+# could not be loaded. ORT dlopens this library by bare name, so the pack being
+# on LD_LIBRARY_PATH is enough, and the daemon puts it there by re-executing
+# itself once before anything touches ORT.
 mv "$got" "$provider"
 
 size=$(du -sh "$pack_dir" | cut -f1)

@@ -139,4 +139,26 @@ public sealed class AppImageStoreTests
         foreach (var pick in new[] { Resolve(appImage: null), Resolve(), Resolve(writable: false) })
             Assert.False(string.IsNullOrWhiteSpace(pick.Reason));
     }
+
+    [Fact]
+    public void A_portable_home_is_detected_because_it_breaks_binding_silently()
+    {
+        // <image>.home makes the runtime point $HOME there. It reads like the
+        // portable-config feature this product wants and is the opposite: the
+        // store does not move into it, and everything bind writes does — where
+        // the desktop never looks. Two shortcuts written, no key doing anything.
+        Assert.Equal(AppImage + ".home",
+            LinuxDataPaths.DetectPortableHome(AppImage, AppImage + ".home"));
+    }
+
+    [Fact]
+    public void An_ordinary_home_is_not_mistaken_for_a_portable_one()
+    {
+        // Including the case that makes a prefix test wrong: a real home
+        // directory that happens to sit beside the image. Telling that person
+        // their hotkeys will not bind would be worse than saying nothing.
+        Assert.Null(LinuxDataPaths.DetectPortableHome(AppImage, "/home/me"));
+        Assert.Null(LinuxDataPaths.DetectPortableHome(AppImage, "/home/me/Apps"));
+        Assert.Null(LinuxDataPaths.DetectPortableHome(null, "/home/me"));
+    }
 }
