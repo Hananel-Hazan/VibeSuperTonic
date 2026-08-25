@@ -1212,6 +1212,51 @@ move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
 Measured with a dry run rather than reasoned about. Do not use it; the store
 beside the image already is the portable arrangement.
 
+<a name="appimage-hardening"></a>
+
+#### A review and a stress harness, 2026-08-24
+
+Run after the release, because the migration above had already shown that this
+phase's own verification was not finding things.
+
+**A review of the branch found eight defects**, none reachable from the tests and
+three that would have shipped as silent wrong behaviour. The two worth carrying:
+`AppRun` dispatched on `basename "$0"`, which the runtime sets to AppRun's own
+path — so the documented symlink shim never matched and `./vst-ctl toggle`
+launched the *window* with "toggle" as an argument (`$ARGV0` is what carries the
+name the user typed); and two process timeouts were decorative, because
+`ReadToEnd()` returns when the child closes the pipe, so calling it before
+`WaitForExit` hands a wedged binary the power to block a daemon start — or a
+window that never opens — forever.
+
+**[spike/appimage-stress](../spike/appimage-stress) is new**, and covers what no
+unit test can reach: ten start/shutdown cycles through the image, eight
+concurrent client installs, four ways of breaking the copy, a press with no
+daemon running, a second daemon, and eight interrupted utterances. It found
+**nothing in the product** on its first clean run — and two defects in itself: it
+passed every audio scenario against a daemon answering *"no audio device
+available"*, because overriding `XDG_RUNTIME_DIR` also hides the PulseAudio
+socket, and its leak check fired on its own impatience. Both are
+[trap 15](#traps)'s vacuous guard, which this document has now recorded in three
+unrelated places.
+
+The existing [daemon-stress](../spike/daemon-stress) harness also passes against
+an AppImage daemon — 400 concurrent status calls with no failures, 1,836
+subscriber connects, the toggle storm, the speak/stop races — once it is given a
+PulseAudio socket to talk to.
+
+**One defect came out of it**, found by reading the log rather than the result:
+the daemon bound its socket inside the accept loop, so it registered a tray icon
+and preloaded the model set *first*. A second daemon therefore flashed a tray
+icon on its way out, and a `--preload` daemon spent seconds not listening while
+`vst-ctl` waits five for an autostarted daemon to answer. Binding now happens
+before both.
+
+**And one thing that is not a defect but belongs in `INSTALL.txt`:** replacing a
+running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
+reading `(deleted)`, its child long gone. Stopping the daemon first is already
+the rule for the tarball; it is the rule here for a second reason.
+
 <a name="appimage-untested"></a>
 
 #### What was not tested, and why
@@ -2942,6 +2987,51 @@ move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
 Measured with a dry run rather than reasoned about. Do not use it; the store
 beside the image already is the portable arrangement.
 
+<a name="appimage-hardening"></a>
+
+#### A review and a stress harness, 2026-08-24
+
+Run after the release, because the migration above had already shown that this
+phase's own verification was not finding things.
+
+**A review of the branch found eight defects**, none reachable from the tests and
+three that would have shipped as silent wrong behaviour. The two worth carrying:
+`AppRun` dispatched on `basename "$0"`, which the runtime sets to AppRun's own
+path — so the documented symlink shim never matched and `./vst-ctl toggle`
+launched the *window* with "toggle" as an argument (`$ARGV0` is what carries the
+name the user typed); and two process timeouts were decorative, because
+`ReadToEnd()` returns when the child closes the pipe, so calling it before
+`WaitForExit` hands a wedged binary the power to block a daemon start — or a
+window that never opens — forever.
+
+**[spike/appimage-stress](../spike/appimage-stress) is new**, and covers what no
+unit test can reach: ten start/shutdown cycles through the image, eight
+concurrent client installs, four ways of breaking the copy, a press with no
+daemon running, a second daemon, and eight interrupted utterances. It found
+**nothing in the product** on its first clean run — and two defects in itself: it
+passed every audio scenario against a daemon answering *"no audio device
+available"*, because overriding `XDG_RUNTIME_DIR` also hides the PulseAudio
+socket, and its leak check fired on its own impatience. Both are
+[trap 15](#traps)'s vacuous guard, which this document has now recorded in three
+unrelated places.
+
+The existing [daemon-stress](../spike/daemon-stress) harness also passes against
+an AppImage daemon — 400 concurrent status calls with no failures, 1,836
+subscriber connects, the toggle storm, the speak/stop races — once it is given a
+PulseAudio socket to talk to.
+
+**One defect came out of it**, found by reading the log rather than the result:
+the daemon bound its socket inside the accept loop, so it registered a tray icon
+and preloaded the model set *first*. A second daemon therefore flashed a tray
+icon on its way out, and a `--preload` daemon spent seconds not listening while
+`vst-ctl` waits five for an autostarted daemon to answer. Binding now happens
+before both.
+
+**And one thing that is not a defect but belongs in `INSTALL.txt`:** replacing a
+running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
+reading `(deleted)`, its child long gone. Stopping the daemon first is already
+the rule for the tarball; it is the rule here for a second reason.
+
 <a name="appimage-untested"></a>
 
 #### What was not tested, and why
@@ -3281,6 +3371,51 @@ move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
 **so KDE never sees the shortcuts and the hotkeys silently stop working.**
 Measured with a dry run rather than reasoned about. Do not use it; the store
 beside the image already is the portable arrangement.
+
+<a name="appimage-hardening"></a>
+
+#### A review and a stress harness, 2026-08-24
+
+Run after the release, because the migration above had already shown that this
+phase's own verification was not finding things.
+
+**A review of the branch found eight defects**, none reachable from the tests and
+three that would have shipped as silent wrong behaviour. The two worth carrying:
+`AppRun` dispatched on `basename "$0"`, which the runtime sets to AppRun's own
+path — so the documented symlink shim never matched and `./vst-ctl toggle`
+launched the *window* with "toggle" as an argument (`$ARGV0` is what carries the
+name the user typed); and two process timeouts were decorative, because
+`ReadToEnd()` returns when the child closes the pipe, so calling it before
+`WaitForExit` hands a wedged binary the power to block a daemon start — or a
+window that never opens — forever.
+
+**[spike/appimage-stress](../spike/appimage-stress) is new**, and covers what no
+unit test can reach: ten start/shutdown cycles through the image, eight
+concurrent client installs, four ways of breaking the copy, a press with no
+daemon running, a second daemon, and eight interrupted utterances. It found
+**nothing in the product** on its first clean run — and two defects in itself: it
+passed every audio scenario against a daemon answering *"no audio device
+available"*, because overriding `XDG_RUNTIME_DIR` also hides the PulseAudio
+socket, and its leak check fired on its own impatience. Both are
+[trap 15](#traps)'s vacuous guard, which this document has now recorded in three
+unrelated places.
+
+The existing [daemon-stress](../spike/daemon-stress) harness also passes against
+an AppImage daemon — 400 concurrent status calls with no failures, 1,836
+subscriber connects, the toggle storm, the speak/stop races — once it is given a
+PulseAudio socket to talk to.
+
+**One defect came out of it**, found by reading the log rather than the result:
+the daemon bound its socket inside the accept loop, so it registered a tray icon
+and preloaded the model set *first*. A second daemon therefore flashed a tray
+icon on its way out, and a `--preload` daemon spent seconds not listening while
+`vst-ctl` waits five for an autostarted daemon to answer. Binding now happens
+before both.
+
+**And one thing that is not a defect but belongs in `INSTALL.txt`:** replacing a
+running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
+reading `(deleted)`, its child long gone. Stopping the daemon first is already
+the rule for the tarball; it is the rule here for a second reason.
 
 <a name="appimage-untested"></a>
 
