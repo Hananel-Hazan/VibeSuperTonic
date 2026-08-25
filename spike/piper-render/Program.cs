@@ -19,7 +19,11 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 // a `dotnet clean` should not take 61 MB with it.
 var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
 var voiceDir = Path.Combine(projectDir, "voice");
-var model = Path.Combine(voiceDir, "en_US-lessac-medium.onnx");
+// The id map is per-voice in principle and identical across lessac's tiers in
+// fact — checked, 154 entries both — so one hardcoded id array serves both and
+// `--voice` is only a filename.
+var voiceName = ArgValue("--voice") ?? "en_US-lessac-medium";
+var model = Path.Combine(voiceDir, voiceName + ".onnx");
 var configPath = model + ".json";
 
 var useCuda = args.Contains("--cuda");
@@ -42,8 +46,8 @@ if (!File.Exists(model))
         acceptance rule the Supertonic weights live under:
 
             B=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium
-            curl -sSL -o {model} $B/en_US-lessac-medium.onnx
-            curl -sSL -o {configPath} $B/en_US-lessac-medium.onnx.json
+            curl -sSL -o {model} $B/{voiceName}.onnx
+            curl -sSL -o {configPath} $B/{voiceName}.onnx.json
         """);
     return 1;
 }
@@ -64,7 +68,7 @@ var noiseScale = noiseScaleOverride ?? inference.GetProperty("noise_scale").GetS
 var lengthScale = lengthScaleOverride ?? inference.GetProperty("length_scale").GetSingle();
 var noiseW = noiseWOverride ?? inference.GetProperty("noise_w").GetSingle();
 
-Console.WriteLine($"voice        en_US-lessac-medium, {sampleRate} Hz, {numSpeakers} speaker(s)");
+Console.WriteLine($"voice        {voiceName}, {sampleRate} Hz, {numSpeakers} speaker(s), {new FileInfo(model).Length / 1e6:F0} MB");
 Console.WriteLine($"scales       noise {noiseScale}, length {lengthScale}, noise_w {noiseW}");
 
 // ------------------------------------------------------------------ the ids
