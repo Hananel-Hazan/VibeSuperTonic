@@ -34,6 +34,12 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.22.1" />
+    <!--
+      Core, for P2's speed comparison only: TimeStretch and Sonic are the DSP
+      half the length_scale decision is being weighed against, and reimplementing
+      them here would compare against something other than what ships.
+    -->
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
   </ItemGroup>
 
 </Project>

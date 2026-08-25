@@ -1,8 +1,10 @@
 # Piper as a second engine — plan
 
-Status: **[P0](#p0) and [P1](#p1) both passed 2026-08-25. The go/no-go is
-answered: phoneme parity, 327 sentences across 8 languages, zero divergences.**
-Nothing that can kill this project is left; [P2](#p2) onward is ordinary work.
+Status: **[P0](#p0), [P1](#p1) and [P2](#p2)'s measurements all landed
+2026-08-25.** The go/no-go is answered — phoneme parity, 327 sentences across 8
+languages, zero divergences — and nothing that can kill this project is left.
+What P2 still owes is a **listening verdict** on the speed question, which is the
+one thing in this plan that cannot be measured.
 Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8 and
 0.2.9 shipped, which was the whole of what stood in front of this. What exists is
 [one spike](../spike/piper-render) and this document. **No dependency added and
@@ -105,7 +107,7 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | --- | --- |
 | P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
 | P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
-| P2 · Measure | **Next.** Nothing blocks it. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
+| P2 · Measure | **Numbers done 2026-08-25** — [the table](#p2-landed). The speed question is rendered and waiting on a listening verdict, which is the one thing that cannot be measured. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
 | P3 · `PiperSynthesizer` + the options refactor | Not started. Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | Not started. The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
 | P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage lands in [Phase 9](LINUX-PORT-PLAN.md#phase-9). What is left here is the GPL obligations and a second `LICENSE-MODELS` story |
@@ -243,6 +245,14 @@ default scales, which is the criterion as written.
 | --- | --- | --- | --- |
 | CPU | 79 ms | **70 ms** | 0.029 |
 | CUDA | 301 ms | **18 ms** | 0.008 |
+
+> **The CUDA number here is not a production number — corrected in
+> [P2](#p2-landed).** It was measured with `noise_scale` and `noise_w` at zero,
+> because that is what makes the graph deterministic for the byte-comparison
+> above, and the stochastic duration predictor those scales drive is most of
+> what CUDA was doing. With the *default* scales the same run is **64 ms**, not
+> 18. Reproduced both ways. The CPU number barely moves (70 → 74), so this is a
+> GPU-specific effect and it took P2 asking a different question to notice it.
 
 2.39 s of audio each. **CUDA accepts this graph** on the provider pack the
 product already ships — that is the Linux half of the criterion, [the Windows
@@ -530,6 +540,95 @@ does past 1.3, the ceiling belongs in the voice's metadata rather than in
 
 **Exit criteria.** A table, and a stated speed ceiling per quality tier or a
 statement that there is not one.
+
+<a name="p2-landed"></a>
+
+#### P2 — the numbers, 2026-08-25
+
+Measured on the KDE/Wayland box, RTX A2000, **one process per row**: an ORT
+session that has been built and torn down does not hand its pages back, so a
+second voice measured in the same process reports the high-water mark of both —
+and resident set is the number this phase exists to get right.
+
+The sentence is a first chunk, not a paragraph, because
+[what a person waits for](LINUX-PORT-PLAN.md#phase-8b-landed) is the first chunk
+and the product already caps one at 200 characters.
+
+| Voice | Provider | Model | Session build | First run | **Warm run** | RTF warm | **Resident** | Peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lessac-medium | CPU | 63 MB | 465 ms | 82 ms | **72 ms** | 0.030 | **138 MB** | 237 MB |
+| lessac-medium | CUDA | 63 MB | 499 ms | 308 ms | **61 ms** | 0.024 | 485 MB | 1020 MB |
+| lessac-high | CPU | 113 MB | 536 ms | 443 ms | **399 ms** | 0.146 | **194 MB** | 277 MB |
+| lessac-high | CUDA | 113 MB | 599 ms | 364 ms | **116 ms** | 0.043 | 519 MB | 1091 MB |
+
+Against Supertonic on the same class of machine: **RTF 0.193, ~830 MB resident,
+802 ms to first audio on CPU and 77 ms on CUDA.**
+
+**The prediction this document wrote down before measuring was right, and
+narrowly.** It said *"a VITS render is one `Run`, so the honest expectation is
+that Piper beats the GPU number on the CPU"* — medium warm on CPU is **72 ms
+against Supertonic's CUDA 77 ms**. True for the medium tier by five
+milliseconds. **False for `high`**, at 399 ms — though that is still half
+Supertonic's CPU number, on a model six times smaller.
+
+**Resident set is the headline and it is better than the pitch claimed.** 138 MB
+for medium and 194 MB for high, against ~830 MB — so **both engines can be warm
+at once**, which is a P3 design question this answers rather than defers: loading
+Piper does not have to evict Supertonic.
+
+**But CUDA costs 485–519 MB resident and up to 1.09 GB peak**, which is the
+context, not the model. On the medium tier that buys 61 ms against 72 — **a 15%
+gain for 350 MB**, and not worth taking. On `high` it buys 399 → 116 ms, which
+is worth it. So the provider choice is **per tier**, not global, and
+[8b's battery rule](LINUX-PORT-PLAN.md#phase-8b-landed) already has the machinery
+for a decision that is not a constant.
+
+<a name="length-scale-nonlinear"></a>
+
+#### `length_scale` is not a linear rate control — and the decision needs a correction, not a reversal
+
+The [decision](#decisions) is that `length_scale` carries the whole rate on this
+path. Measured with the noise off, so the numbers are the model and not variance:
+
+| Requested | `length_scale` | Duration | **Delivered** | Shortfall |
+| --- | --- | --- | --- | --- |
+| 1.00× | 1.0000 | 2.50 s | 1.00× | — |
+| 1.15× | 0.8696 | 2.36 s | 1.06× | 8% |
+| 1.35× | 0.7407 | 2.10 s | 1.19× | 12% |
+| 1.60× | 0.6250 | 1.80 s | 1.39× | 13% |
+| 2.00× | 0.5000 | 1.56 s | **1.60×** | 20% |
+
+**Ask for 1.6× and you get 1.39×.** The obvious explanation is wrong and worth
+recording so nobody re-derives it: it is *not* fixed leading and trailing
+silence. That was measured too — 0.06 s and 0.09 s, and the speech itself scales
+2.34 s → 1.69 s, the same 1.39×. The duration predictor simply does not respond
+linearly to the scale it is given.
+
+This does not reverse the decision. It means **`length_scale` has to be
+calibrated rather than passed through**: a UI that says 1.6× and delivers 1.39×
+is the silent divergence this project keeps writing traps about. Empirically
+`length_scale` 0.50 delivers a true 1.6×, so the curve is invertible; whether the
+inversion is per tier or per voice is [P3](#p3)'s to settle, and it needs the
+same measurement run against more than one voice before it becomes a constant.
+
+<a name="stretch-samplerate"></a>
+
+#### A latent bug in the shared path, found by measuring against it
+
+[TimeStretch](../src/VibeSuperTonic.Core/Audio/TimeStretch.cs) hardcodes
+`SampleRate = 44100` — correctly, and with a comment saying why: it matches
+Supertonic's output rate, and *"mismatches make playback play at the wrong speed
+AND pitch"*. **A Piper voice renders at 22050.** So the moment anything on the
+Piper path calls the shared stretch, Sonic is told the wrong rate and its pitch
+detection is off by an octave.
+
+It does not bite today, because the decision keeps the stretch off on this path.
+It bites the moment anyone reaches for it — for the calibration remainder above,
+for example. The fix is to pass the rate rather than assume it; the reason to
+write it down now is that the comment already explains the failure, so a future
+reader will believe the constant is correct, and for Supertonic it is.
+
+---
 
 <a name="p3"></a>
 

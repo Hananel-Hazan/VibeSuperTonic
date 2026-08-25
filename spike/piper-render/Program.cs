@@ -13,6 +13,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using VibeSuperTonic.Spike.PiperRender;
 
 // bin/Debug/net10.0 back to the project directory. The voice sits beside the
 // source rather than beside the binary because it is fetched by hand once and
@@ -87,6 +88,28 @@ long[] phonemeIds =
     120, 0, 18, 0, 74, 0, 38, 0, 21, 0, 3, 0, 17, 0, 120, 0, 51, 0, 122, 0, 66,
     0, 10, 0, 2,
 ];
+
+// P2's one-row-per-process mode. Printed as TSV so the driver script can
+// assemble the table without this program knowing what the table looks like.
+if (args.Contains("--measure"))
+{
+    var row = Measure.Run(model, configPath, phonemeIds, useCuda,
+        ArgValue("--repeat") is { } rr ? int.Parse(rr) : 5);
+    Console.WriteLine(string.Join("\t",
+        row.Voice, row.Provider, row.ModelMb,
+        row.SessionBuildMs.ToString("F0"), row.FirstRunMs.ToString("F0"),
+        row.WarmRunMs.ToString("F0"), row.AudioSeconds.ToString("F2"),
+        row.RssAfterLoadMb, row.RssPeakMb));
+    return 0;
+}
+
+if (args.Contains("--rate"))
+{
+    var dir = ArgValue("--rate-dir") ?? Path.Combine(projectDir, "rate");
+    Console.WriteLine($"rate comparison -> {dir}");
+    Rate.Render(model, configPath, phonemeIds, dir);
+    return 0;
+}
 
 // --------------------------------------------------------------- the session
 using var options = new SessionOptions();
