@@ -46,6 +46,18 @@ public static class BenchmarkStore
     public static BenchmarkProfile? Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // A DIRECTORY is a caller bug, never a missing profile, and it must not
+        // read back as one. This signature took the data directory until
+        // 2026-08-19; a caller that was not updated still compiles, because both
+        // are strings, and gets null forever — which is indistinguishable from
+        // "this machine has never been benchmarked" and is exactly how the Linux
+        // daemon lost its GPU for a release.
+        if (Directory.Exists(path))
+            throw new ArgumentException(
+                $"{path} is a directory. Load takes the path of the profile file — " +
+                $"see BenchmarkStore.FileName.", nameof(path));
+
         try
         {
             if (!File.Exists(path)) return null;

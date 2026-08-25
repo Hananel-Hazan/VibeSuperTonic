@@ -226,4 +226,27 @@ public class BenchmarkStoreTests : IDisposable
         using var doc = JsonDocument.Parse(File.ReadAllText(Path_));
         Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
     }
+
+    [Fact]
+    public void Handed_a_directory_it_refuses_rather_than_reporting_no_profile()
+    {
+        // The failure this rescues is not hypothetical. Load took the DATA
+        // DIRECTORY until this type moved into Core; one caller was not updated,
+        // it compiled — both are strings — and it read back null forever, which
+        // is indistinguishable from "never benchmarked". The Linux daemon
+        // silently stopped using its GPU, its benchmark and its battery rule
+        // after the first utterance of every session, with a green build and a
+        // full test suite behind it.
+        string dir = Path.Combine(Path.GetTempPath(), "vst-store-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var ex = Assert.Throws<ArgumentException>(() => BenchmarkStore.Load(dir));
+            Assert.Contains("directory", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

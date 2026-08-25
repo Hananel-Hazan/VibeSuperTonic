@@ -239,7 +239,13 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
             if (mtime == _profileMtime) return _profile;
 
             _profileMtime = mtime;
-            _profile = BenchmarkStore.Load(_config.DataDir);
+            // The PATH, not the directory. BenchmarkStore moved into Core on
+            // 2026-08-19 and took the file path instead of the data directory
+            // with it; this call auto-merged through that change because both
+            // are strings, and a directory simply reads back as no profile —
+            // so the GPU, the battery rule and every benchmark stopped applying
+            // after the first utterance, with a green build behind it.
+            _profile = BenchmarkStore.Load(path);
             return _profile;
         }
         catch
