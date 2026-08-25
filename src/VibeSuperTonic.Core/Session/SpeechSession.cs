@@ -432,7 +432,13 @@ public sealed class SpeechSession : IDisposable
                         //    clock stays the only source of position. Applying
                         //    it after planning would desynchronise every
                         //    highlight by the stretch ratio.
-                        pcm = TimeStretch.Stretch(pcm, options.StretchFactor);
+                        // The rate the SYNTHESIZER rendered at, which is what
+                        // this buffer is — not the sink's, even though the two
+                        // agree by the time anything is written. They are
+                        // separately owned: the sink re-tunes to follow the
+                        // engine between utterances, and reading it here would
+                        // make the DSP depend on that having already happened.
+                        pcm = TimeStretch.Stretch(pcm, options.StretchFactor, _synth.SampleRate);
                         SpeechRate.ApplyGain(pcm, options.VolumeScale);
 
                         rendered.Add((i, pcm), token);

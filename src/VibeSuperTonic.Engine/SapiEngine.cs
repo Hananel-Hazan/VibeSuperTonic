@@ -347,7 +347,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             Task<short[]> currentSynth = Task.Run(() =>
             {
                 var raw = adapter.Synthesize(firstChunkExec.Text, totalStep: totalStepResolved, speed: firstSynth, cancellationToken: speakToken, lang: firstChunkExec.Lang);
-                return TimeStretch.Stretch(raw, firstStretch);
+                return TimeStretch.Stretch(raw, firstStretch, SampleRate);
             }, speakToken);
             var firstSynthStartMs = Environment.TickCount64;
             double rollingRtf = double.NaN;
@@ -513,7 +513,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             currentSynth = Task.Run(() =>
                             {
                                 var raw = adapter.Synthesize(nextChunkExec.Text, totalStep: nextTotalStep, speed: nSynth, cancellationToken: speakToken, lang: nextChunkExec.Lang);
-                                return TimeStretch.Stretch(raw, nStretch);
+                                return TimeStretch.Stretch(raw, nStretch, SampleRate);
                             }, speakToken);
                             nextSynthIdx++;
                         }
@@ -730,7 +730,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             currentSynth = Task.Run(() =>
             {
                 var raw = adapter.Synthesize(nextExec.Text, totalStep: totalStepLocal, speed: nSynth, cancellationToken: speakToken, lang: nextExec.Lang);
-                return TimeStretch.Stretch(raw, nStretch);
+                return TimeStretch.Stretch(raw, nStretch, SampleRate);
             }, speakToken);
             nextSynthIdx = currentSynthIdx + 1;
             i = synthIndices[currentSynthIdx] - 1;
