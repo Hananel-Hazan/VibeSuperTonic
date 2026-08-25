@@ -26,7 +26,7 @@ public class LazyAudioSinkTests
         // first write, so a rate that required an open device would put the
         // device back on the startup path this class exists to take it off.
         bool opened = false;
-        var sink = new LazyAudioSink(44100, () => { opened = true; return new FakeSink(); });
+        var sink = new LazyAudioSink(44100, _ => { opened = true; return new FakeSink(); });
         using var _s = sink;
 
         Assert.Equal(44100, sink.SampleRate);
@@ -38,7 +38,7 @@ public class LazyAudioSinkTests
     public void A_device_that_will_not_open_is_reported_not_thrown()
     {
         var sink = new LazyAudioSink(44100,
-            () => throw new InvalidOperationException(
+            _ => throw new InvalidOperationException(
                 "could not open a PulseAudio playback stream: Connection refused"));
         using var _s = sink;
 
@@ -54,7 +54,7 @@ public class LazyAudioSinkTests
         // started may be up by the time anyone presses the key, and a daemon that
         // had latched the failure would stay mute until restarted.
         int attempts = 0;
-        var sink = new LazyAudioSink(44100, () =>
+        var sink = new LazyAudioSink(44100, _ =>
         {
             attempts++;
             if (attempts < 3) throw new InvalidOperationException("Connection refused");
@@ -73,7 +73,7 @@ public class LazyAudioSinkTests
     public void The_device_is_opened_once_and_then_reused()
     {
         int opens = 0;
-        var sink = new LazyAudioSink(44100, () => { opens++; return new FakeSink(); });
+        var sink = new LazyAudioSink(44100, _ => { opens++; return new FakeSink(); });
         using var _s = sink;
 
         Assert.True(sink.TryOpen(out _));
@@ -89,7 +89,7 @@ public class LazyAudioSinkTests
         // desynchronise every boundary by the ratio -- and a wrong word-boundary
         // offset sounds exactly like a right one, so nothing downstream catches it.
         var inner = new FakeSink(22050);
-        var sink = new LazyAudioSink(44100, () => inner);
+        var sink = new LazyAudioSink(44100, _ => inner);
         using var _s = sink;
 
         Assert.False(sink.TryOpen(out string? error));
@@ -102,7 +102,7 @@ public class LazyAudioSinkTests
     {
         // Stop() calls RequestFlush unconditionally, and the daemon reaches it
         // whenever a press is followed by a stop -- including with no device.
-        var sink = new LazyAudioSink(44100, () => new FakeSink());
+        var sink = new LazyAudioSink(44100, _ => new FakeSink());
         using var _s = sink;
 
         sink.RequestFlush();
@@ -118,7 +118,7 @@ public class LazyAudioSinkTests
     public void Disposing_before_opening_never_touches_the_device()
     {
         bool opened = false;
-        var sink = new LazyAudioSink(44100, () => { opened = true; return new FakeSink(); });
+        var sink = new LazyAudioSink(44100, _ => { opened = true; return new FakeSink(); });
 
         sink.Dispose();
         sink.Dispose();                       // idempotent
@@ -130,7 +130,7 @@ public class LazyAudioSinkTests
     public void Disposing_after_opening_closes_the_real_device()
     {
         var inner = new FakeSink();
-        var sink = new LazyAudioSink(44100, () => inner);
+        var sink = new LazyAudioSink(44100, _ => inner);
 
         Assert.True(sink.TryOpen(out _));
         sink.Dispose();
@@ -144,7 +144,7 @@ public class LazyAudioSinkTests
         // The whole point: deferring changes WHEN the device is created and
         // nothing about what happens afterwards.
         var inner = new FakeSink();
-        var sink = new LazyAudioSink(44100, () => inner);
+        var sink = new LazyAudioSink(44100, _ => inner);
         using var session = new SpeechSession(new FakeSynthesizer(), sink, new SpeechSessionOptions(PrimeMs: 10));
 
         var events = new List<SessionEvent>();
@@ -162,5 +162,102 @@ public class LazyAudioSinkTests
             Assert.Contains(events, e => e.Kind == SessionEventKind.WordBoundary);
         }
         Assert.Equal(1, inner.DrainCount);
+    }
+
+    // ------------------------------------------------------------------ retune
+
+    [Fact]
+    public void Retuning_changes_the_rate_and_reopens_the_device_at_it()
+    {
+        // A Piper voice renders at 22050 and nothing in this product resamples,
+        // so the device follows the model rather than the model following the
+        // device.
+        var opened = new List<int>();
+        using var sink = new LazyAudioSink(44100, rate => { opened.Add(rate); return new FakeSink(rate); });
+
+        Assert.True(sink.TryOpen(out _));
+        Assert.True(sink.Retune(22050));
+        Assert.Equal(22050, sink.SampleRate);
+
+        Assert.True(sink.TryOpen(out _));
+        Assert.Equal([44100, 22050], opened);
+    }
+
+    [Fact]
+    public void Retuning_to_the_same_rate_does_nothing_at_all()
+    {
+        // The common case by far — every utterance asks, and almost none of them
+        // change anything. Dropping a live device to reopen it identically would
+        // put a stream teardown on the press path for nothing.
+        int opens = 0;
+        using var sink = new LazyAudioSink(44100, rate => { opens++; return new FakeSink(rate); });
+
+        Assert.True(sink.TryOpen(out _));
+        Assert.False(sink.Retune(44100));
+        Assert.True(sink.TryOpen(out _));
+
+        Assert.Equal(1, opens);
+    }
+
+    [Fact]
+    public void A_retune_is_not_a_reconnect()
+    {
+        // Reconnects mean "this daemon has already survived something" in a field
+        // report. Counting an ordinary voice change there would make the number
+        // mean nothing.
+        using var sink = new LazyAudioSink(44100, rate => new FakeSink(rate));
+
+        Assert.True(sink.TryOpen(out _));
+        sink.Retune(22050);
+
+        Assert.Equal(0, sink.Reconnects);
+        Assert.Null(sink.LastLoss);
+    }
+
+    [Fact]
+    public void Retuning_before_the_device_was_ever_opened_is_fine()
+    {
+        // The ordinary startup order: the daemon points the router at the default
+        // voice before anything has played.
+        using var sink = new LazyAudioSink(44100, rate => new FakeSink(rate));
+
+        Assert.True(sink.Retune(16000));
+        Assert.Equal(16000, sink.SampleRate);
+        Assert.False(sink.IsOpen);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-22050)]
+    public void A_rate_that_is_not_a_rate_is_refused(int rate)
+    {
+        // It arrives from a voice's config file, so 0 is a plausible value for a
+        // truncated download — and it would reach the playback clock, the write
+        // block and the inter-chunk silence, all of which divide by it.
+        using var sink = new LazyAudioSink(44100, r => new FakeSink(r));
+        Assert.Throws<ArgumentOutOfRangeException>(() => sink.Retune(rate));
+    }
+
+    [Fact]
+    public void A_disposed_sink_cannot_be_retuned()
+    {
+        var sink = new LazyAudioSink(44100, rate => new FakeSink(rate));
+        sink.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => sink.Retune(22050));
+    }
+
+    [Fact]
+    public void A_device_that_opens_at_the_wrong_rate_is_still_refused_after_a_retune()
+    {
+        // The guard that catches a device quietly resampling for us. It has to
+        // follow the retune rather than the constructor, or the first Piper
+        // utterance would be checked against 44100 forever.
+        using var sink = new LazyAudioSink(44100, _ => new FakeSink(44100));
+
+        sink.Retune(22050);
+
+        Assert.False(sink.TryOpen(out string? error));
+        Assert.Contains("44100", error);
+        Assert.Contains("22050", error);
     }
 }

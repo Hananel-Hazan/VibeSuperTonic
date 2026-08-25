@@ -43,7 +43,7 @@ namespace VibeSuperTonic.Core.Audio;
 /// </summary>
 public sealed class LazyAudioSink : IAudioSink
 {
-    private readonly Func<IAudioSink> _open;
+    private readonly Func<int, IAudioSink> _open;
     private readonly object _gate = new();
 
     private IAudioSink? _inner;
@@ -51,7 +51,8 @@ public sealed class LazyAudioSink : IAudioSink
     private int _reconnects;
 
     /// <param name="sampleRate">
-    /// What the sink will be opened with. Declared up front because
+    /// What the sink will first be opened with — see <see cref="Retune"/> for
+    /// what changes it. Declared up front because
     /// <see cref="SpeechSession"/> builds its playback clock from
     /// <see cref="SampleRate"/> before the first write, and a clock that had to
     /// wait for the device would be a device that had to open before the clock —
@@ -59,11 +60,13 @@ public sealed class LazyAudioSink : IAudioSink
     /// sink on open.
     /// </param>
     /// <param name="open">
-    /// Creates the real sink. Called at most once per successful open, under a
-    /// lock, and allowed to throw — <see cref="TryOpen"/> turns that into a
-    /// message.
+    /// Creates the real sink at the rate it is given. Called at most once per
+    /// successful open, under a lock, and allowed to throw —
+    /// <see cref="TryOpen"/> turns that into a message. It takes the rate rather
+    /// than closing over one so that <see cref="Retune"/> has something to
+    /// reopen with.
     /// </param>
-    public LazyAudioSink(int sampleRate, Func<IAudioSink> open)
+    public LazyAudioSink(int sampleRate, Func<int, IAudioSink> open)
     {
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         _open = open ?? throw new ArgumentNullException(nameof(open));
@@ -71,7 +74,54 @@ public sealed class LazyAudioSink : IAudioSink
     }
 
     /// <inheritdoc/>
-    public int SampleRate { get; }
+    public int SampleRate { get; private set; }
+
+    /// <summary>
+    /// Open at a different rate from now on, because the engine speaking changed.
+    ///
+    /// <para><b>Between utterances, never inside one.</b> The third case of the
+    /// rule that already governs the device-loss reconnect and the provider
+    /// switch, and it is the same rule for the same reason: a fresh stream has
+    /// written nothing while <see cref="PlaybackClock"/> and every scheduled
+    /// boundary are counted against the old one — and here the rate itself is
+    /// what the clock converts frames with, so a change mid-utterance would
+    /// desynchronise the highlight permanently AND play the remainder at the
+    /// wrong speed. Callers enforce the idle window; this class cannot see it.
+    /// </para>
+    ///
+    /// <para>Why a Piper voice needs it at all: those voices render at 22050 or
+    /// 16000 and <b>nothing in this product resamples</b> — that is the
+    /// native-rate decision, and it buys the CPU a resampler would cost on every
+    /// utterance. So the device follows the model rather than the model
+    /// following the device.</para>
+    ///
+    /// <para>The device is dropped rather than reopened here: the next
+    /// <see cref="TryOpen"/> builds it, which is the one place a failure has
+    /// somewhere to be reported.</para>
+    /// </summary>
+    /// <returns>True if the rate actually changed.</returns>
+    public bool Retune(int sampleRate)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleRate);
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (sampleRate == SampleRate) return false;
+
+            // Not counted as a reconnect and not recorded as a loss: nothing
+            // went wrong, and a field report's "this daemon has already survived
+            // something" reading of Reconnects has to stay true.
+            if (_inner is not null)
+            {
+                try { _inner.Dispose(); } catch { /* replacing it either way */ }
+                _inner = null;
+            }
+
+            SampleRate = sampleRate;
+            return true;
+        }
+    }
 
     /// <summary>True once the device has actually been opened.</summary>
     public bool IsOpen { get { lock (_gate) return _inner is not null; } }
@@ -134,7 +184,7 @@ public sealed class LazyAudioSink : IAudioSink
 
             try
             {
-                var sink = _open();
+                var sink = _open(SampleRate);
 
                 // A sink that opened at a rate other than the one the clock was
                 // told about would desynchronise every boundary by the ratio,

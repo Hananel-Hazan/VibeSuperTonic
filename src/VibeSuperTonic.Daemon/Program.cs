@@ -10,6 +10,7 @@ using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Daemon;
 using VibeSuperTonic.Linux.Audio;
 using VibeSuperTonic.Onnx.Ort;
+using VibeSuperTonic.Piper;
 
 // vibesupertonicd — holds the warm model for the life of the login session.
 //
@@ -248,14 +249,69 @@ using ISynthesizer synth = switcher = new ProviderSwitchingSynthesizer(
     voice,
     language);
 
+// ------------------------------------------------------------------ Piper
+//
+// The second engine. Which voice speaks decides which engine renders — a voice
+// belongs to exactly one of them, so an Engine setting that could disagree with
+// the voice is a setting that eventually would.
+//
+// PROBED AT STARTUP AND LOGGED, because the difference between our espeak-ng and
+// a distro one is inaudible right up until it is a report about prosody:
+// espeak_TextToPhonemesWithTerminator does not exist at the 1.52.0 tag Ubuntu
+// ships, and without it every input collapses to one sentence and the trailing
+// punctuation the models were trained on is missing. See EspeakLibrary.
+var espeak = EspeakLibrary.Probe();
+DaemonLog.Write(config.PiperVoices.Voices.Count > 0 || espeak.Path is not null
+    ? espeak.Describe()
+    : $"piper: no voices in {config.PiperVoices.Root}");
+
+// Built on first use rather than at startup: it loads dictionaries and
+// initialises process-global state in a native library, and an install with no
+// Piper voices should pay none of that. One per process — espeak_Initialize is
+// global and a second one with a different data directory silently rebinds the
+// first.
+var phonemizer = new Lazy<EspeakPhonemizer>(
+    () => new EspeakPhonemizer(espeak), LazyThreadSafetyMode.ExecutionAndPublication);
+
+// CPU, and the same thread count the Supertonic decision arrived at. P2 measured
+// CUDA buying the `high` tier 399 -> 116 ms and the `medium` tier only
+// 72 -> 61 ms for 350 MB of resident set, so the provider is worth choosing per
+// tier — but choosing it is a decision with its own machinery (8b's) and
+// belongs beside the benchmark rather than hard-coded here.
+using var engines = new EngineRoutingSynthesizer(
+    synth,
+    config.PiperVoices,
+    modelPath => new PiperSynthesizer(
+        modelPath, phonemizer.Value,
+        ExecutionProviders.Cpu,
+        intraOpThreads: switcher.Decision.Threads),
+    () => sessionState?.Invoke() ?? SpeechStateProbe.Idle,
+    DaemonLog.Write);
+
+// Pointed at the default voice's engine now rather than at the first press. Two
+// things follow from doing it here: the log says which engine a daemon is
+// holding before anyone asks it to speak, and a Piper voice that has never been
+// calibrated starts being measured at startup instead of during the first
+// utterance the user is waiting on.
+if (engines.Select(voice ?? config.Settings.DefaultVoice) is { Error: { } engineError })
+    DaemonLog.Write($"engine: {engineError}");
+
 // Opened on the first request that needs to play, not here. Opening here meant a
 // machine whose audio server was unreachable got an unhandled exception and a
 // core dump before the control socket existed -- so every verb that could have
 // explained it was gone too, and with vst-ctl's autostart (R-5) that is a hotkey
 // that silently does nothing. Same failure shape as the missing model set, and
 // the same fix: start anyway, and let the speak path say what is wrong.
-using var sink = new LazyAudioSink(44100, () => new PulseAudioSink(44100, "VibeSuperTonic"));
-var session = new SpeechSession(synth, sink, config.SessionOptions);
+// 44100 is Supertonic's rate and therefore the daemon's starting one; a Piper
+// voice re-tunes it between utterances, because nothing here resamples.
+using var sink = new LazyAudioSink(
+    TimeStretch.SupertonicSampleRate,
+    rate => new PulseAudioSink(rate, "VibeSuperTonic"));
+// The session speaks through the ENGINE ROUTER, which speaks through the
+// provider switch when the voice is Supertonic's. Three layers, each of which
+// may only change between utterances, and each of which the session is unaware
+// of by design: it holds one ISynthesizer for the life of the daemon.
+var session = new SpeechSession(engines, sink, config.SessionOptions);
 sessionState = () => session.State == SpeechState.Idle ? SpeechStateProbe.Idle : SpeechStateProbe.Busy;
 // ClipboardFallback is read once here rather than per capture: a reload can
 // change it, but the selection source is built with the daemon, and a hotkey
@@ -293,9 +349,9 @@ DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1
     + (forced is null ? "" : $", forced by VST_SELECTION={forced}"));
 
 using var server = new DaemonServer(
-    options, config, synth, session,
+    options, config, engines, session,
     selectionSource, sink,
-    synthesizerFor, switcher);
+    synthesizerFor, switcher, engines);
 
 // BEFORE the tray and before --preload. A daemon that has lost the race for the
 // socket must not register a tray icon on its way out, and a preloading daemon

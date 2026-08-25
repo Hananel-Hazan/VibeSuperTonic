@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Core.Synthesis.Piper;
 using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.Daemon;
@@ -218,6 +219,8 @@ public sealed class HostConfig
 {
     private readonly object _gate = new();
     private float _synthSpeed = SpeechRate.DefaultEngineSpeed;
+    private double _supertonicStretch = 1.0;
+    private double _requestedRate = SpeechRate.DefaultEngineSpeed;
     private long _settingsMtime = long.MinValue;
     private long _pronMtime = long.MinValue;
     private bool _everLoaded;
@@ -226,6 +229,7 @@ public sealed class HostConfig
     {
         DataDir = dataDir;
         ModelsRoot = modelsRoot;
+        PiperVoices = new PiperVoiceStore(modelsRoot);
         Settings = new LinuxSettings();
         Pronunciations = new PronunciationsConfig();
         Compiled = Array.Empty<Regex?>();
@@ -234,6 +238,13 @@ public sealed class HostConfig
 
     public string DataDir { get; }
     public string ModelsRoot { get; }
+
+    /// <summary>
+    /// The Piper voices installed beside the Supertonic models. Held here
+    /// because this is what turns a voice id into an engine, and the per-utterance
+    /// options are built here.
+    /// </summary>
+    public PiperVoiceStore PiperVoices { get; }
     public string SettingsPath => LinuxDataPaths.SettingsFile(DataDir);
     public string PronunciationsPath => LinuxDataPaths.PronunciationsFile(DataDir);
 
@@ -298,6 +309,16 @@ public sealed class HostConfig
             var (synthSpeed, stretch) = SpeechRate.Compute(
                 Settings.EngineSpeed, Settings.DspRate, Settings.RateClampCeiling);
             _synthSpeed = synthSpeed;
+            _supertonicStretch = stretch;
+
+            // The SAME number both engines are asked for, and the reason one
+            // settings.json speaks at one speed whichever voice is selected.
+            // Supertonic splits it between the model and the stretch because it
+            // degrades past ~1.3; Piper gives the whole of it to length_scale
+            // until the model saturates. See PiperRateCalibration.
+            float engine = Settings.EngineSpeed > 0 ? Settings.EngineSpeed : SpeechRate.DefaultEngineSpeed;
+            float dsp = Settings.DspRate > 0 ? Settings.DspRate : 1.0f;
+            _requestedRate = engine * dsp;
 
             SessionOptions = new SpeechSessionOptions(
                 Pronunciations: Pronunciations.Enabled ? Pronunciations : null,
@@ -317,9 +338,62 @@ public sealed class HostConfig
     }
 
     /// <summary>
-    /// Per-utterance synthesis options. A value from the request wins over the
-    /// file, which wins over the built-in default — an explicit ask is always
-    /// more specific than a stored preference.
+    /// Everything one utterance needs that depends on which engine speaks it.
+    /// </summary>
+    /// <param name="Synthesis">For the backend.</param>
+    /// <param name="StretchFactor">
+    /// For the DSP stage, at the engine's own sample rate. On the Supertonic path
+    /// this is the half of the rate the model cannot supply; on the Piper path it
+    /// is 1.0 until the model saturates just under 2x, and the remainder past it.
+    /// </param>
+    /// <param name="Engine">"supertonic" or "piper", for the log and for status.</param>
+    /// <param name="Note">
+    /// Something the user should know about this utterance, or null. Today: the
+    /// voice has not been calibrated yet, so its rate is approximate.
+    /// </param>
+    public readonly record struct UtterancePlan(
+        SynthesisOptions Synthesis, double StretchFactor, string Engine, string? Note);
+
+    /// <summary>
+    /// Build one utterance's plan. A value from the request wins over the file,
+    /// which wins over the built-in default — an explicit ask is always more
+    /// specific than a stored preference.
+    ///
+    /// <para><b>The voice chooses the engine.</b> There is no Engine setting:
+    /// a voice belongs to exactly one engine, so a setting that could disagree
+    /// with the voice is a setting that eventually will.</para>
+    /// </summary>
+    public UtterancePlan Utterance(string? voice, string? language)
+    {
+        string voiceId = voice ?? Settings.DefaultVoice;
+
+        if (PiperVoices.Config(voiceId) is { } piperVoice)
+        {
+            var calibration = PiperVoices.Calibration(voiceId);
+            var plan = calibration?.Plan(_requestedRate)
+                       ?? PiperRateCalibration.Reciprocal(_requestedRate);
+
+            var options = new PiperOptions(
+                voiceId,
+                plan.LengthScale,
+                piperVoice.NoiseScale,
+                piperVoice.NoiseW,
+                SpeakerId: 0,
+                SilenceSeconds: Settings.SynthesisSilenceSec);
+
+            return new UtterancePlan(options, plan.StretchFactor, "piper",
+                calibration is null && Math.Abs(_requestedRate - 1.0) > 0.01
+                    ? $"'{voiceId}' has not been measured yet, so {_requestedRate:F2}x is approximate " +
+                      "— the daemon is measuring it now and the next reading will be exact"
+                    : null);
+        }
+
+        return new UtterancePlan(Synthesis(voiceId, language), _supertonicStretch, "supertonic", null);
+    }
+
+    /// <summary>
+    /// The Supertonic half of <see cref="Utterance"/>, kept separate because the
+    /// benchmark sweep wants exactly this and has no use for a stretch factor.
     /// </summary>
     public SynthesisOptions Synthesis(string? voice, string? language) =>
         new SupertonicOptions(

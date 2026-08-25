@@ -41,6 +41,13 @@ public sealed class DaemonServer : IDisposable
     private readonly ProviderSwitchingSynthesizer? _switch;
 
     /// <summary>
+    /// Routes each utterance to the engine its voice belongs to, and is null in
+    /// tests that drive one synthesizer directly. When it is null every voice is
+    /// Supertonic's, which is exactly what those tests mean.
+    /// </summary>
+    private readonly EngineRoutingSynthesizer? _engines;
+
+    /// <summary>
     /// What is in force right now — asked of the switch rather than remembered,
     /// because it changes between utterances as of Phase 8b. A field holding the
     /// startup answer would report "CUDA" for the rest of the session to a user
@@ -81,10 +88,16 @@ public sealed class DaemonServer : IDisposable
     /// tests that drive a fixed synthesizer directly, where "not recorded" is the
     /// honest answer to <c>config</c>.
     /// </param>
+    /// <param name="engines">
+    /// Routes each utterance to the engine its voice belongs to. Null in tests
+    /// that drive one synthesizer directly, which is what "every voice is
+    /// Supertonic's" means there.
+    /// </param>
     public DaemonServer(DaemonOptions options, HostConfig config, ISynthesizer synth,
         SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null,
         Func<int, string, ISynthesizer>? synthesizerFor = null,
-        ProviderSwitchingSynthesizer? providerSwitch = null)
+        ProviderSwitchingSynthesizer? providerSwitch = null,
+        EngineRoutingSynthesizer? engines = null)
     {
         _options = options;
         _config = config;
@@ -94,6 +107,7 @@ public sealed class DaemonServer : IDisposable
         _sink = sink;
         _synthesizerFor = synthesizerFor;
         _switch = providerSwitch;
+        _engines = engines;
 
         _session.Emitted += OnSessionEvent;
     }
@@ -508,6 +522,90 @@ public sealed class DaemonServer : IDisposable
     private string EffectiveLanguage => _options.LanguageOverride ?? _config.Settings.Language;
 
     /// <summary>
+    /// Two notices, or whichever of them exists. The capture path already has
+    /// something to say often enough that dropping one for the other would hide
+    /// whichever came second.
+    /// </summary>
+    private static string? Combine(string? first, string? second) =>
+        first is null ? second
+        : second is null ? first
+        : $"{first} {second}";
+
+    /// <summary>
+    /// Everything one utterance needs, and the moment the engine may change.
+    ///
+    /// <para><b>Three things happen here and their order is load-bearing.</b>
+    /// The engine is selected from the voice, then the sink is re-tuned to
+    /// whatever that engine renders at, and only then are the session's DSP
+    /// options set. All three are between utterances by construction — the
+    /// session is idle at every call site — for the reason the audio-device
+    /// reconnect and the provider switch already document, plus one that is
+    /// specific to this layer: the engines do not share a sample rate, so a
+    /// change inside an utterance would play the remainder at the wrong speed
+    /// as well as putting every boundary permanently wrong.</para>
+    ///
+    /// <para>The stretch factor is per UTTERANCE rather than per reload now,
+    /// because it depends on which engine speaks: Supertonic splits the
+    /// requested rate with the DSP stage, and Piper gives all of it to
+    /// <c>length_scale</c> until the model saturates just under 2x.</para>
+    /// </summary>
+    /// <param name="interrupting">
+    /// True for the verbs that replace whatever is playing — <c>read</c> and
+    /// <c>seek</c>. An engine change needs an idle session, and on those paths
+    /// the session is about to be stopped anyway, so it is stopped HERE rather
+    /// than refused: without this, pressing the read key while a Supertonic
+    /// utterance plays would refuse to switch to a Piper voice, which is the
+    /// single most ordinary thing a user can do with two engines installed.
+    /// </param>
+    /// <returns>The options to speak with, or null when <paramref name="refusal"/> says why not.</returns>
+    private SynthesisOptions? PlanUtterance(
+        string? voice, string? language, bool interrupting, out Response? refusal, out string? note)
+    {
+        var plan = _config.Utterance(
+            voice ?? _options.VoiceOverride,
+            language ?? _options.LanguageOverride);
+        note = plan.Note;
+        refusal = null;
+
+        if (_engines is { } engines)
+        {
+            var selection = engines.Select(plan.Synthesis.VoiceId);
+
+            if (selection.NeedsIdle && interrupting)
+            {
+                // The same stop Restart is about to perform, brought forward so
+                // the engine can move before the new utterance is planned. Bounded
+                // the way Restart bounds it, and for the same reason: a wedged
+                // worker must not hold the client's request open forever.
+                _session.Stop();
+                try { _session.Completion.Wait(3000); } catch { /* faulted or cancelled; it is done */ }
+                selection = engines.Select(plan.Synthesis.VoiceId);
+            }
+
+            if (selection.NeedsIdle)
+            {
+                refusal = Refuse($"busy ({_session.State})");
+                return null;
+            }
+
+            if (selection.Error is { } error)
+            {
+                refusal = Response.Fail(error);
+                return null;
+            }
+
+            // The sink follows the model. Nothing in this product resamples, so
+            // this is what makes a 22050 Hz voice play at its own speed rather
+            // than 2x fast on a device opened for Supertonic.
+            if (_sink is { } sink && sink.Retune(selection.SampleRate))
+                Log($"audio: re-tuned to {selection.SampleRate} Hz for {plan.Engine}");
+        }
+
+        _session.Options = _config.SessionOptions with { StretchFactor = plan.StretchFactor };
+        return plan.Synthesis;
+    }
+
+    /// <summary>
     /// Pick up an edited settings.json / pronunciations.json and hand the result
     /// to the session. Cheap: two stats, and a rebuild only when a timestamp
     /// actually moved.
@@ -833,9 +931,10 @@ public sealed class DaemonServer : IDisposable
 
         if (NotReadyToSpeak() is { } refusal) return refusal;
 
-        var options = _config.Synthesis(
-            request.Voice ?? _options.VoiceOverride,
-            request.Language ?? _options.LanguageOverride);
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: true,
+            out var engineRefusal, out var engineNote);
+        if (options is null) return engineRefusal!;
+        notice = Combine(notice, engineNote);
 
         // The notice goes out on BOTH paths, and they are not redundant. The
         // response answers this caller — vst-ctl, which prints to a stderr that
@@ -886,9 +985,9 @@ public sealed class DaemonServer : IDisposable
 
         if (NotReadyToSpeak() is { } refusal) return refusal;
 
-        var options = _config.Synthesis(
-            request.Voice ?? _options.VoiceOverride,
-            request.Language ?? _options.LanguageOverride);
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: true,
+            out var engineRefusal, out _);
+        if (options is null) return engineRefusal!;
 
         if (!_session.Restart(text, options, startOffset: start))
             return Refuse($"busy ({_session.State})");
@@ -1033,9 +1132,10 @@ public sealed class DaemonServer : IDisposable
         // the highlight a second behind the audio for the first chunk.
         _switch?.ReevaluateWhenIdle();
 
-        var options = _config.Synthesis(
-            request.Voice ?? _options.VoiceOverride,
-            request.Language ?? _options.LanguageOverride);
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: false,
+            out var engineRefusal, out var engineNote);
+        if (options is null) return engineRefusal!;
+        notice = Combine(notice, engineNote);
 
         if (!_session.Speak(text, options, notice: notice))
         {

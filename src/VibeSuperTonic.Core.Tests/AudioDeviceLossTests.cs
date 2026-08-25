@@ -42,7 +42,7 @@ public class AudioDeviceLossTests
         // the difference between the FIRST press after a restart working and the
         // second.
         var devices = new List<FakeSink>();
-        var sink = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var sink = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = sink;
 
         Assert.True(sink.TryOpen(out _));
@@ -65,7 +65,7 @@ public class AudioDeviceLossTests
         // request would drop the stream mid-session, cost a reconnect per press,
         // and lose the buffered audio each time.
         var devices = new List<FakeSink>();
-        var sink = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var sink = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = sink;
 
         for (int i = 0; i < 5; i++) Assert.True(sink.TryOpen(out _));
@@ -81,7 +81,7 @@ public class AudioDeviceLossTests
         // both: the first is transient, the second is what the user is told.
         var devices = new List<FakeSink>();
         bool serverUp = true;
-        var sink = new LazyAudioSink(44100, () =>
+        var sink = new LazyAudioSink(44100, _ =>
         {
             if (!serverUp) throw new InvalidOperationException("Connection refused");
             var s = new FakeSink();
@@ -108,7 +108,7 @@ public class AudioDeviceLossTests
     public void A_device_lost_mid_write_ends_that_utterance_and_frees_the_sink()
     {
         var devices = new List<FakeSink>();
-        var sink = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var sink = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = sink;
 
         Assert.True(sink.TryOpen(out _));
@@ -128,7 +128,7 @@ public class AudioDeviceLossTests
     public async Task The_session_reports_an_error_and_returns_to_idle()
     {
         var devices = new List<FakeSink>();
-        var lazy = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var lazy = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = lazy;
         Assert.True(lazy.TryOpen(out _));
 
@@ -158,7 +158,7 @@ public class AudioDeviceLossTests
         // The whole point. One utterance is lost at the moment the audio server
         // restarts; the one after it works, with no restart of anything.
         var devices = new List<FakeSink>();
-        var lazy = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var lazy = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = lazy;
         Assert.True(lazy.TryOpen(out _));
 
@@ -195,7 +195,7 @@ public class AudioDeviceLossTests
         // every scheduled boundary are counted against the old one. Boundaries on
         // the new utterance must be timed from 0, not carried over.
         var devices = new List<FakeSink>();
-        var lazy = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var lazy = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = lazy;
         Assert.True(lazy.TryOpen(out _));
 
@@ -239,7 +239,7 @@ public class AudioDeviceLossTests
         // bug — would be reopened on every attempt, forever, and the log would
         // fill with reconnects that fix nothing.
         var devices = new List<FakeSink>();
-        var sink = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var sink = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = sink;
 
         Assert.True(sink.TryOpen(out _));
@@ -259,7 +259,7 @@ public class AudioDeviceLossTests
         // is what stop IS. Treating it as loss would drop and reopen the device
         // on every single stop, which is the commonest thing the product does.
         var devices = new List<FakeSink>();
-        var sink = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var sink = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = sink;
 
         Assert.True(sink.TryOpen(out _));
@@ -280,7 +280,7 @@ public class AudioDeviceLossTests
         // docked and undocked. Nothing here should degrade with repetition — the
         // count is the only thing that grows.
         var devices = new List<FakeSink>();
-        var lazy = new LazyAudioSink(44100, () => { var s = new FakeSink(); devices.Add(s); return s; });
+        var lazy = new LazyAudioSink(44100, _ => { var s = new FakeSink(); devices.Add(s); return s; });
         using var closing = lazy;
 
         var synth = new FakeSynthesizer();
@@ -326,7 +326,7 @@ public class AudioDeviceLossTests
         // playing.
         var devices = new List<FakeSink>();
         var opens = 0;
-        var sink = new LazyAudioSink(44100, () =>
+        var sink = new LazyAudioSink(44100, _ =>
         {
             Interlocked.Increment(ref opens);
             Thread.Sleep(5);                          // widen the window
@@ -362,7 +362,7 @@ public class AudioDeviceLossTests
         // Shutdown runs while the audio server may already be going away — a
         // logout tears both down at once. Dispose that throws on the way out is
         // the exit-134-and-a-core-file failure this codebase has paid for twice.
-        var sink = new LazyAudioSink(44100, () => new ThrowingOnDispose());
+        var sink = new LazyAudioSink(44100, _ => new ThrowingOnDispose());
         Assert.True(sink.TryOpen(out _));
 
         sink.Dispose();

@@ -58,7 +58,29 @@ if (args.Contains("--version"))
 
 bool noStart = args.Contains("--no-start");
 bool force = args.Contains("--force");
-var positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+
+// --voice takes a value, so its argument has to come out of the positional list
+// as well as the flag itself — otherwise the voice id is spoken as text, which
+// is exactly what happened while this was being written.
+string? voice = null;
+int voiceAt = Array.IndexOf(args, "--voice");
+if (voiceAt >= 0)
+{
+    if (voiceAt + 1 >= args.Length || args[voiceAt + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("--voice needs a voice id, e.g. `--voice en_US-lessac-medium`");
+        return 2;
+    }
+    voice = args[voiceAt + 1];
+}
+
+// -1 for "no --voice", and the guard matters: without it the excluded index is
+// 0, which is the VERB, and every command without --voice fails as "unknown
+// verb: <the text>".
+int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
+var positional = args
+    .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal) && i != voiceValueAt)
+    .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
 // rather than left to positional[0]: an IndexOutOfRangeException out of a
@@ -100,6 +122,11 @@ var request = new Request
         : positional.Length > 1 ? string.Join(' ', positional.Skip(1)) : null,
 
     Offset = seekOffset,
+
+    // Which voice, and therefore which ENGINE: the daemon routes to Piper
+    // exactly when the id names an installed Piper voice, so this one flag is
+    // how a person asks for the other engine. Null means the daemon's default.
+    Voice = voice,
 
     // The session travels with the request, because the daemon may not have one.
     // This process was started by the keybinding, the tray or a shell — all
@@ -300,6 +327,9 @@ static void PrintUsage() =>
           shutdown     stop the daemon; the next hotkey press starts it again
 
         Options:
+          --voice ID   speak with this voice — a Supertonic style (M1) or an
+                       installed Piper voice (en_US-lessac-medium), which also
+                       chooses the engine
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less)
         """);
