@@ -1,6 +1,8 @@
 # Piper as a second engine — plan
 
-Status: **[P0](#p0) passed 2026-08-25 and [P1](#p1) is next — the go/no-go.**
+Status: **[P0](#p0) and [P1](#p1) both passed 2026-08-25. The go/no-go is
+answered: phoneme parity, 327 sentences across 8 languages, zero divergences.**
+Nothing that can kill this project is left; [P2](#p2) onward is ordinary work.
 Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8 and
 0.2.9 shipped, which was the whole of what stood in front of this. What exists is
 [one spike](../spike/piper-render) and this document. **No dependency added and
@@ -102,8 +104,8 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | Phase | State |
 | --- | --- |
 | P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
-| P1 · Phoneme parity | **Next, and it is the go/no-go.** Everything after it is ordinary work. The toolchain is provisioned and both references run |
-| P2 · Measure | Not started. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
+| P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
+| P2 · Measure | **Next.** Nothing blocks it. RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
 | P3 · `PiperSynthesizer` + the options refactor | Not started. Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | Not started. The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
 | P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage lands in [Phase 9](LINUX-PORT-PLAN.md#phase-9). What is left here is the GPL obligations and a second `LICENSE-MODELS` story |
@@ -410,7 +412,11 @@ exactly the same reason.
 
 **This is the project.** Everything else is ordinary engineering.
 
-**Work.** Build espeak-ng and **P/Invoke `espeak_TextToPhonemes` directly** —
+**Work.** Build espeak-ng and **P/Invoke
+`espeak_TextToPhonemesWithTerminator`** — corrected 2026-08-25 from
+`espeak_TextToPhonemes`, which this document named for six days and which
+discards the very thing the rest of this section is about; see
+[the record](#p1-landed) —
 the [licence decision](#decisions) removed the sidecar, so there is no process to
 launch, no protocol to design and no serialisation to get wrong. Read upstream's
 `espeakbridge` C extension anyway: it is ~200 lines and it is the specification
@@ -441,6 +447,66 @@ hundred sentences across several languages, and pin it as a test.
 phoneme set these voices were trained on. The `phoneme_type: "text"` voices are a
 handful, and Misaki / openphonemize target different models entirely. A partial
 pass is not a pass — see [trap 1](#traps).
+
+<a name="p1-landed"></a>
+
+#### It passed — 2026-08-25
+
+**327 sentences, 8 languages, zero divergences.**
+[spike/piper-phonemes](../spike/piper-phonemes) P/Invokes our own espeak-ng and
+assembles ids exactly as piper does, and the ids agree everywhere. The corpus and
+piper's expected output are **committed**, so re-checking the number needs no
+Python and no network — the exit criterion asked for a test in the repository
+rather than a session's transcript, and that is what a committed fixture buys.
+
+**Two things the plan had wrong, and both would have shipped working-looking
+code.**
+
+- **The function is `espeak_TextToPhonemesWithTerminator`, not
+  `espeak_TextToPhonemes`.** This document named the plain one for six days. It
+  returns phonemes and discards the clause terminator — so nothing can tell
+  whether a clause ended a sentence, every input collapses to a single sentence,
+  and the trailing punctuation the model was *trained on* never reaches it. The
+  audio would have been fluent and wrong.
+- **It does not exist at the 1.52.0 release.** Piper pins commit `724808c5` —
+  `1.52.0-229-g724808c5` — and the function is one of those 229 commits. A build
+  from the tag compiles, links, phonemises, and is missing the API. So the pin is
+  a commit and [the build script](../spike/piper-phonemes/build-espeak.sh)
+  asserts the symbol is exported rather than trusting a version number.
+
+**A third thing, found by building rather than by reading: GCC 15 raises the
+glibc floor to 2.38.** Its default is C23, under which plain `sscanf` and
+`strtol` bind to `__isoc23_sscanf` and `__isoc23_strtol`, symbols that appeared
+in glibc 2.38. The library runs on the build machine and tells a user on Ubuntu
+22.04 that `GLIBC_2.38` was not found. `-std=gnu17` puts the floor back to
+**2.33**, under the 2.34 [the packer asserts](LINUX-PORT-PLAN.md#glibc-floor).
+Measured both ways. This is exactly the failure that assertion was written for —
+*"the floor belongs to the toolchain rather than to this repository, it can rise
+under a distro upgrade with every test still green"* — arriving, as predicted,
+through something other than our own code.
+
+**The negative control is the part to keep.** A parity run that passes proves
+nothing unless the same harness can be made to fail, so `--negative-control`
+runs the corpus once per deliberate sabotage and requires every one to diverge.
+It **found a hole on its first run**: `SkipLanguageStrip` diverged on *zero*
+sentences, meaning the corpus never triggered a `(lang)` marker and that line of
+production code could have been deleted with every test still green.
+
+The reason is worth carrying into P4's catalog work: the corpus was full of
+obvious loanwords — *Schadenfreude*, *boeuf bourguignon*, *Volkswagen* — and an
+English voice switches for **none** of them, because English's espeak dictionary
+has no `_^_` entries at all. The switch runs the other way. German and Dutch flag
+borrowed *English* words, so it takes a German sentence containing "Account" to
+emit `(en)ɐkˈaʊnt(de)`. This document has now recorded
+[the vacuous guard](LINUX-PORT-PLAN.md#traps) five times and this is the first
+time a control was built *before* the pass was believed rather than after.
+
+**What is still owed**, stated rather than glossed: the comparison is a console
+program in the repository, and CI compiles it but does not run it, because the
+espeak-ng library is not a build artifact yet. That is [P5](#p5)'s job, and until
+it lands the number is reproducible by hand rather than continuously. It is a
+gap, not a skip — a silent CI skip is the thing this phase spent its negative
+control refusing to build.
 
 <a name="p2"></a>
 

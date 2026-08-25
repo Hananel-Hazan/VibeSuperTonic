@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase P1 of docs/PIPER-PLAN.md - the go/no-go. Diffs our P/Invoked
+    espeak-ng phonemisation against piper's, over the committed corpus.
+
+    NO PACKAGE REFERENCES, deliberately. The whole claim of this phase is that
+    phonemisation costs one shared library and no managed dependency; a wrapper
+    package here would make that claim untestable.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- LibraryImport source generation requires it; no unsafe code is written here. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>vst-piper-phonemes</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Spike.PiperPhonemes</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+</Project>
