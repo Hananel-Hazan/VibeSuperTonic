@@ -82,9 +82,44 @@ fi
 
 printf '\n\033[36m>>> Binding the keys\033[0m\n'
 
+# WHAT THE KEYS RAN BEFORE, read before vst_bind overwrites it.
+#
+# Plasma keeps a shortcut against a .desktop id and launches the action's Exec.
+# Rewriting that Exec does not reach a kglobalaccel that is already running, so
+# for the rest of the session a press keeps launching the OLD command — and if
+# that command was a tarball's vst-ctl which this upgrade has just moved aside,
+# every press reports "Could not find the program" until the next login. Found
+# by doing exactly that upgrade on the development machine.
+desktop="$HOME/.local/share/applications/vibesupertonic.desktop"
+previous=""
+if [[ -f "$desktop" ]]; then
+    previous="$(awk -F= '/^Exec=.*vst-ctl (read|toggle)$/ { split($2, a, " "); print a[1]; exit }' "$desktop")"
+fi
+
 # The window is inside the image, so the menu entry has to launch the image.
 export VST_KB_UI_COMMAND="$APPIMAGE"
 
 # shellcheck source=/dev/null
 source "$here/keybindings.sh"
 vst_bind "$bindir"
+status=$?
+
+if [[ -n "$previous" && "$previous" != "$bindir/vst-ctl" ]]; then
+    printf '\n'
+    if [[ ! -e "$previous" && -d "$(dirname "$previous")" ]]; then
+        # A link rather than a copy: it is obviously a shim, it cannot go stale,
+        # and vst-ctl resolves its own directory through /proc/self/exe, so the
+        # sidecar naming the AppImage is still found through it.
+        if ln -sfn "$bindir/vst-ctl" "$previous" 2>/dev/null; then
+            info "your keys were bound to $previous, which this upgrade moved."
+            info "Linked it to the new client so presses keep working before you log out."
+            info "Safe to delete after the next login."
+        fi
+    else
+        warn "your keys were bound to $previous."
+        warn "KDE may keep launching that until you log out. If a press says"
+        warn "\"Could not find the program\", log out and back in."
+    fi
+fi
+
+exit $status
