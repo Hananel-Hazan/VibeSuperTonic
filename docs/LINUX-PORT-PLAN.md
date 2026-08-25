@@ -2938,6 +2938,44 @@ the same reason — [see above](#appimage-store). It says what the tarball's
 `INSTALL.txt` says, plus the runtime process, and that `shutdown` against nothing
 is a success so it is always safe to type.
 
+<a name="portable-home-verified"></a>
+
+#### 0.2.10, and verifying the artifact rather than a copy of it — 2026-08-25
+
+The portable-home fix shipped as **0.2.10**, both artifacts, and was then
+exercised end to end rather than reasoned about — which is the whole reason this
+section exists, because the first attempt verified the wrong thing.
+
+**How it was tested without touching the machine's own desktop.** A scratch
+AppImage beside its own `.home`, a `getent` stub earlier on `PATH` so the "real
+home" the script recovers is a scratch directory, and `VST_KB_DRY_RUN=1` for the
+writes. The run does what the fix claims: the client lands *inside* the portable
+home, `kglobalshortcutsrc` and the launcher `.desktop` go to the real home, and
+the `.desktop` actions point back at the portable client. Re-run without the dry
+run but with `XDG_CONFIG_HOME` and `XDG_DATA_HOME` aimed at scratch directories,
+both files appear there and **nothing under `~/.config` is written** — which is
+the last unproven link, since `kwriteconfig6 --file kglobalshortcutsrc` resolves
+that bare name through `$XDG_CONFIG_HOME` and the fix is nothing but those two
+variables.
+
+Then the real install, `~/Apps/VibeSuperTonic`, which is exactly this
+arrangement: upgraded to 0.2.10 with the old image kept beside it as a rollback,
+`--ensure-client` replaced the 0.2.9 client, and a cold press acknowledged in
+**0.575 s** with the store still resolving to the same 762 MB directory. The
+`config` note now describes the portable home instead of warning about it.
+
+**And the bug that packing found in the packer's own change.** The `--help` text
+[above](#appimage-store) truncated in the shipped image, six lines short, because
+the `-h` line range had been widened by a `sed -i` addressed to a line number
+that a preceding edit had already moved — it matched nothing and said so to
+nobody. What made it survive review is worse than the slip: the verification that
+"passed" ran against an extracted *copy* of the heredoc rather than against the
+image, so it confirmed the intent and never met the artifact. That is
+[trap 15](#traps)'s vacuous guard for the fourth time in this document, in the
+one form it keeps taking — **a check that reads something other than the thing
+being shipped**. Caught by running `--help` on the real `.AppImage`, which is
+now what the check does.
+
 <a name="appimage-untested"></a>
 
 #### What was not tested, and why

@@ -131,6 +131,19 @@ that fails on a URL.
 > `phoneme_id_map` of 154 entries. Re-take it rather than trust it if this line
 > is more than a month old.
 
+> **The machine is provisioned, 2026-08-25 — both references are live.**
+> `espeak-ng` **1.52.0** with `libespeak-ng-dev`, from Ubuntu 26.04's own
+> packages, so [P1](#p1) can P/Invoke `espeak_TextToPhonemes` against a real
+> `.so` on day one and `espeak-ng -q --ipa` captures the array [P0](#p0)
+> hardcodes. `python -m piper` runs from a venv at `~/.venvs/piper` on Python
+> 3.14 — that is the *reference* P1 diffs against and there is no substitute for
+> it. `cmake`, `autoconf`, `automake`, `libtool`, `libsonic-dev` and
+> `libpcaudio-dev` are in for the source build [P5](#p5) needs regardless: the
+> GPL obligation is to offer the exact source *we* built and ship our own
+> `libespeak-ng.so` inside the AppImage, and a distro package discharges
+> neither. **A distro `libespeak-ng` is fine for measuring and cannot be what
+> ships.**
+
 **And do not start before 0.2.9 has shipped.** ~~The per-voice store is a
 directory under the models root, and [Phase 9](LINUX-PORT-PLAN.md#phase-9) is the
 phase that decides where the models root *is* when the product is an AppImage.~~
