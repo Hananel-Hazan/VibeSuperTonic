@@ -68,8 +68,8 @@ directory is decided.
 | **Linux first; Windows adoption stays design-only** — 2026-08-24, by the user | Unchanged in substance from *one seam, both platforms* above, and narrowed in scope: `PiperSynthesizer` is still written once against `ISynthesizer` with no Linux-only types, and the catalog still lives in Core — but the SAPI token work in [P4](#p4) is not done this round. What we owe Windows now is that adopting it later is *additive*, not a rewrite |
 | **`SynthesisOptions` is a closed hierarchy, one record per engine** — 2026-08-25, in [P3](#p3-landed) | A base carrying what is genuinely shared and a sealed record per engine, rather than one flat record with both engines' fields or one with two nullable payloads. An utterance is *for* an engine; that is the fact the type states. Shared: `VoiceId` — every engine has voices, and it is also what selects the engine — and `SilenceSeconds`, because both engines split a chunk internally and both have to put something between the pieces. **Not** shared: language, because a Piper voice *is* a language and asking it for another is not a thing that can be honoured |
 | **The voice selects the engine. There is no `Engine` setting** — 2026-08-25, in [P3](#p3-landed) | A voice belongs to exactly one engine, so a setting that could disagree with the voice is a setting that eventually will. An id naming a directory under `models/piper/` is a Piper voice; everything else is a Supertonic style. One rule, and `DefaultVoice`, `vst-ctl speak --voice` and the [Voices tab](#ui) all obey it |
-| **`length_scale` is calibrated per voice, measured under the voice's own noise** — 2026-08-25, in [P3](#p3-landed) | Not per tier and not a shipped table: [the measurements](#p3-calibration) show cross-applying one voice's curve costs up to **16.8%**, and the tier explains none of it. Measured with the voice's real `noise_scale` and `noise_w` and averaged over four renders, because `noise_w` is noise on the *duration predictor* and a curve measured with it off describes a render the product never performs — 6.4% worst error that way against **2.4%** this way |
-| **Development binds the espeak-ng we build, never the distro's** — 2026-08-25, in [P3](#p3-landed) | And the reason is not the licence. `espeak_TextToPhonemesWithTerminator` **does not exist at the 1.52.0 tag Ubuntu ships**, so binding whatever the loader finds gives a working-looking product with every input collapsed to one sentence and the trailing punctuation the models were trained on missing. [EspeakLibrary](../src/VibeSuperTonic.Piper/EspeakLibrary.cs) probes `VST_ESPEAK_LIB`, then `espeak/` beside the executable — where [P5](#p5) ships ours — then the loader path, and the daemon logs which answered |
+| **`length_scale` is calibrated per voice, measured under the voice's own noise, and anchored at the voice's own default** — 2026-08-25, in [P3](#p3-landed) | Not per tier and not a shipped table: [the measurements](#p3-calibration) show cross-applying one voice's curve costs up to **16.8%**, and the tier explains none of it. Measured with the voice's real `noise_scale` and `noise_w` and averaged over four renders, because `noise_w` is noise on the *duration predictor* and a curve measured with it off describes a render the product never performs — 6.4% worst error that way against **2.8%** this way. And **1.0× means the voice's own `inference.length_scale`**, which is not always 1.0: `en_GB-vctk-medium` ships 1.4 |
+| **Development binds the espeak-ng we build, and the loader path is a convenience that cannot be relied on** — 2026-08-25, in [P3](#p3-landed) | `espeak_TextToPhonemesWithTerminator` does not exist at the 1.52.0 **tag**; it exists at the commit piper pins. Without it every input collapses to one sentence and the trailing punctuation the models were trained on is absent — a working-looking product with subtly wrong prosody. **A distro package may or may not have it and the version string does not say**: measured, Ubuntu 26.04's `libespeak-ng1` reports `1.52.0+dfsg-5build1` and *does* export it, and a full utterance rendered through it cleanly; Debian 12 ships 1.51, which does not. So [EspeakLibrary](../src/VibeSuperTonic.Piper/EspeakLibrary.cs) probes `VST_ESPEAK_LIB`, then `espeak/` beside the executable (where [P5](#p5) ships ours), then the loader path — and **asks the library it bound whether the symbol is there**, so the machine without it gets a sentence rather than an `EntryPointNotFoundException` from inside a P/Invoke |
 
 ---
 
@@ -118,7 +118,7 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
 | P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
 | P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed) — RTF, cold load and resident set per voice, one process per row — and [the listening verdict](#speed-verdict): no quality ceiling at any rate, by either mechanism. It ended up settling the speed question rather than the licence one, which was [settled ahead of it](#decisions), and it handed [three items forward](#p3-inbox) |
-| P3 · `PiperSynthesizer` + the options refactor | **Done 2026-08-25.** All five exit criteria met and verified on hardware — a Piper voice speaks through the daemon, the sink re-tunes between utterances, and a requested rate lands within 2.4%. [The record](#p3-landed) |
+| P3 · `PiperSynthesizer` + the options refactor | **Done 2026-08-25.** All five exit criteria met and verified on hardware — a Piper voice speaks through the daemon, the sink re-tunes between utterances, and a requested rate lands within 2.8%. [The record](#p3-landed), and [what it left open](#p3-open) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | **Next — [start here](#next).** The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
 | P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage shipped 2026-08-24, building from the tarball's own tree — so this phase edits one packer and inherits the other. What is left is the GPL obligations, a second `LICENSE-MODELS` story, two more packer assertions, and **moving [build-espeak.sh](../spike/piper-phonemes/build-espeak.sh) out of the spike into `build/`** — it is a script now rather than a command line, which P1 fixed, but it lives where a release run does not look. [What P3 left it](#p3-owes-p5) |
 
@@ -126,14 +126,16 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 
 ### What to do next, in order
 
-**Start at [P4](#p4).** Read, in this order: [what P3 left it](#p3-owes-p4), the
+**Start at [P4](#p4).** Read, in this order: [what P3 left open](#p3-open) — eight
+items, none of them blocking, two of them commitments that will not fix
+themselves — then [what P3 left P4 specifically](#p3-owes-p4), the
 [decisions](#decisions) it implements — the curated hash-pinned catalog and the
 highest-tier default are both settled — then [P4](#p4) itself. The first thing to
 settle is *which* thirty voices, and it is a product answer made once, with each
 `MODEL_CARD` read ([trap 7](#traps)).
 
-**The state of the tree as P4 opens, verified 2026-08-25:** clean, **1021 tests
-green** (994 Core + 27 Daemon), `0.2.10` shipped as both Linux artifacts, and a
+**The state of the tree as P4 opens, verified 2026-08-25:** clean, **1027 tests
+green** (996 Core + 31 Daemon), `0.2.10` shipped as both Linux artifacts, and a
 second engine that speaks. Installing a Piper voice is still a hand operation —
 three files into `models/piper/<id>/` — and turning that into a download is
 exactly what P4 is.
@@ -868,14 +870,14 @@ curve in [Core](../src/VibeSuperTonic.Core/Synthesis/Piper); `Retune` on
 [LazyAudioSink](../src/VibeSuperTonic.Core/Audio/LazyAudioSink.cs); and
 [EngineRoutingSynthesizer](../src/VibeSuperTonic.Daemon/EngineRoutingSynthesizer.cs)
 plus [PiperVoiceStore](../src/VibeSuperTonic.Daemon/PiperVoiceStore.cs) in the
-daemon. **No new package reference on either platform.** 1021 tests green — 994
-Core, 27 Daemon — against 969 when the phase opened.
+daemon. **No new package reference on either platform.** 1027 tests green — 996
+Core, 31 Daemon — against 969 when the phase opened.
 
 | Exit criterion | How it was met |
 | --- | --- |
 | A Piper voice speaks through the product | One daemon, both engines, verified on this machine — through `vst-ctl read`, which is what the hotkey binding invokes, on an isolated socket so the user's own running daemon was never touched. **A physical key press bound to this build is not part of what was verified**; the path from `vst-ctl` inwards is. `engine: supertonic -> piper 'en_US-lessac-medium', 22050 Hz` then `audio: re-tuned to 22050 Hz for piper`, and back again for `M1`. Supertonic is still the default, and it spoke first in that same run. Its path is unchanged by construction rather than by measurement: the stretch now takes as an argument the 44100 it used to hold as a constant, and the grip floor evaluates to the same 4096 at that rate |
 | `SynthesisOptions` carries both engines | A closed hierarchy, one sealed record per engine, [written down as a decision](#decisions) with the two shapes that were rejected and why |
-| A requested rate lands within a stated tolerance | **±5%, and 2.4% measured** across five voices at 1.0×, 1.35×, 1.6×, 0.9× and 1.9× — [the numbers](#p3-calibration) |
+| A requested rate lands within a stated tolerance | **±5% stated, 2.8% worst measured** across six voices at 1.0×, 1.35×, 1.6×, 0.9× and 1.9×, over two full runs — [the numbers](#p3-calibration) |
 | The sink re-tunes between utterances, never inside one | A request for the other engine arriving mid-utterance was refused with `busy (Speaking)` while the utterance in progress ran to completion: Started, 26 word boundaries, one sentence boundary, Finished, **no `Error` event and no re-tune line in between**. Same method [8b](LINUX-PORT-PLAN.md#phase-8b-landed) used for the provider switch |
 | Windows green and unchanged | `VibeSuperTonic.Engine` compiles clean against the new `TimeStretch` signature and the new options hierarchy; no Linux-only type reaches Core, and the three `SapiEngine` call sites pass the engine's own 44100 constant. **Compiled with `EnableComHosting=false`, which is as far as that project builds off Windows** — the COM host step needs a Windows SDK, so a real TestHarness run on hardware is still owed before anything ships |
 
@@ -912,24 +914,29 @@ The daemon measures the voice's curve on its next start and writes
 
 #### The calibration, and the question P2 handed forward
 
-**Per voice. Not per tier, and not a table we ship.** Measured on five voices —
+**Per voice. Not per tier, and not a table we ship.** Measured on six voices —
 `en_US-lessac-medium`, `en_US-lessac-high`, `en_US-ryan-medium`,
-`en_GB-alba-medium`, `de_DE-thorsten-medium` — through the product's own path,
-not a spike's copy of it.
+`en_GB-alba-medium`, `de_DE-thorsten-medium` and `en_GB-vctk-medium` (109
+speakers, and the one that found a defect) — through the product's own path, not
+a spike's copy of it.
 
 Each voice's wall, and the `length_scale` its curve asks for at three rates —
 from the shipped configuration, so these are the numbers the product produces:
 
-| Voice | Tier | wall | 1.0× | 1.35× | 1.6× | delivered at 1.6× |
+| Voice | Tier | ships `length_scale` | wall | needs at 1.35× | at 1.6× | delivered at 1.6× |
 | --- | --- | --- | --- | --- | --- | --- |
-| `en_US-lessac-medium` | medium | 2.18× | 1.000 | 0.656 | 0.478 | 1.586× |
-| `en_US-lessac-high` | high | 2.23× | 1.000 | 0.640 | 0.497 | 1.584× |
-| `en_US-ryan-medium` | medium | 1.89× | 1.000 | 0.635 | 0.402 | 1.620× |
-| `en_GB-alba-medium` | medium | 2.20× | 1.000 | 0.660 | 0.476 | 1.604× |
-| `de_DE-thorsten-medium` | medium | 2.07× | 1.000 | 0.656 | 0.460 | 1.588× |
+| `en_US-lessac-medium` | medium | 1.0 | 2.14× | 0.659 | 0.468 | 1.587× |
+| `en_US-lessac-high` | high | 1.0 | 2.21× | 0.634 | 0.478 | 1.628× |
+| `en_US-ryan-medium` | medium | 1.0 | 1.90× | 0.643 | 0.425 | 1.582× |
+| `en_GB-alba-medium` | medium | 1.0 | 2.20× | 0.663 | 0.486 | 1.607× |
+| `de_DE-thorsten-medium` | medium | 1.0 | 2.06× | 0.656 | 0.460 | 1.605× |
+| `en_GB-vctk-medium` | medium | **1.4** | 1.84× | 0.781 | 0.522 | 1.603× |
 
-The reciprocal upstream passes for 1.6× is 0.625. Every voice needs a
-substantially smaller number than that, and no two need the same one.
+The reciprocal upstream passes for 1.6× is the voice's `length_scale` over 1.6.
+Every voice needs a substantially smaller number than that, and no two need the
+same one. **The wall is a multiple of the voice's own speed**, so vctk's 1.84×
+is measured against a voice that is already slow — and its `length_scale` column
+looks unlike the others for the same reason.
 
 **Driving one voice with another's curve costs 1.7% to 16.8%** — measured on the
 deterministic curves, where the comparison is not muddied by sampling noise — and
@@ -954,11 +961,25 @@ the background at daemon start rather than on the first press, and until the fil
 exists the rate is planned with upstream's reciprocal — up to 20% out — with the
 utterance carrying a note that says so.
 
-**The tolerance is ±5%.** Verified through the product, 12 renders per rate,
-five voices × five rates: worst **2.4%**, at `en_GB-alba-medium` at 1.35×. The
-uncalibrated reciprocal is 13% out at 1.6× and 20% at 2×.
+**The tolerance is ±5%, and the worst measured is 2.8%.** Verified through the
+product, 12 renders per rate, six voices × five rates, twice: the two runs put
+the worst case at **1.7%** and **2.8%** — both calibration and verification
+render with the voice's noise on, so the number moves a point or two between
+runs and the honest figure is the larger one. The uncalibrated reciprocal is 13%
+out at 1.6× and 20% at 2×, and it is a *bias* rather than a spread.
 
-Two things cost a measurement run each, and both are now tests:
+**And the sixth voice found a defect the first five could not.**
+`en_GB-vctk-medium` ships `inference.length_scale` **1.4** — its natural speed is
+40% slower than `length_scale` 1.0 — where all five voices measured before it
+ship 1.0. Against a ladder of *absolute* `length_scale` values it verified at a
+uniform **18.7% error at every rate, including 1.0×**, and a constant offset at
+every rate cannot be a curve problem: it is the anchor. A voice's natural speed
+is its own default, so "no speed change" has to return that default, and the
+ladder has to be rungs *relative* to it. Fixed, and vctk now verifies like every
+other voice. The general shape is worth keeping: **a defect invisible in five
+samples because all five shared a value nobody thought to vary.**
+
+Three things cost a measurement run each, and all three are now tests:
 
 - **A flat pair mid-curve is not the wall.** With the coarse ladder P2 used, two
   rungs rendering identically only happens at saturation, so stopping there
@@ -971,6 +992,27 @@ Two things cost a measurement run each, and both are now tests:
   about voices — it is a bracket search with an inverted comparison, walking off
   the end of the table and extrapolating. Corrected, the same run says 1.7-16.8%,
   which is the finding.
+- **The anchor, above.** A uniform error at every rate including 1.0× is never
+  the curve.
+
+<a name="p3-open"></a>
+
+#### What P3 left open — read this before starting P4
+
+Eight things. **None blocks [P4](#p4)**, and the two marked ⚠ are commitments
+made rather than work deferred: they will not fix themselves and nothing in the
+product currently fails because of them.
+
+| Open | Owner | Why it is not a blocker |
+| --- | --- | --- |
+| ⚠ **The Windows build has never been run, only compiled.** `VibeSuperTonic.Engine` compiles clean against the new `TimeStretch` signature and the new options hierarchy with `EnableComHosting=false`, which is as far as that project builds on Linux. **A TestHarness run on real Windows hardware is owed before anything ships**, and it is the same bar [the 2026-08-17 check](LINUX-PORT-PLAN.md#windows-check) set | Whoever ships next, before the pack | Nothing Windows-side changed behaviourally: the three `SapiEngine` call sites pass the engine's own 44100 constant, and the grip floor evaluates to the same 4096 at that rate |
+| ⚠ **espeak-ng is bound from a developer path.** `VST_ESPEAK_LIB` and `VST_ESPEAK_DATA` are how a Piper voice works today. Without them the loader path answers, which on Ubuntu 26.04 happens to work — [and cannot be relied on](#decisions) | [P5](#p5) | The probe already looks for `espeak/` beside the executable, so P5 composes a directory rather than changing code. The daemon logs which library answered |
+| **The Piper session is always CPU.** [P2](#p2-landed) measured CUDA buying the `high` tier 399 → 116 ms and the `medium` tier only 72 → 61 ms for 350 MB of resident set, so the provider is worth choosing per tier. Today `Program` builds every Piper session on the CPU with the Supertonic decision's thread count | P4 or later | It is a speed choice, not a correctness one, and 8b's machinery — `ExecutionDecision`, the battery rule, `vst-ctl benchmark` — already exists to make it. Wiring it before the catalog exists would be choosing a provider per tier with one voice installed |
+| **`vst-ctl benchmark` measures Supertonic only.** The sweep builds `OrtSynthesizer` directly and plans with `SupertonicOptions` | P4 or later | It measures what it says it measures. A Piper sweep is the same shape and wants the provider question above answered first |
+| **Multi-speaker voices always render speaker 0.** `en_GB-vctk-medium` has 109 of them; the `sid` tensor is fed and the render is correct, but nothing can choose | [P4](#p4) | A voice with 109 speakers needs a picker, and the picker belongs with the [Voices tab](#ui). `PiperOptions.SpeakerId` is already on the wire |
+| **Nothing lists the installed voices.** `vst-ctl --voice` speaks with one, `PiperVoiceStore.Voices` enumerates them, and no verb or tab shows them | [P4](#p4) | It is the tab P4 is |
+| **A `high` voice costs ~41 s of calibration** at first use, in the background, while the rate is served by the reciprocal | [P4](#p4) | It runs off the press path and says so in the log and in the utterance's notice. P4 knows when a voice was just installed, which is a better moment |
+| **`status` reports the Supertonic session's provider even while Piper renders.** The new `Engine` field says which engine would speak; `Inference` still describes the switcher | P4, with the UI | Adding a second inference string is a display decision, and the field that was actually misleading — "which engine" — is answered now |
 
 <a name="p3-owes-p4"></a>
 

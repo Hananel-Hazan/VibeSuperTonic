@@ -122,6 +122,41 @@ public class PiperRateTests
     }
 
     [Fact]
+    public void One_times_means_the_voices_own_speed_not_length_scale_one()
+    {
+        // THIS IS A DEFECT THE SIXTH VOICE FOUND. en_GB-vctk-medium ships
+        // inference.length_scale 1.4 — its natural speed is 40% slower than
+        // length_scale 1.0 — and the five voices measured before it all shipped
+        // 1.0, so an absolute ladder looked correct. Against vctk it produced a
+        // uniform 18.7% error at EVERY rate including 1.0x, which cannot be a
+        // curve problem: it is the anchor.
+        const float voiceDefault = 1.4f;
+
+        var curve = PiperCalibrator.Measure(
+            scale => SaturatingSeconds(scale / voiceDefault),   // the model, expressed in this voice's terms
+            DateTimeOffset.UnixEpoch,
+            voiceDefault);
+
+        // Asking for no speed change returns the voice's own length_scale, so
+        // the voice sounds the way upstream meant it to.
+        Assert.Equal(voiceDefault, curve.Plan(1.0).LengthScale, 3);
+
+        // And every other rate is relative to that, not to 1.0.
+        Assert.True(curve.Plan(1.35).LengthScale < voiceDefault);
+        Assert.True(curve.Plan(0.9).LengthScale > voiceDefault);
+    }
+
+    [Fact]
+    public void The_uncalibrated_fallback_is_anchored_the_same_way()
+    {
+        // Or an unmeasured vctk speaks 40% faster than an unmeasured lessac at
+        // the same setting — which is worse than the 20% the fallback already
+        // costs, and would not look like a rate bug at all.
+        Assert.Equal(1.4f, PiperRateCalibration.Reciprocal(1.0, 1.4f).LengthScale, 3);
+        Assert.Equal(0.875f, PiperRateCalibration.Reciprocal(1.6, 1.4f).LengthScale, 3);
+    }
+
+    [Fact]
     public void A_probe_that_renders_nothing_is_an_error_rather_than_a_curve()
     {
         Assert.Throws<InvalidOperationException>(

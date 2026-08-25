@@ -50,7 +50,8 @@ public static class Calibrate
                 scale => repeats > 0
                     ? Average(synth, name, scale, synth.Voice, repeats)
                     : Seconds(synth, name, scale),
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                synth.Voice.LengthScale);
             sw.Stop();
 
             curves.Add((name, synth.Voice.Quality, curve));

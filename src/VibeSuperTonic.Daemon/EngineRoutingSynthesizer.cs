@@ -190,7 +190,10 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
                 var voice = piper.Voice;
                 var curve = PiperCalibrator.Measure(
                     scale => AverageSeconds(piper, voiceId, voice, scale),
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow,
+                    // 1.0x means THIS VOICE's own speed, not length_scale 1.0.
+                    // en_GB-vctk-medium ships 1.4 and the difference is 16%.
+                    voice.LengthScale);
 
                 if (curve.TrySave(path, out string? error))
                     _log($"calibrate: '{voiceId}' delivers up to {curve.MaxRate:F2}x, " +

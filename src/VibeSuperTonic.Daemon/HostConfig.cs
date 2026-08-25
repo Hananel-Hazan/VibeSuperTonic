@@ -371,7 +371,7 @@ public sealed class HostConfig
         {
             var calibration = PiperVoices.Calibration(voiceId);
             var plan = calibration?.Plan(_requestedRate)
-                       ?? PiperRateCalibration.Reciprocal(_requestedRate);
+                       ?? PiperRateCalibration.Reciprocal(_requestedRate, piperVoice.LengthScale);
 
             var options = new PiperOptions(
                 voiceId,

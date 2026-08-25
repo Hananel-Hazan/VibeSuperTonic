@@ -25,7 +25,8 @@ namespace VibeSuperTonic.Piper;
 /// sentence, and the trailing punctuation piper feeds the model as a phoneme is
 /// simply absent. It is also newer than the 1.52.0 release: it exists at the
 /// commit piper pins and not at the tag, which is
-/// <see cref="EspeakLibrary"/>'s whole reason for existing.</para>
+/// <see cref="EspeakLibrary"/>'s whole reason for existing — and why the
+/// constructor asks whether the library it just bound actually exports it.</para>
 ///
 /// <para><b>Not thread-safe, and it cannot be made so.</b> espeak-ng keeps the
 /// selected voice and the clause cursor in process-global state, so two
@@ -95,6 +96,12 @@ public sealed partial class EspeakPhonemizer : IPhonemizer, IDisposable
     public EspeakPhonemizer(EspeakLibrary.Resolution resolution)
     {
         EspeakLibrary.Bind(resolution);
+
+        // Before anything is initialised, because the alternative is an
+        // EntryPointNotFoundException out of a P/Invoke on the render thread —
+        // which reaches the user as a press that produced no sound.
+        if (EspeakLibrary.MissingTerminatorExport(resolution) is { } why)
+            throw new InvalidOperationException(why);
 
         lock (InitGate)
         {

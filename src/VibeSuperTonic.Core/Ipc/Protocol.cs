@@ -283,6 +283,13 @@ public sealed record Response
 /// wondering why the first press was slow deserves an answer.
 /// </param>
 /// <param name="Voice">Configured default voice.</param>
+/// <param name="Engine">
+/// Which engine would speak the current voice — "supertonic" or "piper" — or
+/// null from a daemon that has only one. Reported because <c>Inference</c>
+/// describes the SUPERTONIC session's provider and thread count, which is not
+/// what renders while a Piper voice is selected; without this field a status
+/// line reads as if it were.
+/// </param>
 /// <param name="Language">Configured default language.</param>
 /// <param name="Version">Daemon version, so a stale client is diagnosable.</param>
 /// <param name="Text">
@@ -311,7 +318,8 @@ public sealed record StatusPayload(
     int? SourceOffset = null,
     int? SourceLength = null,
     string? Tray = null,
-    string? Inference = null);
+    string? Inference = null,
+    string? Engine = null);
 
 /// <summary>
 /// Where this instance reads its configuration, and what it made of it.

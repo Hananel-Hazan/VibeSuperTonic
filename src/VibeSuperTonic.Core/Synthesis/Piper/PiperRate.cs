@@ -89,13 +89,20 @@ public sealed class PiperRateCalibration
     }
 
     /// <summary>
-    /// What upstream does: pass the reciprocal and hope. The fallback for a voice
-    /// that has not been measured yet, and it is <b>wrong by up to 20%</b> — it
-    /// exists so that an unmeasured voice speaks rather than refuses, and the
-    /// daemon says which it used.
+    /// What upstream does: scale the voice's own <c>length_scale</c> by the
+    /// reciprocal of the rate, and hope. The fallback for a voice that has not
+    /// been measured yet, and it is <b>wrong by up to 20%</b> — it exists so that
+    /// an unmeasured voice speaks rather than refuses, and the daemon says which
+    /// it used.
     /// </summary>
-    public static PiperRatePlan Reciprocal(double requestedRate) =>
-        new((float)(1.0 / Math.Clamp(requestedRate, 0.1, 10.0)), 1.0);
+    /// <param name="defaultLengthScale">
+    /// The voice's own <c>inference.length_scale</c>. <b>Not always 1.0</b>:
+    /// <c>en_GB-vctk-medium</c> ships 1.4, and treating that voice's natural
+    /// speed as 1.0 makes "no speed change" 16% faster than the voice was meant
+    /// to sound.
+    /// </param>
+    public static PiperRatePlan Reciprocal(double requestedRate, float defaultLengthScale = 1.0f) =>
+        new((float)(defaultLengthScale / Math.Clamp(requestedRate, 0.1, 10.0)), 1.0);
 
     /// <summary>
     /// The <c>length_scale</c> that delivers <paramref name="requestedRate"/>,
@@ -221,10 +228,20 @@ public static class PiperCalibrator
         "Pack my box with five dozen liquor jugs.";
 
     /// <summary>
-    /// Descending, and it goes well past the wall on purpose: the saturation
-    /// point is found rather than assumed, because it differs per voice
-    /// (~1.97x for lessac high, ~1.88x for medium) and a hardcoded one would be
-    /// wrong for the first voice nobody measured.
+    /// Rungs <b>relative to the voice's own <c>length_scale</c></b>, descending,
+    /// going well past the wall on purpose: the saturation point is found rather
+    /// than assumed, because it differs per voice — 1.55x for
+    /// <c>en_GB-vctk-medium</c> against 2.23x for <c>en_US-lessac-high</c> — and
+    /// a hardcoded one would be wrong for the first voice nobody measured.
+    ///
+    /// <para><b>Relative, and that was a defect.</b> These were absolute
+    /// <c>length_scale</c> values, which is the same thing for every voice whose
+    /// <c>inference.length_scale</c> is 1.0 — and the five voices measured while
+    /// this was written all were. <c>en_GB-vctk-medium</c> ships <b>1.4</b>, and
+    /// against an absolute ladder it measured a uniform 18.7% error at every
+    /// rate INCLUDING 1.0x, which cannot be a curve problem: the voice's natural
+    /// speed is its own default, and anchoring 1.0x anywhere else makes "no speed
+    /// change" a speed change.</para>
     /// </summary>
     public static readonly IReadOnlyList<float> Ladder =
     [
@@ -265,33 +282,44 @@ public static class PiperCalibrator
     public const int Repeats = 4;
 
     /// <param name="secondsAt">
-    /// Renders the probe at a <c>length_scale</c> and returns the audio's
-    /// duration in seconds. Called once per ladder rung, plus nothing else.
+    /// Renders the probe at an absolute <c>length_scale</c> and returns the
+    /// audio's duration in seconds. Called once per ladder rung, plus nothing
+    /// else.
     /// </param>
     /// <param name="now">Injected so a stored curve's timestamp is testable.</param>
+    /// <param name="defaultLengthScale">
+    /// The voice's own <c>inference.length_scale</c>, which is what <b>1.0x
+    /// means</b> for it — the ladder is scaled by this and the baseline is
+    /// measured at it. See <see cref="Ladder"/> for the voice that proved this
+    /// is not always 1.0.
+    /// </param>
     public static PiperRateCalibration Measure(
         Func<float, double> secondsAt,
         DateTimeOffset now,
+        float defaultLengthScale = 1.0f,
         IReadOnlyList<float>? ladder = null,
         string probeText = ProbeText,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(secondsAt);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(defaultLengthScale);
         ladder ??= Ladder;
 
-        double baseline = secondsAt(1.0f);
+        double baseline = secondsAt(defaultLengthScale);
         if (baseline <= 0)
             throw new InvalidOperationException(
-                "the probe rendered no audio at length_scale 1.0, so there is nothing to measure against");
+                $"the probe rendered no audio at the voice's own length_scale " +
+                $"({defaultLengthScale}), so there is nothing to measure against");
 
         var points = new List<PiperRatePoint>();
         double previousSeconds = double.NaN;
 
-        foreach (float scale in ladder.OrderByDescending(s => s))
+        foreach (float relative in ladder.OrderByDescending(s => s))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            double seconds = scale == 1.0f ? baseline : secondsAt(scale);
+            float scale = relative * defaultLengthScale;
+            double seconds = relative == 1.0f ? baseline : secondsAt(scale);
             if (seconds <= 0) continue;
 
             // Nothing changed at this rung. Recording it would put a duplicate

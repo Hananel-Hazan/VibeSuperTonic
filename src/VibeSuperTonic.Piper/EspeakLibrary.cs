@@ -8,15 +8,25 @@ namespace VibeSuperTonic.Piper;
 /// <para><b>This is the day-one question P3 was told to answer before there was a
 /// call site to retrofit.</b> P1 measured parity against a library built from
 /// <see href="../../spike/piper-phonemes/build-espeak.sh">our own script</see>,
-/// pinned to commit <c>724808c5</c> — and it has to be that build rather than
-/// the distro package for a reason that is not licensing:
-/// <c>espeak_TextToPhonemesWithTerminator</c> <b>does not exist at the 1.52.0
-/// tag</b>. A build from the release compiles, links, phonemises, and cannot
-/// tell you whether a clause ended a sentence — so every input collapses to one
-/// sentence and the trailing punctuation the model was trained on is missing.
-/// Ubuntu ships 1.52.0. Binding "whatever the loader finds" would therefore
-/// produce a working-looking product with subtly wrong prosody, and P1's zero
-/// divergences would be a statement about a library nobody runs.</para>
+/// pinned to the commit piper pins, <c>724808c5</c>.</para>
+///
+/// <para><b>The function this needs is newer than the release.</b>
+/// <c>espeak_TextToPhonemesWithTerminator</c> does not exist at the 1.52.0
+/// <i>tag</i>; it exists at that commit. Without it there is no way to know
+/// whether a clause ended a sentence, so every input collapses to one sentence
+/// and the trailing punctuation the model was trained on is simply absent —
+/// which is a working-looking product with subtly wrong prosody rather than a
+/// failure anyone would notice.</para>
+///
+/// <para><b>A distro package may or may not have it, and the version string does
+/// not say.</b> Measured 2026-08-25: Ubuntu 26.04's <c>libespeak-ng1</c> reports
+/// 1.52.0 and <b>does</b> export the function — it is packaged from a later
+/// snapshot — so the loader-path fallback happens to work on that machine, and
+/// a full utterance rendered through it cleanly. Debian 12 ships 1.51, which
+/// does not. So the fallback is a convenience that cannot be relied on, and
+/// <see cref="MissingTerminatorExport"/> is what turns the machine where it is
+/// absent into a sentence rather than an <c>EntryPointNotFoundException</c> from
+/// inside a P/Invoke.</para>
 ///
 /// <para>So the probe is ordered by <em>how sure we are what it is</em>, and the
 /// loader path comes last:</para>
@@ -26,9 +36,10 @@ namespace VibeSuperTonic.Piper;
 ///   <item><c>espeak/</c> beside the executable — where <see href="../../docs/PIPER-PLAN.md#p5">P5</see>
 ///   will ship ours, which is also the GPL obligation: the offer is the exact
 ///   source we built.</item>
-///   <item>The loader's own search path. Development convenience and nothing
-///   more; <see cref="Probe"/> reports which one answered so a surprise is
-///   visible in the daemon log rather than in the prosody.</item>
+///   <item>The loader's own search path — whatever the distro installed.
+///   Development convenience and nothing more; <see cref="Probe"/> reports which
+///   one answered so a surprise is visible in the daemon log rather than in the
+///   prosody.</item>
 /// </list>
 /// </summary>
 public static class EspeakLibrary
@@ -110,6 +121,47 @@ public static class EspeakLibrary
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The function piper's own bridge calls, and the one this product cannot do
+    /// without. Checked by name because the version string does not answer the
+    /// question — see the type's remarks.
+    /// </summary>
+    public const string TerminatorExport = "espeak_TextToPhonemesWithTerminator";
+
+    /// <summary>
+    /// A sentence explaining why <paramref name="resolution"/> cannot be used, or
+    /// null when it can.
+    ///
+    /// <para>Asked before the first phonemisation rather than discovered during
+    /// one. Without this the failure is an <c>EntryPointNotFoundException</c>
+    /// thrown out of a P/Invoke on the render thread, which reaches the user as
+    /// a press that produced no sound — the failure shape this whole codebase
+    /// keeps writing rules about.</para>
+    /// </summary>
+    public static string? MissingTerminatorExport(Resolution resolution)
+    {
+        IntPtr handle;
+        try
+        {
+            handle = resolution.Path is { } path
+                ? NativeLibrary.Load(path)
+                : NativeLibrary.Load(Name, typeof(EspeakLibrary).Assembly, searchPath: null);
+        }
+        catch (Exception ex)
+        {
+            return $"espeak-ng could not be loaded ({ex.GetType().Name}: " +
+                   $"{ex.Message.Split('\n')[0].Trim()}). Piper voices need it; " +
+                   $"set {LibraryVariable} to a build of it, or install libespeak-ng.";
+        }
+
+        if (NativeLibrary.TryGetExport(handle, TerminatorExport, out _)) return null;
+
+        return $"the espeak-ng at {resolution.Path ?? "the loader path"} has no {TerminatorExport}, " +
+               "so it cannot tell a clause that ends a sentence from one that does not. " +
+               "It is newer than the 1.52.0 release and older builds do not have it. " +
+               $"Set {LibraryVariable} to one that does — spike/piper-phonemes/build-espeak.sh builds it.";
     }
 
     private static int _resolverInstalled;

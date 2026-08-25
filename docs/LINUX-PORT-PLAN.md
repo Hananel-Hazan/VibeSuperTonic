@@ -36,7 +36,11 @@ after the rebase, 897 of them ours.
   now speaks through the daemon**, at its own sample rate, within 2.4% of the
   requested speaking rate, with Supertonic still the default.
   **[P4 is where the next agent starts](PIPER-PLAN.md#next)** — the catalog, the
-  download and the Voices tab.
+  download and the Voices tab — and
+  [what P3 left open](PIPER-PLAN.md#p3-open) is the list to read first. Two
+  entries there are commitments rather than deferrals: **the Windows build has
+  been compiled but not run** since the second engine landed, and **espeak-ng is
+  still bound from a developer path** until P5 ships ours beside the binary.
 
   Two things from P3 bind work in *this* document. The audio sink re-tunes
   between utterances now (`LazyAudioSink.Retune`), which is the third case of the

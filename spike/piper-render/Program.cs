@@ -128,7 +128,11 @@ if (args.Contains("--calibrate"))
 
 if (args.Contains("--verify-rate"))
 {
-    var models = Directory.GetFiles(voiceDir, "*.onnx").OrderBy(f => f).ToArray();
+    var namedForVerify = args.SkipWhile(a => a != "--verify-rate").Skip(1)
+        .TakeWhile(a => !a.StartsWith("--")).ToArray();
+    var models = namedForVerify.Length > 0
+        ? namedForVerify.Select(n => File.Exists(n) ? n : Path.Combine(voiceDir, n + ".onnx")).ToArray()
+        : Directory.GetFiles(voiceDir, "*.onnx").OrderBy(f => f).ToArray();
     return VibeSuperTonic.Spike.PiperRender.Calibrate.Verify(
         models, ArgValue("--repeat") is { } vr ? int.Parse(vr) : 3);
 }

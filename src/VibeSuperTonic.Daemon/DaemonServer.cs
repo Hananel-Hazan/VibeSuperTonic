@@ -878,7 +878,12 @@ public sealed class DaemonServer : IDisposable
             // Asked of the switch every time rather than cached: it is the one
             // status field that changes without anything being spoken, which is
             // the whole point of the battery rule.
-            _switch is null ? null : Execution.Describe());
+            _switch is null ? null : Execution.Describe(),
+            // Which engine the CURRENT voice belongs to. Asked of the config
+            // rather than of the router, so it answers for the voice that would
+            // speak next rather than for the one that spoke last — those differ
+            // exactly when someone has edited settings.json since.
+            _engines is null ? null : _config.Utterance(null, null).Engine);
     }
 
     /// <summary>
