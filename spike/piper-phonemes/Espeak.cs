@@ -2,26 +2,27 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using VibeSuperTonic.Core.Synthesis.Piper;
+using VibeSuperTonic.Piper;
 
 namespace VibeSuperTonic.Spike.PiperPhonemes;
 
 /// <summary>
-/// espeak-ng phonemisation, P/Invoked, reproducing exactly what piper does.
+/// P1's harness around the phonemiser — and, since P3, around the phonemiser
+/// that SHIPS.
 ///
-/// <para>THE SPECIFICATION IS UPSTREAM'S <c>espeakbridge.c</c> PLUS
-/// <c>phonemize_espeak.py</c>, and this is a reimplementation of both rather
-/// than an interpretation of them. Every step below exists because dropping it
-/// changes the id sequence, and a changed id sequence is audio that is wrong
-/// rather than audio that fails.</para>
+/// <para>This class used to be the implementation. It is now the negative
+/// control and nothing else: <see cref="EspeakPhonemizer"/> holds the
+/// reimplementation of upstream's <c>espeakbridge.c</c> and
+/// <c>phonemize_espeak.py</c>, and this wraps it so the corpus can be run
+/// against a deliberately broken variant. The reason for the move is the whole
+/// value of P1: a parity run against a COPY of the phonemiser measures the copy,
+/// and the copy is free to drift from the one the product uses.</para>
 ///
-/// <para><b>The function is <c>espeak_TextToPhonemesWithTerminator</c>, not
-/// <c>espeak_TextToPhonemes</c></b>, which is what
-/// <see href="../../docs/PIPER-PLAN.md">the plan</see> said until this phase
-/// measured it. The plain one returns phonemes and throws the clause terminator
-/// away — so there is no way to know whether a clause ended a sentence, every
-/// input collapses to one sentence, and the trailing punctuation that piper
-/// feeds the model as a phoneme is simply absent. It is also newer than the
-/// 1.52.0 release: it exists at the commit piper pins and not at the tag.</para>
+/// <para><see cref="Sabotage.None"/> — the case the parity number comes from —
+/// calls the production class directly. Every other case re-implements the one
+/// step it is removing, because a sabotage has to be able to break something
+/// production would not let it break.</para>
 /// </summary>
 public sealed partial class Espeak : IDisposable
 {
@@ -64,7 +65,7 @@ public sealed partial class Espeak : IDisposable
     [LibraryImport(Lib)]
     private static partial int espeak_Terminate();
 
-    private static bool _resolverInstalled;
+    private readonly EspeakPhonemizer _production;
     private string? _voice;
 
     /// <summary>
@@ -95,16 +96,16 @@ public sealed partial class Espeak : IDisposable
     /// </param>
     public Espeak(string dataDir, string libraryPath)
     {
-        if (!_resolverInstalled)
-        {
-            NativeLibrary.SetDllImportResolver(typeof(Espeak).Assembly, (name, _, _) =>
-                name == Lib ? NativeLibrary.Load(libraryPath) : IntPtr.Zero);
-            _resolverInstalled = true;
-        }
+        // The production class binds and initialises the library; this one's
+        // own P/Invokes then resolve through the same resolver, because
+        // SetDllImportResolver is per-assembly and both assemblies name the
+        // same soname. The sabotage paths need direct calls, so the imports
+        // below stay.
+        _production = new EspeakPhonemizer(
+            new EspeakLibrary.Resolution(libraryPath, "the spike", dataDir));
 
-        var rc = espeak_Initialize(AudioOutputSynchronous, 0, dataDir, 0);
-        if (rc < 0)
-            throw new InvalidOperationException($"espeak_Initialize failed ({rc}) with data dir {dataDir}");
+        NativeLibrary.SetDllImportResolver(typeof(Espeak).Assembly, (name, _, _) =>
+            name == Lib ? NativeLibrary.Load(libraryPath) : IntPtr.Zero);
     }
 
     public void SetVoice(string voice)
@@ -119,6 +120,11 @@ public sealed partial class Espeak : IDisposable
     /// <summary>Text to phonemes, grouped by sentence, as piper groups them.</summary>
     public List<List<string>> Phonemize(string voice, string text)
     {
+        // THE PARITY NUMBER COMES FROM HERE. Everything below this line exists
+        // to be broken on purpose.
+        if (Broken == Sabotage.None)
+            return _production.Phonemize(voice, text).Select(s => s.ToList()).ToList();
+
         SetVoice(voice);
 
         var all = new List<List<string>>();
@@ -204,24 +210,14 @@ public sealed partial class Espeak : IDisposable
     /// difference between agreeing with piper and being more correct than it.
     /// </summary>
     public static List<int> ToIds(IEnumerable<string> phonemes, IReadOnlyDictionary<string, int[]> idMap)
-    {
-        var ids = new List<int>();
-        ids.AddRange(idMap["^"]);
-        ids.AddRange(idMap["_"]);
-
-        foreach (var phoneme in phonemes)
-        {
-            if (!idMap.TryGetValue(phoneme, out var mapped)) continue;
-            ids.AddRange(mapped);
-            ids.AddRange(idMap["_"]);
-        }
-
-        ids.AddRange(idMap["$"]);
-        return ids;
-    }
+        => Core.Synthesis.Piper.PiperPhonemes.ToIds(phonemes, idMap).Select(id => (int)id).ToList();
 
     [GeneratedRegex(@"\([^)]+\)")]
     private static partial Regex LanguageSwitch();
 
-    public void Dispose() => espeak_Terminate();
+    /// <summary>
+    /// espeak_Terminate is NOT called — see EspeakPhonemizer.Dispose for why the
+    /// library outlives its wrappers.
+    /// </summary>
+    public void Dispose() => _production.Dispose();
 }

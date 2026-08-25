@@ -68,6 +68,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <ProjectReference Include="..\VibeSuperTonic.Piper\VibeSuperTonic.Piper.csproj" />
   </ItemGroup>
 
   <ItemGroup>

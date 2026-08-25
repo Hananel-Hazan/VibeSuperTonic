@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    espeak-ng, P/Invoked. The phonemiser half of the Piper engine, and its own
+    project for three reasons that are all about who gets to reference it.
+
+    IT IS NOT IN CORE because it is a native dependency, and Core is what the
+    SAPI engine, the daemon, the UI and vst-ctl all compile against — the same
+    reason libpulse lives in VibeSuperTonic.Linux.Audio and ONNX Runtime lives
+    behind ISynthesizer.
+
+    IT IS NOT IN Onnx.Ort because nothing here needs ONNX Runtime, and that
+    project is pinned to Microsoft.ML.OnnxRuntime.Gpu.Linux. The Windows engine
+    cannot reference that package (R-13) but will need this, so a phonemiser
+    sitting inside the Linux ORT backend would have to be copied to be reused —
+    and a copied phonemiser is a phonemiser that diverges from the one P1
+    measured.
+
+    AND THE P1 SPIKE REFERENCES IT. spike/piper-phonemes holds the corpus and
+    the negative control that produced this project's go/no-go — 327 sentences,
+    8 languages, 0 divergences. Those now run against the class that ships
+    rather than against a copy of it, which is the only arrangement under which
+    a green P1 run keeps meaning something.
+
+    GPL-3.0: this is the component the licence posture follows from. See
+    docs/PIPER-PLAN.md#gpl for what that binds and what it does not.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>VibeSuperTonic.Piper</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Piper</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- No Windows types: one seam, both platforms. -->
+    <VstPortable>true</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

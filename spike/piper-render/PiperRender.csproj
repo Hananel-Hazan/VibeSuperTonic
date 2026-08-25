@@ -40,6 +40,14 @@
       them here would compare against something other than what ships.
     -->
     <ProjectReference Include="..\..\src\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <!--
+      P3's calibrate mode, and only that mode, goes through the classes that
+      ship. The numbers it produces become a constant in the product, so they
+      have to come out of the product's own path; P0 and P1's modes above still
+      depend on nothing.
+    -->
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Piper\VibeSuperTonic.Piper.csproj" />
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Onnx.Ort\VibeSuperTonic.Onnx.Ort.csproj" />
   </ItemGroup>
 
 </Project>

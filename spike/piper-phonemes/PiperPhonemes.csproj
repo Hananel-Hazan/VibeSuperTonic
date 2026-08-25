@@ -6,7 +6,14 @@
 
     NO PACKAGE REFERENCES, deliberately. The whole claim of this phase is that
     phonemisation costs one shared library and no managed dependency; a wrapper
-    package here would make that claim untestable.
+    package here would make that claim untestable. The project reference below
+    is to our own code and does not weaken it.
+
+    SINCE P3 THIS RUNS AGAINST THE PHONEMISER THAT SHIPS. It used to hold its
+    own implementation, which meant a green parity run measured a copy that was
+    free to drift from the product. Espeak.cs is now the negative control and
+    nothing else: Sabotage.None delegates to EspeakPhonemizer, and every other
+    case re-implements the one step it removes.
   -->
 
   <PropertyGroup>
@@ -20,5 +27,9 @@
     <RootNamespace>VibeSuperTonic.Spike.PiperPhonemes</RootNamespace>
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VibeSuperTonic.Piper\VibeSuperTonic.Piper.csproj" />
+  </ItemGroup>
 
 </Project>

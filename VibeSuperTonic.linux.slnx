@@ -11,10 +11,12 @@
     Populated by the port plan as projects land:
       Phase 3 → vibesupertonicd, vst-ctl
       Phase 6 → the Avalonia app
+      P3      → VibeSuperTonic.Piper (espeak-ng, P/Invoked)
   -->
   <Folder Name="/src/">
     <Project Path="src/VibeSuperTonic.Core/VibeSuperTonic.Core.csproj" />
     <Project Path="src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj" />
+    <Project Path="src/VibeSuperTonic.Piper/VibeSuperTonic.Piper.csproj" />
     <Project Path="src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj" />
     <Project Path="src/VibeSuperTonic.Linux.Audio/VibeSuperTonic.Linux.Audio.csproj" />
     <Project Path="src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />

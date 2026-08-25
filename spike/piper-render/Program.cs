@@ -108,6 +108,27 @@ if (args.Contains("--measure"))
     return 0;
 }
 
+if (args.Contains("--calibrate"))
+{
+    // Every voice in voice/, or the ones named. P3 needs more than one to
+    // settle whether the calibration is per tier or per voice.
+    var named = args.SkipWhile(a => a != "--calibrate").Skip(1)
+        .TakeWhile(a => !a.StartsWith("--")).ToArray();
+    var models = named.Length > 0
+        ? named.Select(n => File.Exists(n) ? n : Path.Combine(voiceDir, n + ".onnx")).ToArray()
+        : Directory.GetFiles(voiceDir, "*.onnx").OrderBy(f => f).ToArray();
+
+    return VibeSuperTonic.Spike.PiperRender.Calibrate.Run(models, ArgValue("--out-dir"),
+        ArgValue("--noisy") is { } nr ? int.Parse(nr) : 0);
+}
+
+if (args.Contains("--verify-rate"))
+{
+    var models = Directory.GetFiles(voiceDir, "*.onnx").OrderBy(f => f).ToArray();
+    return VibeSuperTonic.Spike.PiperRender.Calibrate.Verify(
+        models, ArgValue("--repeat") is { } vr ? int.Parse(vr) : 3);
+}
+
 if (args.Contains("--rate"))
 {
     var dir = ArgValue("--rate-dir") ?? Path.Combine(projectDir, "rate");
