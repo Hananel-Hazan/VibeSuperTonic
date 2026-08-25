@@ -24,12 +24,17 @@ which moved `BenchmarkStore`, `Measurement`, `ModelSet` and `BenchSwitches` into
 Core and stamps `<VstVersion>` on every assembly in the tree. 956 tests green
 after the rebase, 897 of them ours.
 
-- **[Phase 9](#phase-9) — an AppImage beside the tarball.** Both artifacts, not
-  one. It is a phase rather than a packer edit because it defeats the invariant
-  the whole product is built on: *everything lives beside the executable*.
+- **~~[Phase 9](#phase-9) — an AppImage beside the tarball.~~ Shipped as 0.2.9
+  on 2026-08-24**, with 0.2.10 following it. Both artifacts, not one. It was a
+  phase rather than a packer edit because it defeats the invariant the whole
+  product is built on: *everything lives beside the executable*.
 - **Piper as a second engine** — its own document,
   [PIPER-PLAN.md](PIPER-PLAN.md), written 2026-08-19 and given its settled
-  decisions 2026-08-24. Nothing in it starts before Phase 9 ships.
+  decisions 2026-08-24. ~~Nothing in it starts before Phase 9 ships.~~ Phase 9
+  shipped, and **P0, P1 and P2 landed 2026-08-25** — the phoneme-parity go/no-go
+  passed with 0 divergences across 327 sentences.
+  **[P3 is where the next agent starts](PIPER-PLAN.md#next)**, and it is the
+  first phase of either document that writes into `src/` for Piper.
 
 **The target machine changed underneath this document on 2026-08-22, and two of
 its assumptions died with it.** It was reinstalled as **Ubuntu 26.04 / KDE Plasma
@@ -130,9 +135,9 @@ before changing it.
 | — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
 | 8b · Fit the machine, the rest | **Done 2026-08-24.** The GPU gate passed by a mile — first audio 802 ms → 77 ms — so the CUDA path is built, behind an opt-in 3.1 GB provider pack. Battery rule, provider switching between utterances, the Tune control wired. R-13 corrected with evidence. [The record](#phase-8b-landed) |
 | — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
-| — · **Release 0.2.8 — the tarball** | **Next, and it is not code.** Everything is built and verified except [two things only a person can do](#phase-8b-landed): unplug the laptop and press the hotkey, and click the Tune tab's benchmark button once |
+| — · **Releases 0.2.8, 0.2.9, 0.2.10** | **All shipped, and the two things only a person could do are [both done](#battery-verified) — 2026-08-24.** 0.2.8 the tarball, 0.2.9 the AppImage beside it, 0.2.10 the portable-home fix and its store remedy. Both artifacts of each are in `dist/`, and `<VstVersion>` is `0.2.10` |
 | 9 · [AppImage](#phase-9) | **Done — shipped as 0.2.9 on 2026-08-24.** The gate passed by more than expected (+14.7 ms), the store left the executable's directory, the packer builds from the tarball's own tree, and the hotkey client is copied out and kept current. The one piece of planned work that disappeared was the container build — [measured away](#glibc-floor) |
-| — · [Piper](PIPER-PLAN.md) | **Not started.** Ships as 0.3. Its own plan, with P0/P1 as pure research and a go/no-go on phoneme parity before anything is committed |
+| — · [Piper](PIPER-PLAN.md) | **Started, and past the go/no-go — [P3 is next](PIPER-PLAN.md#next).** P0, P1 and P2 all landed 2026-08-25: the graph runs byte-identically to `python -m piper`, phoneme parity passed at 327 sentences across 8 languages with **0 divergences**, and the numbers are in. Ships as 0.3. P3 is the first phase that touches `src/` |
 
 <a name="windows-check"></a>
 
@@ -414,26 +419,24 @@ Two corrections it produced, both found by doing the work:
 Both done — 2026-08-22 and 2026-08-24.** [The tarball](#phase-7-landed);
 [the GPU path, the battery rule and the Tune control](#phase-8b-landed).
 
-**5 · Ship 0.2.8 — the tarball.** The only work left in it is two manual checks
-that need hands on the machine, both listed at the end of
-[the 8b record](#phase-8b-landed): unplug the laptop and press the hotkey (the
-rule is verified through `VST_POWER` and by unit tests; what is unverified is
-that *this* box's `/sys/class/power_supply/AC/online` goes to 0 when the lead
-comes out), and click the Tune tab's benchmark button once (the client path was
-driven headlessly against a real daemon; the click could not be, on a Wayland
-session with no input-injection tool installed).
+**5 · ~~Ship 0.2.8 — the tarball.~~ Done 2026-08-24**, including both manual
+checks it was waiting on: `/sys/class/power_supply/AC/online` reads 0 with the
+lead out and a CUDA daemon switched to CPU on the next utterance, and the Tune
+tab's button drove a real 32-second sweep. [The record](#battery-verified). The
+release *inherited* 0.2.8 from Windows rather than spending a new number — the
+shared-version rule working, not an accident.
 
-Then `bash build/pack-tar.sh -v 0.2.8`, and update `<VstVersion>` after it
-ships — except that Windows already moved it to 0.2.8, so this release *inherits*
-the number rather than spending a new one. That is the shared-version rule
-working, not an accident.
+**6 · ~~[Phase 9](#phase-9) — the AppImage.~~ Shipped as 0.2.9 on 2026-08-24**,
+and 0.2.10 followed it: a portable home that had made the hotkeys unbindable, and
+a store remedy that could otherwise have orphaned 762 MB of models.
 
-**6 · [Phase 9](#phase-9) — the AppImage.** Ships as 0.2.9.
-
-**7 · [Piper](PIPER-PLAN.md).** Ships as 0.3. Start at P0, which is half a day
-and can only produce good news or a dead end — and do not start it before 9 is
-out, because Piper's per-voice store has to be designed against the data
-directory the AppImage decides on, not the one it replaces.
+**7 · [Piper](PIPER-PLAN.md) — this is where the work is now.** Ships as 0.3.
+~~Start at P0~~ — P0, P1 and P2 all landed 2026-08-25 and the go/no-go passed
+with zero phoneme divergences. **Start at [P3](PIPER-PLAN.md#next)**, which is
+the first phase of this project whose failure would be a bug rather than the end
+of it. Its per-voice store hangs off the data directory Phase 9 decided on:
+`--data` / `$VST_DATA_DIR`, then a store beside the AppImage, then XDG — never
+off a path computed a second time.
 
 ### What exists today, and how to drive it
 

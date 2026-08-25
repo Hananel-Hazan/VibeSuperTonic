@@ -7,11 +7,13 @@ languages, zero divergences — and nothing that can kill this project is left.
 was the one thing in this plan that could not be measured. **[P3](#p3) is next,
 and it is ordinary engineering** — the first phase whose failure would be a bug
 rather than the end of the project.
-Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8 and
-0.2.9 shipped, which was the whole of what stood in front of this. What exists is
-[one spike](../spike/piper-render) and this document. **No dependency added and
-no file in `src/` touched** — that is still true and stays true until P1 has a
-number, because P0 and P1 are pure research that commit us to nothing.
+Investigation done 2026-08-19; the open decisions settled 2026-08-24; 0.2.8,
+0.2.9 and 0.2.10 all shipped, which was the whole of what stood in front of this.
+What exists is two spikes — [piper-render](../spike/piper-render) and
+[piper-phonemes](../spike/piper-phonemes) — and this document. **No dependency
+added and no file in `src/` touched**, which was the condition on P0 and P1 being
+pure research that commit us to nothing. **[P3](#p3) is where that ends**: it is
+the first phase that writes into `src/`, and the first whose mistakes ship.
 
 The proposal is to add [Piper](https://github.com/OHF-Voice/piper1-gpl) **beside**
 Supertonic, not in place of it. Supertonic stays the default and keeps the
@@ -25,7 +27,7 @@ The route chosen is **not** to embed Piper the program. It is to run Piper's
 espeak-ng — the only GPL-3.0 component, and the only hard part — at arm's length.
 Everything below follows from that.
 
-Written 2026-08-19. Not yet worked.
+Written 2026-08-19. P0, P1 and P2 worked 2026-08-25 — **[start at P3](#next)**.
 
 **Six decisions the investigation deliberately left open were settled by the user
 on 2026-08-24, and one of them changes the route.** The licence posture is
@@ -109,20 +111,38 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | --- | --- |
 | P0 · Prove the graph runs | **Done 2026-08-25, in an afternoon.** Passed on the strongest available evidence — byte-identical to `python -m piper` — so routes A/B/C are dead. [The record](#p0-landed) |
 | P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
-| P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed), and [the listening verdict](#speed-verdict): no quality ceiling at any rate, on either path. Three items handed to P3 | RTF, cold load, resident set, on both boxes. **No longer ends with the licence decision** — that is [settled](#decisions). What it settles instead is the speed question: `length_scale` against our time-stretch, on real audio |
-| P3 · `PiperSynthesizer` + the options refactor | **Next.** Forces the `SynthesisOptions` question, and carries the one class the [native-rate decision](#decisions) touches — [see below](#p3) |
+| P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed) — RTF, cold load and resident set per voice, one process per row — and [the listening verdict](#speed-verdict): no quality ceiling at any rate, by either mechanism. It ended up settling the speed question rather than the licence one, which was [settled ahead of it](#decisions), and it handed [three items forward](#p3-inbox) |
+| P3 · `PiperSynthesizer` + the options refactor | **Next — [start here](#next).** Forces the `SynthesisOptions` question, carries the one class the [native-rate decision](#decisions) touches, and owns [what P2 handed it](#p3-inbox). [Exit criteria](#p3-exit) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | Not started. The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
-| P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage lands in [Phase 9](LINUX-PORT-PLAN.md#phase-9). What is left here is the GPL obligations and a second `LICENSE-MODELS` story |
+| P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage shipped 2026-08-24, building from the tarball's own tree — so this phase edits one packer and inherits the other. What is left is the GPL obligations, a second `LICENSE-MODELS` story, two more packer assertions, and **turning [the minimal espeak-ng build](#espeak-minimal) into a script** — today it exists only as a command line in this document |
 
 <a name="next"></a>
 
 ### What to do next, in order
 
-**Do P0 and P1 before planning anything else.** They are cheap, they are pure
-research, and between them they answer the only two questions that can end this.
-Every estimate in P3–P5 is worthless until P1 has a number.
+**Start at [P3](#p3).** Read, in this order: [the three items P2 handed it](#p3-inbox),
+the [decisions](#decisions) it implements, then [P3](#p3) itself and
+[its exit criteria](#p3-exit). The first of the three — the hardcoded sample rate
+in the shared time-stretch — is the smallest and comes first, because everything
+else in the phase can reach it.
 
-**Before either, check the ground has not moved.** This document's
+**The state of the tree as P3 opens, verified 2026-08-25:** clean, **969 tests
+green** (957 Core + 12 Daemon), `0.2.10` shipped as both Linux artifacts, and
+nothing in `src/` touched by this plan. The first P3 commit is the one that
+changes the last of those.
+
+**Three open things P3 does not need and must not wait for**: *which* thirty
+voices the catalog contains ([P4](#p4)), whether `alignments` is worth a patched
+model (after P4), and whether Piper eventually becomes the Linux default (not
+this round). All three are in [Open decisions](#open); none of them constrains a
+line of P3.
+
+~~**Do P0 and P1 before planning anything else.**~~ **Both done 2026-08-25, in a
+day.** They were the only two phases that could have ended this, and
+[P1's zero divergences](#p1-landed) is what makes every estimate in P3–P5 worth
+having.
+
+**Before touching the model again, check the ground has not moved.** This document's
 [upstream facts](#reference) were checked 2026-08-19 and are dated for that
 reason: confirm the voice JSON still carries `phoneme_id_map` in the shape P0
 assumes, and that the voice you fetch still exists at the pinned revision. Ten
@@ -747,6 +767,68 @@ is Supertonic-shaped. `TotalStep`, `Language` and `Speed` have no Piper meaning;
 meaning. Doing this with a real second implementation in hand is the point of
 doing P3 after P0 rather than before it.
 
+<a name="p3-inbox"></a>
+
+#### What P2 handed P3 — three items, and the order matters
+
+1. **Fix [TimeStretch](../src/VibeSuperTonic.Core/Audio/TimeStretch.cs)'s
+   hardcoded 44100 first** — pass the rate in rather than assume it, and keep the
+   comment that explains why 44100 was right for Supertonic. It is the smallest
+   of the three, it sits on the *shared* path, and
+   [the listening test](#speed-verdict) proved it will never be caught by ear:
+   35,156 of 35,675 samples different and nobody could tell. Do it before
+   anything on this path can reach the stretch — which item 3 is.
+2. **Calibrate `length_scale` per voice.**
+   [It is not a linear rate control](#length-scale-nonlinear): ask for 1.6× and
+   the model delivers 1.39×. The curve is invertible — 0.50 delivers a true
+   1.6× — so measure it once at install and store it with the voice. Whether the
+   calibration is per tier or per voice is this phase's to settle, and it needs
+   the same measurement run against more than one voice before it becomes a
+   constant.
+3. **Hand off to the stretch past saturation.** The wall is **~1.97× for `high`
+   and ~1.88× for `medium`** and no `length_scale` passes it — 0.15, 0.05 and
+   0.01 produce byte-identical durations. Above it the stretch is the only way to
+   serve the rate, and the user has [confirmed it sounds fine there](#speed-verdict).
+
+**The provider is per tier, not global** ([the numbers](#p2-landed)). CUDA buys
+the medium tier 72 → 61 ms for 350 MB of resident set and is not worth taking; it
+buys `high` 399 → 116 ms and is. [8b's battery rule](LINUX-PORT-PLAN.md#phase-8b-landed)
+already has the machinery for a provider choice that is not a constant.
+
+**And both engines can be warm at once** — 138–194 MB against Supertonic's
+~830 MB — so loading Piper does not have to evict Supertonic. That is a P3 design
+question P2 answered rather than deferred.
+
+**One thing to decide on day one that no earlier phase had to.** Which
+`libespeak-ng.so` the P/Invoke binds *during development*: [P1](#p1) measured
+against the distro package, and [our minimal build](#espeak-minimal) exists only
+as a `./configure` line in this document. [P5](#p5) owns shipping ours — but P3
+is what first loads one from `src/`, so build the seam as a probed path rather
+than a bare `DllImport` name, before there is a call site to retrofit.
+
+<a name="p3-exit"></a>
+
+**Exit criteria.**
+
+- **A Piper voice speaks through the product on Linux** — hotkey to audio,
+  through the daemon, on the shared `SpeechSession` path — with **Supertonic
+  still the default and audibly unchanged**. That is
+  [the first decision](#decisions) and the one a regression here breaks silently.
+- **`SynthesisOptions` carries both engines** without either one's fields leaking
+  into the other's implementation, and its shape is written down *here* as a
+  decision rather than left in the code as an outcome.
+- **A requested rate is delivered within a stated tolerance** at 1.0×, 1.35× and
+  1.6× — measured on rendered audio, never asked of the model — and the tolerance
+  is a number in this document. This is what the calibration exists to pass, and
+  [the 20% shortfall](#length-scale-nonlinear) is what happens without it.
+- **The sink re-tunes between utterances and never inside one**, verified the way
+  [the provider switch](LINUX-PORT-PLAN.md#phase-8b-landed) was: a running daemon,
+  a switch mid-session, no glitch in the utterance in progress.
+- **The Windows build is green and its behaviour unchanged.** *One seam, both
+  platforms* ([decision](#decisions)) means `PiperSynthesizer` is written once
+  against `ISynthesizer`; a Linux-only type reaching Core is the failure this
+  criterion catches, and it catches it in the phase that introduced it.
+
 <a name="p4"></a>
 
 ### Phase P4 — Catalog, download, and the Voices tab
@@ -841,6 +923,17 @@ already have — *the failure it catches is silent*:
 - **The bundled `libespeak-ng` and its data are both present and agree.** A
   library without its `espeak-ng-data` produces no phonemes and therefore no
   audio, from an install that looks complete.
+- **The shipped `libespeak-ng.so` declares exactly `libm` and `libc`**, and every
+  language in the catalog has a dictionary reachable — the two
+  [the minimal build asked for](#espeak-minimal).
+
+**And the build itself has to become a script in [build/](../build), not a
+command line in this document.** It was
+[built and measured 2026-08-25](#espeak-minimal) on the dev box and nowhere else.
+The GPL obligation is to offer *the exact source we built*, which a hand-run
+`./configure` cannot discharge — and the script is also where the data pruning
+lives, since 2.2 MB against 25 MB is a build step rather than a decision anyone
+should be making by hand at release time.
 
 ---
 
