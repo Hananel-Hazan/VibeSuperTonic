@@ -141,12 +141,13 @@ public sealed class AppImageStoreTests
     }
 
     [Fact]
-    public void A_portable_home_is_detected_because_it_breaks_binding_silently()
+    public void A_portable_home_is_detected_because_binding_has_to_route_around_it()
     {
-        // <image>.home makes the runtime point $HOME there. It reads like the
-        // portable-config feature this product wants and is the opposite: the
-        // store does not move into it, and everything bind writes does — where
-        // the desktop never looks. Two shortcuts written, no key doing anything.
+        // <image>.home makes the runtime point $HOME there, and kglobalshortcutsrc
+        // and the launcher .desktop follow $HOME — so binding used to write two
+        // shortcuts that no desktop would ever read. appimage-bind.sh keys off
+        // this to send those two files to the real home instead, which is why the
+        // detection has to stay exact rather than becoming a warning nobody acts on.
         Assert.Equal(AppImage + ".home",
             LinuxDataPaths.DetectPortableHome(AppImage, AppImage + ".home"));
     }
@@ -160,5 +161,43 @@ public sealed class AppImageStoreTests
         Assert.Null(LinuxDataPaths.DetectPortableHome(AppImage, "/home/me"));
         Assert.Null(LinuxDataPaths.DetectPortableHome(AppImage, "/home/me/Apps"));
         Assert.Null(LinuxDataPaths.DetectPortableHome(null, "/home/me"));
+    }
+
+    [Fact]
+    public void A_store_inside_a_portable_home_goes_invisible_the_moment_XDG_DATA_HOME_is_set()
+    {
+        // THE CONSTRAINT appimage-bind.sh CANNOT EXPRESS, pinned where it can be.
+        //
+        // Binding under a portable home means exporting $XDG_CONFIG_HOME and
+        // $XDG_DATA_HOME at the real home, so the desktop's registration lands
+        // where the desktop reads it. But $XDG_DATA_HOME is also the first thing
+        // this function consults, and the standard portable arrangement keeps the
+        // store inside the portable home — reached through the $HOME fallback.
+        // Export those variables too early and the store below stops being
+        // findable: the daemon creates an empty one beside the image, shows the
+        // first-run screen, and re-downloads the models while the real store sits
+        // untouched. So the script must run --ensure-client BEFORE the export.
+        string portableHome = AppImage + ".home";
+        string storeInside = portableHome + "/.local/share/vibesupertonic";
+
+        var withoutExport = LinuxDataPaths.ResolveStore(
+            AppImage, "/tmp/.mount_abc123",
+            xdgDataHome: null,
+            home: portableHome,
+            dirExists: d => d.StartsWith(storeInside + "/", StringComparison.Ordinal),
+            canCreateIn: _ => true);
+
+        Assert.Equal(storeInside, withoutExport.Root);
+
+        var withExport = LinuxDataPaths.ResolveStore(
+            AppImage, "/tmp/.mount_abc123",
+            xdgDataHome: "/home/me/.local/share",
+            home: portableHome,
+            dirExists: d => d.StartsWith(storeInside + "/", StringComparison.Ordinal),
+            canCreateIn: _ => true);
+
+        Assert.NotEqual(storeInside, withExport.Root);
+        Assert.Equal(Beside, withExport.Root);
+        Assert.Contains("new", withExport.Reason);
     }
 }

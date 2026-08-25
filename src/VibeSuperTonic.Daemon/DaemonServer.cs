@@ -534,8 +534,9 @@ public sealed class DaemonServer : IDisposable
 
         if (LinuxDataPaths.PortableHome is { } portable)
             notes = notes.Append(
-                $"a portable home is in use ({portable}): hotkey binding writes into it " +
-                "instead of your desktop's configuration, so keys bound from here do nothing.")
+                $"a portable home is in use ({portable}), so $HOME points inside it. " +
+                "Binding writes the desktop's shortcut configuration to your real home; " +
+                "the rest of this install stays self-contained.")
                 .ToList();
 
         return new ConfigPayload(

@@ -3,9 +3,10 @@
 Status: **Not started. Investigation done 2026-08-19; the open decisions settled
 2026-08-24. Nothing written, no dependency added, no file in `src/` touched.**
 This document is the handoff. It is written so the next agent can start at
-[Phase P0](#p0) without re-reading the upstream repository. **It is not the next
+[Phase P0](#p0) without re-reading the upstream repository. **It is now the next
 thing to do** — 0.2.8 (the tarball) and 0.2.9
-([the AppImage](LINUX-PORT-PLAN.md#phase-9)) come first, in that order.
+([the AppImage](LINUX-PORT-PLAN.md#phase-9)) both shipped 2026-08-24, which was
+the whole of what stood in front of it.
 
 The proposal is to add [Piper](https://github.com/OHF-Voice/piper1-gpl) **beside**
 Supertonic, not in place of it. Supertonic stays the default and keeps the
@@ -27,9 +28,10 @@ P/Invoked, not held at arm's length in a sidecar, and the plan gets *shorter*
 rather than longer. The rest — native sample rates, Piper's own speed control,
 which voice is default, what the catalog contains — are in
 [Decisions](#decisions) and each one removes work. **This ships as 0.3, after
-[Phase 9](LINUX-PORT-PLAN.md#phase-9) — the AppImage — ships as 0.2.9**, because
-the per-voice store has to be designed against the data directory that phase
-decides on.
+[Phase 9](LINUX-PORT-PLAN.md#phase-9) — the AppImage — shipped as 0.2.9**, which
+it did on 2026-08-24. The order was never arbitrary: the per-voice store has to
+be designed against the data directory that phase decides on, and now that
+directory is decided.
 
 ---
 
@@ -120,11 +122,24 @@ assumes, and that the voice you fetch still exists at the pinned revision. Ten
 minutes, and it is the difference between a spike that fails on the model and one
 that fails on a URL.
 
-**And do not start before 0.2.9 has shipped.** The per-voice store is a directory
-under the models root, and [Phase 9](LINUX-PORT-PLAN.md#phase-9) is the phase
-that decides where the models root *is* when the product is an AppImage.
-Designing a voice store against a data directory that is about to be replaced is
-the cheapest avoidable rework in this plan.
+> **Re-checked 2026-08-25, and it has not moved.** `rhasspy/piper-voices` at
+> `v1.0.0` still resolves — both `en_US-lessac-medium.onnx` and its `.onnx.json`
+> answer 200 at the URL [P0](#p0) names. The JSON is the shape P0 assumes:
+> `audio.sample_rate` 22050, `inference` carrying `noise_scale` 0.667,
+> `length_scale` 1 and `noise_w` 0.8, `num_speakers` **1** — so the `sid` input
+> is absent for this voice and the graph has three inputs, not four — and a
+> `phoneme_id_map` of 154 entries. Re-take it rather than trust it if this line
+> is more than a month old.
+
+**And do not start before 0.2.9 has shipped.** ~~The per-voice store is a
+directory under the models root, and [Phase 9](LINUX-PORT-PLAN.md#phase-9) is the
+phase that decides where the models root *is* when the product is an AppImage.~~
+**Satisfied 2026-08-24.** Both artifacts shipped, and the store's rule is now a
+decided thing to design against rather than a moving one: `--data` /
+`$VST_DATA_DIR`, then an existing store beside the AppImage, then an existing
+`$XDG_DATA_HOME/vibesupertonic`, then created beside the image if that directory
+is writable, else under XDG. A per-voice directory hangs off whichever of those
+won — never off a path computed a second time.
 
 <a name="p0"></a>
 

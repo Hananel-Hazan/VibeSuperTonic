@@ -1,3 +1,53 @@
+# VibeSuperTonic v0.2.10
+
+*A portable AppImage install could not bind its hotkeys, and the sentence we
+printed about it could lose your models. Both are fixed.*
+
+An AppImage next to a directory named `<name>.AppImage.home` runs with `$HOME`
+pointed inside it. That is the standard portable arrangement — AppMan marks every
+app it installs this way — and until now VibeSuperTonic refused to bind hotkeys
+when it saw one.
+
+```
+VibeSuperTonic-0.2.10-x86_64.AppImage      48 MB
+VibeSuperTonic-0.2.10-linux-x64.tar.gz     52 MB
+```
+
+## Fixed
+
+- **Hotkeys bind under a portable home.** The desktop reads its shortcut
+  configuration from one fixed place and nowhere else, so under a redirected
+  `$HOME` everything `bind` wrote — `kglobalshortcutsrc` and the launcher
+  `.desktop` — landed where the desktop would never look: two shortcuts written,
+  no key doing anything. `bind` now recovers the real home from the passwd
+  database, which an AppImage cannot redirect, and writes those two files there
+  while the rest of the install stays self-contained. Cinnamon needed no
+  equivalent — `gsettings` already writes through the session's own service.
+- **The old advice could cost you your models, and it is gone.** Refusing to bind
+  told you to rename or remove the portable home. If your store lived inside it —
+  which is exactly where the portable arrangement puts it — following that
+  advice orphaned several hundred MB of models, and the next run started an empty
+  store and showed you the first-run screen. The daemon's log and the Status tab
+  now describe a portable home instead of warning about it.
+
+## Changed
+
+- **`--help` on the AppImage says where your files are and how to upgrade.** A
+  single file has no `INSTALL.txt` to put this in, so it names all three places a
+  store can resolve to — beside the image, inside a portable home, under
+  `~/.local/share` — points at `store` for which one won, and states the rule the
+  tarball has always stated: stop the daemon *before* replacing the file, or the
+  old one keeps serving every hotkey press while `status` truthfully reports the
+  old version.
+
+## Windows
+
+Unchanged by this release, as 0.2.9 was. Both fixes are in Linux packaging and
+the Linux hotkey path; the Windows ZIP continues to ship from the same version
+number.
+
+---
+
 # VibeSuperTonic v0.2.9
 
 *Linux gets a second front door: one file you download, make executable, and run.*

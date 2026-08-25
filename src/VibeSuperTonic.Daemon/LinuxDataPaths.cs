@@ -81,13 +81,22 @@ internal static class LinuxDataPaths
     /// named <c>&lt;image&gt;.home</c>, which makes it set <c>$HOME</c> there —
     /// and null otherwise.
     ///
-    /// <para><b>Detected because it breaks the hotkeys silently.</b> It reads
-    /// like the portable-configuration feature this product wants and is the
-    /// opposite of it: the store is anchored to the image's directory, so
-    /// nothing of ours moves into it, while everything <c>bind</c> writes does —
-    /// <c>kglobalshortcutsrc</c> and the launcher <c>.desktop</c> both land
-    /// inside the portable home, where the desktop will never look. Binding then
-    /// reports success and no key does anything.</para>
+    /// <para><b>Detected because it used to break the hotkeys silently, and the
+    /// detection is what fixed it.</b> <c>kglobalshortcutsrc</c> and the launcher
+    /// <c>.desktop</c> follow <c>$HOME</c>, so under a portable home they landed
+    /// inside it, where the desktop never looks — binding reported success and no
+    /// key did anything. <c>appimage-bind.sh</c> now uses this to write those two
+    /// files to the real home (recovered from the passwd database, which an
+    /// AppImage cannot redirect) while leaving everything else where
+    /// <c>$HOME</c> points.</para>
+    ///
+    /// <para><b>It is not a reason to remove the directory, and saying so was a
+    /// bug of its own.</b> A portable home is where the standard portable
+    /// arrangement puts the store — the XDG fallback in
+    /// <see cref="ResolveStore"/> resolves into it — so "rename or remove it to
+    /// bind keys", which is what the daemon and the bind script both used to
+    /// print, orphans the store and returns the user to the first-run screen with
+    /// their models sitting in a directory nothing looks at.</para>
     ///
     /// <para>Compared as an exact path rather than by prefix: a person whose real
     /// home happens to sit beside the image is not using a portable home, and

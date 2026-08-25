@@ -146,13 +146,16 @@ if (LinuxDataPaths.AppImageFile is { } appImage)
     DaemonLog.Write($"appimage {appImage}, store {LinuxDataPaths.StoreRoot} " +
                     $"({LinuxDataPaths.Store.Reason})");
 
-    // A portable home is a trap here, and the daemon is the only thing running
-    // early enough to say so before a person concludes the hotkeys are broken.
+    // A portable home is worth naming in the log — $HOME is not where the reader
+    // thinks it is, and that explains a lot of otherwise baffling paths below.
+    // It is NOT a reason to remove the directory: `bind` handles this itself by
+    // writing the desktop's registration to the real home, and removing a
+    // portable home that holds the store is how a person loses one.
     if (LinuxDataPaths.PortableHome is { } portable)
         DaemonLog.Write(
-            $"WARNING: a portable home is in use ({portable}), so $HOME points inside it. " +
-            "Hotkey binding writes the desktop's shortcut configuration, which will land " +
-            "there and never be read. Remove or rename that directory to bind keys.");
+            $"portable home in use ({portable}), so $HOME points inside it. " +
+            "Hotkey binding writes the desktop's shortcut configuration to the real " +
+            "home instead; everything else stays here.");
 
     // The hotkeys point at a copy of vst-ctl in ~/.local/bin, and upgrading is
     // replacing one file that has nothing to do with that copy. Re-checked here

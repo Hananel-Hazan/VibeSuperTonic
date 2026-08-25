@@ -173,6 +173,21 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   ./VibeSuperTonic.AppImage gpu-install     fetch the optional CUDA pack (~3.1 GB)
 #   ./VibeSuperTonic.AppImage store           print where models and data live
 #
+#   Keep this file and its store together. Models and settings live beside the
+#   image in VibeSuperTonic/ — or inside <name>.AppImage.home if you keep a
+#   portable home, and under ~/.local/share/vibesupertonic if neither is
+#   writable. `store` prints which one won. Move the image on its own and the
+#   next run starts an empty store while several hundred MB of models sit in the
+#   directory you left behind.
+#
+#   Upgrading? Stop the daemon FIRST:  ./VibeSuperTonic.AppImage ctl shutdown
+#   The daemon is long-lived and Linux lets you replace a running file without
+#   complaint. Overwrite this image while it runs and the OLD daemon keeps
+#   serving every hotkey press — with `ctl status` truthfully reporting the old
+#   version — and the old runtime process stays behind holding the deleted
+#   image. `shutdown` with nothing running is a success, so it is always safe to
+#   type; the next press starts the new daemon by itself.
+#
 # Kept to POSIX sh and to as few processes as possible: `ctl` is on the hotkey
 # path, where this script's own startup is added to every press.
 set -eu
@@ -216,7 +231,7 @@ case "${1-}" in
         exec bash "$APP/install-gpu.sh" --dir "$store" "$@" ;;
     --version) exec "$APP/vibesupertonicd" --version ;;
     -h|--help)
-        sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
         exit 0 ;;
     *) exec "$APP/vibesupertonic-ui" "$@" ;;
 esac

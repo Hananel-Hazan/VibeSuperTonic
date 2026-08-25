@@ -1029,260 +1029,6 @@ CPU → render → dispose in one process, then four more switches through the r
 daemon, no crash. Worth measuring rather than assuming: the heap corruption above
 proves this stack has opinions about lifetimes.
 
-<a name="appimage-store"></a>
-
-#### What has landed — 2026-08-24
-
-**The store.** `LinuxDataPaths` grew `StoreRoot` beside `BaseDir`, and the rule
-above is implemented with the existing-store preference as its first clause. The
-daemon, `config` and the first-run download all follow it; every install that is
-not an AppImage sees the same directory it always did.
-
-Verified by running an AppImage built from the composed tree, in an isolated
-runtime directory, in the three states that matter:
-
-| Case | Result |
-| --- | --- |
-| Fresh | Store created beside the file — *"new, beside the AppImage"* — and XDG untouched |
-| Moved with its folder to another directory | Store **found**, not recreated: the reason came back as *"beside the AppImage"* rather than *"new"*, and a `settings.json` written before the move (`DefaultVoice: F3`) was read back after it |
-| From a `chmod a-w` directory | Falls back to XDG **and starts**, naming the reason — refusing would be a hotkey that silently does nothing |
-
-`config` now answers with `BaseDir /tmp/.mount_VibeSuJEEDga/usr/lib/vibesupertonic`
-beside `StoreRoot /tmp/vst9/apps2/VibeSuperTonic`, which is the phase in one line
-of output: two different answers to what used to be one question.
-
-**A test project came with it** — `VibeSuperTonic.Daemon.Tests`, Linux-only and
-in the Linux solution alone. Core.Tests is package-free so that it runs on both
-CI runners, which is why it pins the Linux settings type through a replica; that
-is the right tool for a *mechanism* and the wrong one for a *rule*, because a
-copied rule agrees with itself. Nine tests, and the ones worth having are the
-moved AppImage and the read-only directory.
-
-**Known limit, and it belongs in `INSTALL.txt`:** moving the `.AppImage` *without*
-its `VibeSuperTonic` folder orphans the store and starts a new one. Remembering
-the last store in a marker file would cover it, at the cost of state outside the
-two places state lives today. Not worth it — but the sentence "keep the AppImage
-and its folder together" is.
-
-**The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
-`pack-tar.sh`, from the tree it composed, refusing to run when that tree is
-absent or reports another version. **48 MB against the tarball's 52**, because
-zstd beats gzip and also mounts faster, which is the axis that matters here.
-
-No `appimagetool`: a type-2 AppImage is a 944 KB static runtime concatenated in
-front of a squashfs image, and that is the entire format. The runtime is fetched
-once and checked against a pinned SHA-256 **on every run, cached or fresh** — the
-discipline `models-manifest.json` applies to the weights, because a cache trusted
-because it is a cache can be poisoned once and believed forever.
-
-Four of the tarball's five assertions are re-asked against the tree even though
-they are inherited, and the reason is not belt-and-braces: the sequence that
-actually happens is *a tarball built yesterday, a rebuild since, an AppImage
-packaged from whatever is on disk now*. Then the image is checked by **running
-it** — type-2 magic at offset 8, `--version`, and `ctl --version` separately,
-because the default branch and the hotkey branch are different code and only one
-of them is on the press path.
-
-**`bind`, and the client that lives outside the image.** `<AppImage> bind`
-installs `vst-ctl` to `~/.local/bin`, writes one line naming the image it came
-from, and calls `keybindings.sh` — unchanged code, doing for `~/.local/bin` what
-it already does for a tarball. Its only new input is `VST_KB_UI_COMMAND`, because
-the menu entry has to open the window *inside* the image while every hotkey
-action runs the copy.
-
-The copy is re-checked by **both** the daemon and the window at startup, by
-asking the installed binary its version rather than comparing timestamps. The
-window is the second way in deliberately: the daemon repairs this on its own
-start, but the daemon starts *from a press*, and the case that needs repairing is
-a press that does nothing. One implementation, two callers —
-`vibesupertonicd --ensure-client`, next to `--print-store`, which exists so
-`AppRun` never becomes a second place where the store rule is decided.
-
-Verified against an isolated `HOME` with the key writes in dry-run: the client
-lands and reports this build, the sidecar records the image, the launcher `Exec`
-is the AppImage while both action `Exec`s are the copy, **the copy autostarts a
-daemon through the image and answers `status`** — R-5 intact with no
-`vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
-start put it back.
-
-<a name="glibc-floor"></a>
-
-#### The glibc floor: measured 2026-08-24, and the expensive fix disappeared
-
-This phase carried *"build the AppDir in a container against an older glibc"* as
-real work, on sound reasoning: a self-contained publish links the build machine's
-libc, and this box runs **2.43**. Measuring it first turned out to be the whole
-job.
-
-Across every ELF in the composed tree:
-
-```
-  vst-ctl             GLIBC_2.34      <- the floor
-  libonnxruntime.so   GLIBC_2.27
-  libcoreclr.so       GLIBC_2.27
-  everything else     GLIBC_2.17 or lower
-```
-
-**One 4 MB file sets it, and it is the only one compiled here.** NativeAOT links
-locally; the runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet, built
-by Microsoft against an old glibc deliberately. And 2.34 is not this machine's
-2.43 — it is where any modern link lands, because libpthread merged into libc
-there.
-
-**2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+.** What a container
-would buy is Ubuntu 20.04, Debian 11 and RHEL 8 — all EOL — at the price of a
-second build environment maintained for one binary. **Accepted rather than
-chased, 2026-08-24.**
-
-What the phase gets instead is [assertion 6](../build/pack-tar.sh): the floor is
-a property of the toolchain rather than of this repository, so it can rise under
-a distro upgrade with every test still green, and the symptom is a user on a
-supported distro being told `GLIBC_2.39 not found` by a binary that ran
-yesterday — a failure this machine cannot experience and no test here would see.
-It lives in the tarball packer beside the other five, so the AppImage inherits it.
-
-*The generalisable half, and it is the same lesson [8a](#phase-8a) paid for
-twice:* the reasoning was correct and the conclusion was wrong, because the
-premise ("a self-contained publish compiles against this libc") was true of one
-file out of two hundred. Ten minutes of `objdump` replaced a day of container
-plumbing.
-
-**FUSE has two sentences now, in the two places that can say them.** Without
-`/dev/fuse` the image never mounts, so `AppRun` never runs and nothing inside it
-does — and the case that matters is a hotkey press, which has no terminal. So
-`vst-ctl` says it when an autostart through an AppImage produces no daemon, and
-`bind` says it while there is still a terminal to read. Both name
-`--appimage-extract-and-run` as the way through and what it costs, rather than
-leaving it to a forum.
-
-<a name="appimage-migration"></a>
-
-#### Migrating the development machine, and the four defects it found
-
-Done 2026-08-24, immediately after shipping, and it is the reason this phase has
-a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
-AppImage at `~/Apps/VibeSuperTonic.AppImage` with the old install directory kept
-**as the store** — `data/`, `models/` and the 2.8 GB CUDA pack moved in place,
-nothing copied, nothing re-downloaded.
-
-**1 · The benchmark profile was being read from a directory.** The daemon
-started on CUDA, announced it, and fell back to *"CPU, 4 threads (never
-benchmarked)"* on the first utterance. `BenchmarkStore` moved into Core on
-2026-08-19 and its `Load` took a file path instead of the data directory;
-`Program.cs` conflicted during the rebase and was fixed, and
-`ProviderSwitchingSynthesizer` **auto-merged clean and kept passing the
-directory** — both are strings, and a directory reads back as null, which is
-indistinguishable from *"this machine has never been benchmarked"*.
-
-So the GPU, the battery rule and every benchmark stopped applying after the
-first utterance of every session, behind a green build, 956 passing tests, and a
-startup line that still said CUDA. **That startup line is what let it survive:**
-the first decision is made in `Program.cs`, which was correct, so every start
-announced the right provider and every utterance then silently discarded it.
-*A log line saying CUDA is not evidence that CUDA is in use.* The guard went
-where it could be tested — `Load` now refuses a directory rather than reporting
-no profile, because a directory is a caller bug in every case and never a
-missing file.
-
-**2 · `gpu-install` could not work on an AppImage at all.** The provider library
-went to the install root, where a tarball keeps `libonnxruntime.so` and ORT finds
-it through that library's `RUNPATH`. An AppImage has no writable directory there.
-It now goes **inside the pack**, which works for both, because the daemon
-re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
-name — measured by moving the 330 MB file and watching the same daemon go from
-*"no GPU available"* to *"CUDA, 2 threads"*.
-
-**3 · A rebound key keeps launching the command it used to.** Plasma stores a
-shortcut against a `.desktop` id and launches the action's `Exec`; rewriting that
-`Exec` does not reach a `kglobalaccel` that is already running. `bind` reported
-two shortcuts written, the file on disk was correct, and every press said
-*"Could not find the program /home/hananel/Apps/VibeSuperTonic/vst-ctl"* — the
-tarball path this upgrade had just moved aside. **Only pressing the key finds
-this.** `bind` now reads what the keys ran before it rewrites them and links the
-old path to the new client when it has been vacated; the alternative was telling
-every upgrader to log out first.
-
-**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
-runtime redirects `$HOME` into that directory if it exists — which sounds like
-the portable-config feature this product wants and is the opposite. The store is
-anchored to the AppImage's *directory*, so config does not move there; what does
-move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
-`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
-**so KDE never sees the shortcuts and the hotkeys silently stop working.**
-Measured with a dry run rather than reasoned about. Do not use it; the store
-beside the image already is the portable arrangement.
-
-<a name="appimage-hardening"></a>
-
-#### A review and a stress harness, 2026-08-24
-
-Run after the release, because the migration above had already shown that this
-phase's own verification was not finding things.
-
-**A review of the branch found eight defects**, none reachable from the tests and
-three that would have shipped as silent wrong behaviour. The two worth carrying:
-`AppRun` dispatched on `basename "$0"`, which the runtime sets to AppRun's own
-path — so the documented symlink shim never matched and `./vst-ctl toggle`
-launched the *window* with "toggle" as an argument (`$ARGV0` is what carries the
-name the user typed); and two process timeouts were decorative, because
-`ReadToEnd()` returns when the child closes the pipe, so calling it before
-`WaitForExit` hands a wedged binary the power to block a daemon start — or a
-window that never opens — forever.
-
-**[spike/appimage-stress](../spike/appimage-stress) is new**, and covers what no
-unit test can reach: ten start/shutdown cycles through the image, eight
-concurrent client installs, four ways of breaking the copy, a press with no
-daemon running, a second daemon, and eight interrupted utterances. It found
-**nothing in the product** on its first clean run — and two defects in itself: it
-passed every audio scenario against a daemon answering *"no audio device
-available"*, because overriding `XDG_RUNTIME_DIR` also hides the PulseAudio
-socket, and its leak check fired on its own impatience. Both are
-[trap 15](#traps)'s vacuous guard, which this document has now recorded in three
-unrelated places.
-
-The existing [daemon-stress](../spike/daemon-stress) harness also passes against
-an AppImage daemon — 400 concurrent status calls with no failures, 1,836
-subscriber connects, the toggle storm, the speak/stop races — once it is given a
-PulseAudio socket to talk to.
-
-**One defect came out of it**, found by reading the log rather than the result:
-the daemon bound its socket inside the accept loop, so it registered a tray icon
-and preloaded the model set *first*. A second daemon therefore flashed a tray
-icon on its way out, and a `--preload` daemon spent seconds not listening while
-`vst-ctl` waits five for an autostarted daemon to answer. Binding now happens
-before both.
-
-**And one thing that is not a defect but belongs in `INSTALL.txt`:** replacing a
-running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
-reading `(deleted)`, its child long gone. Stopping the daemon first is already
-the rule for the tarball; it is the rule here for a second reason.
-
-<a name="appimage-untested"></a>
-
-#### What was not tested, and why
-
-**Desktop integration by `appimaged` or AppImageLauncher.** Neither is installed
-on this machine, and installing a daemon that rewrites `~/.local/share/applications`
-in order to watch it do so is a worse trade than saying this plainly. What *was*
-verified is everything those tools read, by extracting the shipped image:
-
-| They read | Present |
-| --- | --- |
-| `VibeSuperTonic.desktop` at the root | yes, and `desktop-file-validate` passes |
-| `.DirIcon` | yes — the icon, so a file manager can show it without mounting |
-| `Icon=vibesupertonic` resolving to a file | yes, at the root *and* under `usr/share/icons/hicolor/256x256/apps/` |
-| `--appimage-offset` | 944632, the runtime's size |
-| `--appimage-extract` | yes |
-
-**A machine with no FUSE.** This one has `/dev/fuse`. The code path was written
-from the failure's shape rather than from watching it, which is worth knowing
-before trusting it — though `--appimage-extract-and-run` *was* measured (82 ms
-warm, 247 ms cold) on the way to the gate.
-
-**An older distro.** [The floor is 2.34 and asserted](#glibc-floor); no Ubuntu
-22.04 box was available to run the image on. The assertion is what makes that
-gap bounded rather than open.
-
 #### Exit criteria
 
 | Criterion | State |
@@ -2804,260 +2550,6 @@ the spike the GPU would be idle whenever it is unplugged. That is not an argumen
 against measuring; it is an argument for measuring *first* and cheaply, which is
 what [Phase 0](LINUX-PORT-ARCHIVE.md#phase-0) did with the same shape of question.
 
-<a name="appimage-store"></a>
-
-#### What has landed — 2026-08-24
-
-**The store.** `LinuxDataPaths` grew `StoreRoot` beside `BaseDir`, and the rule
-above is implemented with the existing-store preference as its first clause. The
-daemon, `config` and the first-run download all follow it; every install that is
-not an AppImage sees the same directory it always did.
-
-Verified by running an AppImage built from the composed tree, in an isolated
-runtime directory, in the three states that matter:
-
-| Case | Result |
-| --- | --- |
-| Fresh | Store created beside the file — *"new, beside the AppImage"* — and XDG untouched |
-| Moved with its folder to another directory | Store **found**, not recreated: the reason came back as *"beside the AppImage"* rather than *"new"*, and a `settings.json` written before the move (`DefaultVoice: F3`) was read back after it |
-| From a `chmod a-w` directory | Falls back to XDG **and starts**, naming the reason — refusing would be a hotkey that silently does nothing |
-
-`config` now answers with `BaseDir /tmp/.mount_VibeSuJEEDga/usr/lib/vibesupertonic`
-beside `StoreRoot /tmp/vst9/apps2/VibeSuperTonic`, which is the phase in one line
-of output: two different answers to what used to be one question.
-
-**A test project came with it** — `VibeSuperTonic.Daemon.Tests`, Linux-only and
-in the Linux solution alone. Core.Tests is package-free so that it runs on both
-CI runners, which is why it pins the Linux settings type through a replica; that
-is the right tool for a *mechanism* and the wrong one for a *rule*, because a
-copied rule agrees with itself. Nine tests, and the ones worth having are the
-moved AppImage and the read-only directory.
-
-**Known limit, and it belongs in `INSTALL.txt`:** moving the `.AppImage` *without*
-its `VibeSuperTonic` folder orphans the store and starts a new one. Remembering
-the last store in a marker file would cover it, at the cost of state outside the
-two places state lives today. Not worth it — but the sentence "keep the AppImage
-and its folder together" is.
-
-**The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
-`pack-tar.sh`, from the tree it composed, refusing to run when that tree is
-absent or reports another version. **48 MB against the tarball's 52**, because
-zstd beats gzip and also mounts faster, which is the axis that matters here.
-
-No `appimagetool`: a type-2 AppImage is a 944 KB static runtime concatenated in
-front of a squashfs image, and that is the entire format. The runtime is fetched
-once and checked against a pinned SHA-256 **on every run, cached or fresh** — the
-discipline `models-manifest.json` applies to the weights, because a cache trusted
-because it is a cache can be poisoned once and believed forever.
-
-Four of the tarball's five assertions are re-asked against the tree even though
-they are inherited, and the reason is not belt-and-braces: the sequence that
-actually happens is *a tarball built yesterday, a rebuild since, an AppImage
-packaged from whatever is on disk now*. Then the image is checked by **running
-it** — type-2 magic at offset 8, `--version`, and `ctl --version` separately,
-because the default branch and the hotkey branch are different code and only one
-of them is on the press path.
-
-**`bind`, and the client that lives outside the image.** `<AppImage> bind`
-installs `vst-ctl` to `~/.local/bin`, writes one line naming the image it came
-from, and calls `keybindings.sh` — unchanged code, doing for `~/.local/bin` what
-it already does for a tarball. Its only new input is `VST_KB_UI_COMMAND`, because
-the menu entry has to open the window *inside* the image while every hotkey
-action runs the copy.
-
-The copy is re-checked by **both** the daemon and the window at startup, by
-asking the installed binary its version rather than comparing timestamps. The
-window is the second way in deliberately: the daemon repairs this on its own
-start, but the daemon starts *from a press*, and the case that needs repairing is
-a press that does nothing. One implementation, two callers —
-`vibesupertonicd --ensure-client`, next to `--print-store`, which exists so
-`AppRun` never becomes a second place where the store rule is decided.
-
-Verified against an isolated `HOME` with the key writes in dry-run: the client
-lands and reports this build, the sidecar records the image, the launcher `Exec`
-is the AppImage while both action `Exec`s are the copy, **the copy autostarts a
-daemon through the image and answers `status`** — R-5 intact with no
-`vibesupertonicd` anywhere near it — and deleting the copy makes the next daemon
-start put it back.
-
-<a name="glibc-floor"></a>
-
-#### The glibc floor: measured 2026-08-24, and the expensive fix disappeared
-
-This phase carried *"build the AppDir in a container against an older glibc"* as
-real work, on sound reasoning: a self-contained publish links the build machine's
-libc, and this box runs **2.43**. Measuring it first turned out to be the whole
-job.
-
-Across every ELF in the composed tree:
-
-```
-  vst-ctl             GLIBC_2.34      <- the floor
-  libonnxruntime.so   GLIBC_2.27
-  libcoreclr.so       GLIBC_2.27
-  everything else     GLIBC_2.17 or lower
-```
-
-**One 4 MB file sets it, and it is the only one compiled here.** NativeAOT links
-locally; the runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet, built
-by Microsoft against an old glibc deliberately. And 2.34 is not this machine's
-2.43 — it is where any modern link lands, because libpthread merged into libc
-there.
-
-**2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+.** What a container
-would buy is Ubuntu 20.04, Debian 11 and RHEL 8 — all EOL — at the price of a
-second build environment maintained for one binary. **Accepted rather than
-chased, 2026-08-24.**
-
-What the phase gets instead is [assertion 6](../build/pack-tar.sh): the floor is
-a property of the toolchain rather than of this repository, so it can rise under
-a distro upgrade with every test still green, and the symptom is a user on a
-supported distro being told `GLIBC_2.39 not found` by a binary that ran
-yesterday — a failure this machine cannot experience and no test here would see.
-It lives in the tarball packer beside the other five, so the AppImage inherits it.
-
-*The generalisable half, and it is the same lesson [8a](#phase-8a) paid for
-twice:* the reasoning was correct and the conclusion was wrong, because the
-premise ("a self-contained publish compiles against this libc") was true of one
-file out of two hundred. Ten minutes of `objdump` replaced a day of container
-plumbing.
-
-**FUSE has two sentences now, in the two places that can say them.** Without
-`/dev/fuse` the image never mounts, so `AppRun` never runs and nothing inside it
-does — and the case that matters is a hotkey press, which has no terminal. So
-`vst-ctl` says it when an autostart through an AppImage produces no daemon, and
-`bind` says it while there is still a terminal to read. Both name
-`--appimage-extract-and-run` as the way through and what it costs, rather than
-leaving it to a forum.
-
-<a name="appimage-migration"></a>
-
-#### Migrating the development machine, and the four defects it found
-
-Done 2026-08-24, immediately after shipping, and it is the reason this phase has
-a record worth reading. The tarball install at `~/Apps/VibeSuperTonic` became an
-AppImage at `~/Apps/VibeSuperTonic.AppImage` with the old install directory kept
-**as the store** — `data/`, `models/` and the 2.8 GB CUDA pack moved in place,
-nothing copied, nothing re-downloaded.
-
-**1 · The benchmark profile was being read from a directory.** The daemon
-started on CUDA, announced it, and fell back to *"CPU, 4 threads (never
-benchmarked)"* on the first utterance. `BenchmarkStore` moved into Core on
-2026-08-19 and its `Load` took a file path instead of the data directory;
-`Program.cs` conflicted during the rebase and was fixed, and
-`ProviderSwitchingSynthesizer` **auto-merged clean and kept passing the
-directory** — both are strings, and a directory reads back as null, which is
-indistinguishable from *"this machine has never been benchmarked"*.
-
-So the GPU, the battery rule and every benchmark stopped applying after the
-first utterance of every session, behind a green build, 956 passing tests, and a
-startup line that still said CUDA. **That startup line is what let it survive:**
-the first decision is made in `Program.cs`, which was correct, so every start
-announced the right provider and every utterance then silently discarded it.
-*A log line saying CUDA is not evidence that CUDA is in use.* The guard went
-where it could be tested — `Load` now refuses a directory rather than reporting
-no profile, because a directory is a caller bug in every case and never a
-missing file.
-
-**2 · `gpu-install` could not work on an AppImage at all.** The provider library
-went to the install root, where a tarball keeps `libonnxruntime.so` and ORT finds
-it through that library's `RUNPATH`. An AppImage has no writable directory there.
-It now goes **inside the pack**, which works for both, because the daemon
-re-execs with the pack on `LD_LIBRARY_PATH` and ORT dlopens the provider by bare
-name — measured by moving the 330 MB file and watching the same daemon go from
-*"no GPU available"* to *"CUDA, 2 threads"*.
-
-**3 · A rebound key keeps launching the command it used to.** Plasma stores a
-shortcut against a `.desktop` id and launches the action's `Exec`; rewriting that
-`Exec` does not reach a `kglobalaccel` that is already running. `bind` reported
-two shortcuts written, the file on disk was correct, and every press said
-*"Could not find the program /home/hananel/Apps/VibeSuperTonic/vst-ctl"* — the
-tarball path this upgrade had just moved aside. **Only pressing the key finds
-this.** `bind` now reads what the keys ran before it rewrites them and links the
-old path to the new client when it has been vacated; the alternative was telling
-every upgrader to log out first.
-
-**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
-runtime redirects `$HOME` into that directory if it exists — which sounds like
-the portable-config feature this product wants and is the opposite. The store is
-anchored to the AppImage's *directory*, so config does not move there; what does
-move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
-`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
-**so KDE never sees the shortcuts and the hotkeys silently stop working.**
-Measured with a dry run rather than reasoned about. Do not use it; the store
-beside the image already is the portable arrangement.
-
-<a name="appimage-hardening"></a>
-
-#### A review and a stress harness, 2026-08-24
-
-Run after the release, because the migration above had already shown that this
-phase's own verification was not finding things.
-
-**A review of the branch found eight defects**, none reachable from the tests and
-three that would have shipped as silent wrong behaviour. The two worth carrying:
-`AppRun` dispatched on `basename "$0"`, which the runtime sets to AppRun's own
-path — so the documented symlink shim never matched and `./vst-ctl toggle`
-launched the *window* with "toggle" as an argument (`$ARGV0` is what carries the
-name the user typed); and two process timeouts were decorative, because
-`ReadToEnd()` returns when the child closes the pipe, so calling it before
-`WaitForExit` hands a wedged binary the power to block a daemon start — or a
-window that never opens — forever.
-
-**[spike/appimage-stress](../spike/appimage-stress) is new**, and covers what no
-unit test can reach: ten start/shutdown cycles through the image, eight
-concurrent client installs, four ways of breaking the copy, a press with no
-daemon running, a second daemon, and eight interrupted utterances. It found
-**nothing in the product** on its first clean run — and two defects in itself: it
-passed every audio scenario against a daemon answering *"no audio device
-available"*, because overriding `XDG_RUNTIME_DIR` also hides the PulseAudio
-socket, and its leak check fired on its own impatience. Both are
-[trap 15](#traps)'s vacuous guard, which this document has now recorded in three
-unrelated places.
-
-The existing [daemon-stress](../spike/daemon-stress) harness also passes against
-an AppImage daemon — 400 concurrent status calls with no failures, 1,836
-subscriber connects, the toggle storm, the speak/stop races — once it is given a
-PulseAudio socket to talk to.
-
-**One defect came out of it**, found by reading the log rather than the result:
-the daemon bound its socket inside the accept loop, so it registered a tray icon
-and preloaded the model set *first*. A second daemon therefore flashed a tray
-icon on its way out, and a `--preload` daemon spent seconds not listening while
-`vst-ctl` waits five for an autostarted daemon to answer. Binding now happens
-before both.
-
-**And one thing that is not a defect but belongs in `INSTALL.txt`:** replacing a
-running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
-reading `(deleted)`, its child long gone. Stopping the daemon first is already
-the rule for the tarball; it is the rule here for a second reason.
-
-<a name="appimage-untested"></a>
-
-#### What was not tested, and why
-
-**Desktop integration by `appimaged` or AppImageLauncher.** Neither is installed
-on this machine, and installing a daemon that rewrites `~/.local/share/applications`
-in order to watch it do so is a worse trade than saying this plainly. What *was*
-verified is everything those tools read, by extracting the shipped image:
-
-| They read | Present |
-| --- | --- |
-| `VibeSuperTonic.desktop` at the root | yes, and `desktop-file-validate` passes |
-| `.DirIcon` | yes — the icon, so a file manager can show it without mounting |
-| `Icon=vibesupertonic` resolving to a file | yes, at the root *and* under `usr/share/icons/hicolor/256x256/apps/` |
-| `--appimage-offset` | 944632, the runtime's size |
-| `--appimage-extract` | yes |
-
-**A machine with no FUSE.** This one has `/dev/fuse`. The code path was written
-from the failure's shape rather than from watching it, which is worth knowing
-before trusting it — though `--appimage-extract-and-run` *was* measured (82 ms
-warm, 247 ms cold) on the way to the gate.
-
-**An older distro.** [The floor is 2.34 and asserted](#glibc-floor); no Ubuntu
-22.04 box was available to run the image on. The assertion is what makes that
-gap bounded rather than open.
-
 #### Exit criteria
 
 - ~~`vst-ctl benchmark` completes in under a minute~~ **in about a minute —
@@ -3099,7 +2591,7 @@ that need software this machine does not have — see [what was not tested](#app
 
 **Two artifacts, permanently.** `build/pack-appimage.sh` consumes the tree
 [build/pack-tar.sh](../build/pack-tar.sh) already composed — it does not publish
-anything itself — so all five of Phase 7's assertions are inherited by
+anything itself — so all six of Phase 7's assertions are inherited by
 construction rather than copied and left to drift. If the tarball is wrong the
 AppImage is never built, which is the correct order of failure.
 
@@ -3224,6 +2716,14 @@ the last store in a marker file would cover it, at the cost of state outside the
 two places state lives today. Not worth it — but the sentence "keep the AppImage
 and its folder together" is.
 
+> **Landed 2026-08-25, and not in `INSTALL.txt`, because an AppImage has none.**
+> One file is the whole point of the format, so the text went where a single file
+> can carry it: `AppRun`'s `--help`, which now names all three places a store can
+> resolve to — beside the image, inside a portable home, under XDG — and says
+> `store` prints which one won. The `-h` range was widened to match, and in
+> passing it stopped printing the "kept to POSIX sh" implementation note it had
+> been leaking into user-facing help since the image was first packed.
+
 **The packer.** [build/pack-appimage.sh](../build/pack-appimage.sh) — run after
 `pack-tar.sh`, from the tree it composed, refusing to run when that tree is
 absent or reports another version. **48 MB against the tarball's 52**, because
@@ -3362,15 +2862,32 @@ this.** `bind` now reads what the keys ran before it rewrites them and links the
 old path to the new client when it has been vacated; the alternative was telling
 every upgrader to log out first.
 
-**4 · `<name>.AppImage.home` is a trap here, and it was going to be used.** The
-runtime redirects `$HOME` into that directory if it exists — which sounds like
-the portable-config feature this product wants and is the opposite. The store is
-anchored to the AppImage's *directory*, so config does not move there; what does
-move is `~/.local/bin/vst-ctl` and, fatally, everything `bind` writes:
-`kwriteconfig6` and the launcher `.desktop` both land inside the portable home,
-**so KDE never sees the shortcuts and the hotkeys silently stop working.**
-Measured with a dry run rather than reasoned about. Do not use it; the store
-beside the image already is the portable arrangement.
+**4 · `<name>.AppImage.home` redirects `$HOME`, and binding has to route around
+it.** The runtime points `$HOME` into that directory if it exists. What follows
+`$HOME` is `~/.local/bin/vst-ctl` — harmless, and in fact desirable — and,
+fatally, everything `bind` writes: `kwriteconfig6` and the launcher `.desktop`
+both landed inside the portable home, **so KDE never saw the shortcuts and the
+hotkeys silently stopped working.** Measured with a dry run rather than reasoned
+about.
+
+**Refusing to bind was the wrong remedy, corrected 2026-08-25.** It was wrong
+twice over. It left the hotkeys unbindable for every install that uses a portable
+home — AppMan marks each app that way, so this is a normal arrangement rather
+than an exotic one — and the sentence it printed, *rename or remove the portable
+home*, destroys the store whenever the store lives inside it, which is precisely
+where the XDG fallback in `ResolveStore` puts it. Following that advice dangles
+the store, the daemon creates an empty one beside the image, and the first-run
+screen returns with the models sitting in a directory nothing looks at.
+
+`appimage-bind.sh` now recovers the real home from the passwd database — which an
+AppImage cannot redirect — and points `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` at
+it for the binding step alone. `keybindings.sh` has exactly two `$HOME`-derived
+paths and both are XDG-guarded, so that is the entire fix; Cinnamon needs no
+equivalent because `gsettings` writes through the session's dconf service. **The
+ordering is load-bearing:** those same two variables are the first thing
+`ResolveStore` consults, so they are exported *after* `--ensure-client`, never
+before. Pinned by
+`A_store_inside_a_portable_home_goes_invisible_the_moment_XDG_DATA_HOME_is_set`.
 
 <a name="appimage-hardening"></a>
 
@@ -3416,6 +2933,10 @@ before both.
 running `.AppImage` leaves the old runtime process behind — sleeping, its `exe`
 reading `(deleted)`, its child long gone. Stopping the daemon first is already
 the rule for the tarball; it is the rule here for a second reason.
+**Landed 2026-08-25 in `AppRun`'s `--help`**, beside the store sentence and for
+the same reason — [see above](#appimage-store). It says what the tarball's
+`INSTALL.txt` says, plus the runtime process, and that `shutdown` against nothing
+is a success so it is always safe to type.
 
 <a name="appimage-untested"></a>
 
@@ -3505,7 +3026,7 @@ same days — and that belongs in an effort table, not in a phase list.
 | 6 · App + tray | 3–4 | **done** | The second binary, the Reader against the stream, `hello`, R-1 by process boundary, finding 5 measured, finding 6 instrumented, the tray on rung 1, both settings writers, and the first-run screen with the model download |
 | 7 · Packaging | 1.5–2 | **done 2026-08-22** | the packer, its three assertions, `install.sh` / `uninstall.sh`, the layout — [the record](#phase-7-landed) |
 | — · A press silenced by the stop before it | **Fixed 2026-08-24.** Reported twice from daily use: the text appears in the window, the highlight never moves, no sound, and the next press works. A stop landing as an utterance ENDS left the sink's flush flag with nobody to consume it, and the next utterance's first write tripped it. [The record](#stale-flush) |
-| 9 · AppImage | 2 + spike | not started | a second artifact, a data directory that is no longer beside the binary, and a hotkey that must not get slower — [Phase 9](#phase-9) |
+| 9 · AppImage | 2 + spike | **done 2026-08-24, in one day** | a second artifact, a data directory that is no longer beside the binary, and a hotkey that must not get slower — 20.0 ms against 5.3, inside budget. Shipped as 0.2.9 beside the tarball. What the day did not include is what came after it: a review, a stress harness and a migration found thirteen defects between them — [Phase 9](#phase-9) |
 | 8b · Fit the machine, the rest | 0.5 + spike | **done 2026-08-24** | battery rule, the provider switch, the Tune control; the GPU spike passed its gate and turned into a shipped CUDA path plus an opt-in provider pack — [the record](#phase-8b-landed) |
 | **Remaining** | **0** | | The port is done. What is left is not a phase: [the Windows convergence](#convergence) and [the Way 3 gate](#the-gate), both deliberately deferred until v1 ships |
 

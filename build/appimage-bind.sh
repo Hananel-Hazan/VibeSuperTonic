@@ -48,22 +48,52 @@ fi
 
 [[ -f "$APPIMAGE" ]] || die "\$APPIMAGE points at $APPIMAGE, which is not there."
 
-# A portable home makes every write below land somewhere the desktop will never
-# read: kwriteconfig6 follows $HOME, and so does the launcher .desktop. Binding
-# would report two shortcuts written and no key would do anything — the worst
-# available outcome, and the reason this refuses rather than warning.
+# A portable home — $APPIMAGE.home, which makes the runtime point $HOME inside
+# the image's own directory — used to be refused here. Refusing was wrong twice
+# over. It made the hotkeys unbindable for an entire class of install (AppMan
+# marks every app portable this way, so this is the normal arrangement for some
+# users, not an exotic one). And the remedy it printed — remove the portable
+# home — orphans the store whenever the store lives inside it, which is exactly
+# where the standard portable arrangement puts it: the daemon then resolves a
+# store that is not there, creates an empty one, and shows the first-run screen
+# while several hundred MB of models sit in the directory that was moved aside.
+#
+# What actually has to land in the REAL home is only the desktop's own
+# registration: kglobalshortcutsrc and the launcher .desktop. That is not
+# application state and no portable home can hold it, because the desktop reads
+# one fixed location and nothing else. The real home survives the redirect --
+# the passwd database is not something an AppImage can rewrite -- and
+# keybindings.sh reads both of its targets from $XDG_CONFIG_HOME and
+# $XDG_DATA_HOME, so pointing those two at it is the entire fix.
+#
+# Exported further down rather than here, and that ordering is load-bearing:
+# those same two variables steer the daemon's store resolution
+# (LinuxDataPaths.ResolveStore consults $XDG_DATA_HOME before it falls back to
+# $HOME), so they must not be set while --ensure-client runs.
+portable_home=""
+real_home=""
 if [[ "$(cd "$HOME" && pwd)" == "$APPIMAGE.home" ]]; then
-    die "a portable home is in use: $APPIMAGE.home
+    portable_home="$APPIMAGE.home"
+    # `|| true` is load-bearing under `set -euo pipefail`: without it a failing
+    # or absent getent takes the whole script out at this assignment, and the
+    # explanation below — the entire point of the branch — never prints. Found
+    # by testing the failure path rather than only the happy one.
+    real_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
 
-       The AppImage runtime points \$HOME there, so the shortcut configuration
-       this writes would land inside that directory and your desktop would never
-       read it — two shortcuts written, no key doing anything.
+    if [[ -z "$real_home" || ! -d "$real_home" || "$real_home" == "$portable_home" ]]; then
+        die "a portable home is in use:  $portable_home
 
-       It also does not do what it looks like it does: models and settings live
-       beside the AppImage either way, in $(dirname "$APPIMAGE")/VibeSuperTonic,
-       which is already the portable arrangement.
+       \$HOME points inside it, so the shortcut configuration this writes would
+       land there and your desktop would never read it. Normally this script
+       finds your real home in the passwd database and writes the desktop's
+       registration there instead, but that lookup did not return a usable
+       directory${real_home:+ (it gave: $real_home)}.
 
-       Rename or remove $APPIMAGE.home and run bind again."
+       Do NOT delete that directory to work around this. If your models and
+       settings live inside it — which is where the portable arrangement puts
+       them — the daemon will not find them afterwards and will start over with
+       an empty store."
+    fi
 fi
 
 printf '\n\033[36m>>> Installing the hotkey client\033[0m\n'
@@ -96,6 +126,19 @@ if [[ ! -e /dev/fuse ]]; then
     warn "Install FUSE (libfuse2 on Debian and Ubuntu), or start the daemon yourself"
     warn "after each login with:"
     warn "    $APPIMAGE --appimage-extract-and-run daemon &"
+fi
+
+# The desktop's registration goes to the real home; everything else stays where
+# $HOME points, so the client keeps living inside the portable home and keeps
+# repairing itself on upgrade. Only these two variables are needed:
+# keybindings.sh has exactly two $HOME-derived paths and both are XDG-guarded.
+# Cinnamon needs no equivalent — gsettings writes through the session's dconf
+# service, which already holds the real home.
+if [[ -n "$portable_home" ]]; then
+    export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$real_home/.config}"
+    export XDG_DATA_HOME="${XDG_DATA_HOME:-$real_home/.local/share}"
+    info "portable home in use: $portable_home"
+    info "the client stays there; the desktop's shortcut configuration goes to $real_home"
 fi
 
 printf '\n\033[36m>>> Binding the keys\033[0m\n'

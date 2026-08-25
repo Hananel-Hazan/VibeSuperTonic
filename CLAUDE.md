@@ -113,13 +113,14 @@ Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
-**The three-release sequence settled on 2026-08-24 is two-thirds spent.**
-`<VstVersion>` is `0.2.9`.
+**The three-release sequence settled on 2026-08-24 is spent**, and it grew a
+fourth entry it did not plan for. `<VstVersion>` is `0.2.10`.
 
 | Version | What it is | State |
 | --- | --- | --- |
 | `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
 | `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
+| `0.2.10` | What looking harder at 0.2.9 found: a portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **decided 2026-08-25**, packs from this tree |
 | `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md) | next |
 
 `0.3` is the next number and it is settled. **Everything after it is a decision
@@ -127,7 +128,11 @@ to ask about** — propose a bump from what changed, and use `AskUserQuestion`.
 
 After a release ships, update `<VstVersion>` in
 [Directory.Build.props](Directory.Build.props) to the version just shipped, so
-the default stays truthful for the next run and the Linux packer agrees.
+the default stays truthful for the next run and the Linux packer agrees. `0.2.10`
+is the one exception on record and it was the user's call: the bump was committed
+with the work rather than after the pack, so that one commit *is* the release.
+The rule still holds for everything after it — a release run passes `-v`
+explicitly either way, so the default is a safety net rather than an input.
 
 Use `AskUserQuestion` to confirm the version — do not silently pick one. The
 version is durable: it embeds in the ZIP filename and is what the user will
