@@ -62,6 +62,9 @@ public sealed class DaemonServer : IDisposable
     /// </summary>
     private CancellationTokenSource? _stopping;
 
+    /// <summary>Bound by <see cref="Bind"/>, served by <see cref="RunAsync"/>, closed by Dispose.</summary>
+    private Socket? _listener;
+
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
@@ -143,8 +146,26 @@ public sealed class DaemonServer : IDisposable
     /// Bind and serve until <paramref name="token"/> fires.
     /// </summary>
     /// <exception cref="IOException">Another daemon holds the socket.</exception>
-    public async Task RunAsync(CancellationToken token)
+    /// <summary>
+    /// Claim the control socket, and nothing else.
+    ///
+    /// <para><b>Separate from <see cref="RunAsync"/> so it can happen FIRST.</b>
+    /// Binding used to be the first thing the accept loop did, which put it
+    /// after the tray icon and after <c>--preload</c>. Both are wrong in the
+    /// same direction: a daemon that loses the race for the socket registers a
+    /// tray icon and then exits, so for a moment the user has two — and a
+    /// preloading daemon spends seconds loading the model set before it listens,
+    /// while <c>vst-ctl</c>'s autostart waits five seconds for an answer and then
+    /// reports that it started a daemon which never accepted a connection. The
+    /// second one is [R-5](LINUX-PORT-ARCHIVE.md#r-5) arriving through the door
+    /// R-5 opened.</para>
+    ///
+    /// <para>Idempotent: <see cref="RunAsync"/> calls it when nothing else has.</para>
+    /// </summary>
+    public void Bind()
     {
+        if (_listener is not null) return;
+
         string path = Protocol.SocketPath();
         string dir = Path.GetDirectoryName(path)!;
 
@@ -156,7 +177,7 @@ public sealed class DaemonServer : IDisposable
 
         ClearStaleSocket(path);
 
-        using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
             listener.Bind(new UnixDomainSocketEndPoint(path));
@@ -193,8 +214,15 @@ public sealed class DaemonServer : IDisposable
         // concluded from it: a failed connect used to read as "no daemon is
         // listening", which is the trigger for auto-starting one (R-5).
         listener.Listen(512);
+        _listener = listener;
 
         Log($"listening on {path}");
+    }
+
+    public async Task RunAsync(CancellationToken token)
+    {
+        Bind();
+        var listener = _listener!;
 
         // Everything below runs on the linked token rather than the caller's, so
         // that the `shutdown` verb can end the loop from inside a connection.
@@ -218,7 +246,11 @@ public sealed class DaemonServer : IDisposable
         {
             _stopping = null;
             listener.Close();
-            try { File.Delete(path); } catch { /* going away anyway */ }
+            _listener = null;
+            // The socket file, not the listener: a leftover path is what the next
+            // daemon has to reason about in ClearStaleSocket, and leaving one
+            // behind on a clean exit makes that job harder for no reason.
+            try { File.Delete(Protocol.SocketPath()); } catch { /* going away anyway */ }
         }
     }
 
@@ -1082,6 +1114,13 @@ public sealed class DaemonServer : IDisposable
     {
         _session.Emitted -= OnSessionEvent;
         _session.Dispose();
+
+        // The listener is no longer a `using` local of the accept loop, because
+        // binding happens before that loop exists. It is closed here instead, and
+        // closing it is what removes the socket file's usefulness to a client —
+        // ClearStaleSocket on the next start does the rest.
+        _listener?.Dispose();
+        _listener = null;
     }
 }
 

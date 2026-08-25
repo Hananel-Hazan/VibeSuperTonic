@@ -294,6 +294,20 @@ using var server = new DaemonServer(
     selectionSource, sink,
     synthesizerFor, switcher);
 
+// BEFORE the tray and before --preload. A daemon that has lost the race for the
+// socket must not register a tray icon on its way out, and a preloading daemon
+// must be answering while it loads: vst-ctl waits five seconds for an autostarted
+// daemon to accept a connection, and a model set takes longer than that to read.
+try
+{
+    server.Bind();
+}
+catch (IOException ex)
+{
+    DaemonLog.Write(ex.Message);
+    return 1;
+}
+
 using var lifetime = new CancellationTokenSource();
 
 // Every way this process is asked to stop has to stop the *speech* too: a
