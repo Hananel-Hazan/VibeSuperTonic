@@ -102,6 +102,52 @@ public enum RequestVerb
     Benchmark,
 
     /// <summary>
+    /// What voices exist — installed on this machine, and offered by the
+    /// catalog.
+    ///
+    /// <para><b>A verb before it is a tab</b>, the same rule
+    /// <see cref="Benchmark"/> was landed under. The Voices tab is a client and
+    /// may not have a private path to the store, and this has to answer over ssh
+    /// on a machine with no window, before any of it exists.</para>
+    ///
+    /// <para>Answers for <em>both</em> engines, because "which voices do I have"
+    /// is not a question a user asks per engine — and because the answer is what
+    /// makes the routing rule visible: the list is where you can see that a
+    /// Piper id and a Supertonic style are the same kind of thing in the same
+    /// setting.</para>
+    /// </summary>
+    Voices,
+
+    /// <summary>
+    /// Download and verify one catalog voice into the store.
+    ///
+    /// <para>Like <see cref="Benchmark"/> and unlike everything else, this
+    /// answers more than once: a progress line as the bytes arrive, then a final
+    /// reply. A 137 MB voice over a slow link is minutes, and a client that
+    /// printed nothing until the end would be indistinguishable from one that
+    /// had hung — which is the same argument the sweep made, for the same
+    /// reason.</para>
+    ///
+    /// <para><b>Gated on the voice's own licence.</b> The catalog carries terms
+    /// per voice (trap 7) and the daemon refuses without
+    /// <see cref="Request.AcceptLicence"/>, so a client cannot download a
+    /// NonCommercial voice for someone who was never shown that it was one. The
+    /// refusal names the terms, so a script can be written that accepts them
+    /// deliberately.</para>
+    /// </summary>
+    VoiceInstall,
+
+    /// <summary>
+    /// Delete an installed Piper voice and its directory, calibration included.
+    ///
+    /// <para>Refuses to remove the voice currently configured as the default —
+    /// removing the voice the next press will ask for leaves the daemon with a
+    /// setting it cannot honour, and the fix belongs in front of the user rather
+    /// than in the log.</para>
+    /// </summary>
+    VoiceRemove,
+
+    /// <summary>
     /// Stop the daemon: stop any speech, close the socket, exit 0.
     ///
     /// <para><b>This is not "quit the application".</b> R-5 brings the daemon
@@ -208,6 +254,18 @@ public sealed record Request
     /// not have to kill it to get an answer.</para>
     /// </summary>
     public bool? Force { get; init; }
+
+    /// <summary>
+    /// The user has been shown this voice's licence and accepted it. Required by
+    /// <see cref="RequestVerb.VoiceInstall"/>, ignored by everything else.
+    ///
+    /// <para>A field rather than an implicit yes because the voices are a second
+    /// licence axis (trap 7) and each one differs — 33 upstream voices are absent
+    /// from the catalog entirely for being unable to state theirs, and three of
+    /// the ones present are NonCommercial. The daemon has no screen, so the only
+    /// thing it can enforce is that the client claims to have shown one.</para>
+    /// </summary>
+    public bool? AcceptLicence { get; init; }
 }
 
 /// <summary>
@@ -268,6 +326,20 @@ public sealed record Response
     /// other verb ever sets it.</para>
     /// </summary>
     public BenchmarkProgress? Progress { get; init; }
+
+    /// <summary>Present on <see cref="RequestVerb.Voices"/>.</summary>
+    public VoicesPayload? Voices { get; init; }
+
+    /// <summary>
+    /// Present on the intermediate replies to <see cref="RequestVerb.VoiceInstall"/>
+    /// — the same "read lines until one arrives without this set" contract
+    /// <see cref="Progress"/> established for the sweep, so a client that already
+    /// streams one verb streams the other with the same loop.
+    /// </summary>
+    public VoiceProgress? VoiceProgress { get; init; }
+
+    /// <summary>Present on the final reply to an install or a remove.</summary>
+    public VoiceActionPayload? Voice { get; init; }
 
     public static Response Success() => new() { Ok = true };
 
@@ -434,6 +506,115 @@ public sealed record BenchmarkPayload(
     IReadOnlyList<string> Notes);
 
 /// <summary>
+/// One voice, as the list reports it. Deliberately one shape for both engines.
+///
+/// <para><b>Why not two records.</b> The decision that the voice selects the
+/// engine only pays off if a client can hold them in one list and set one
+/// setting from either. A Supertonic style and a Piper voice differ in what they
+/// can offer, not in what they are for, so the differences are nullable fields
+/// rather than a second type — and the fields a Supertonic row leaves empty
+/// (quality, licence, size) are exactly the ones it genuinely has nothing to
+/// say about, because it is one of five styles over a shared 383 MB set rather
+/// than a download.</para>
+/// </summary>
+/// <param name="Id">The engine-qualified id — <c>piper:de_DE-thorsten-high</c>, <c>supertonic:M1</c>.</param>
+/// <param name="Engine">"piper" or "supertonic".</param>
+/// <param name="Name">Display name: the voice's own name, or the style id.</param>
+/// <param name="Installed">Whether the bytes are on this machine.</param>
+/// <param name="IsDefault">Whether the next press would use this one.</param>
+/// <param name="LanguageCode">"en_US" for Piper; null for Supertonic, which takes a language per utterance.</param>
+/// <param name="Language">The language spelled for a person, or a count for Supertonic.</param>
+/// <param name="Quality">Piper's tier — <c>high</c>, <c>medium</c>, <c>low</c>, <c>x_low</c>. Null for Supertonic.</param>
+/// <param name="SampleRate">
+/// The voice's native rate. Since P3 the sink follows it, so this is what the
+/// machine will actually play rather than a property of the file.
+/// </param>
+/// <param name="Bytes">Download size when available, on-disk size when installed.</param>
+/// <param name="Licence">The terms, per voice, from the voice's own MODEL_CARD.</param>
+/// <param name="LicenceClass">Normalised family, so a client can warn on <c>nc</c> without parsing prose.</param>
+/// <param name="LicenceUrl">Where those terms live.</param>
+/// <param name="Speakers">
+/// How many voices this one file holds. Greater than 1 means the graph takes a
+/// <c>sid</c> and the picker has something to pick.
+/// </param>
+/// <param name="SpeakerNames">Ordered by id, so index N IS <c>sid</c> N.</param>
+/// <param name="Calibrated">
+/// Whether this voice's rate curve has been measured on this machine. False means
+/// a requested rate is served by the reciprocal until the measurement finishes —
+/// accurate to within a few per cent rather than 2.8%, and worth saying because
+/// it is a difference a user can hear and would otherwise have no name for.
+/// </param>
+public sealed record VoiceEntry(
+    string Id,
+    string Engine,
+    string Name,
+    bool Installed,
+    bool IsDefault,
+    string? LanguageCode = null,
+    string? Language = null,
+    string? Quality = null,
+    int? SampleRate = null,
+    long? Bytes = null,
+    string? Licence = null,
+    string? LicenceClass = null,
+    string? LicenceUrl = null,
+    int? Speakers = null,
+    IReadOnlyList<string>? SpeakerNames = null,
+    bool? Calibrated = null);
+
+/// <summary>
+/// The answer to <see cref="RequestVerb.Voices"/>: what is here, and what could be.
+/// </summary>
+/// <param name="Installed">Every voice that can speak right now, both engines.</param>
+/// <param name="Available">Catalog voices that are not installed. Empty when no catalog shipped.</param>
+/// <param name="StoreRoot">
+/// Where Piper voices live. Reported for the same reason <c>config</c> reports
+/// <c>StoreRoot</c>: under an AppImage this is not beside the executable, and
+/// "where did my 114 MB go" deserves an answer that is not a guess.
+/// </param>
+/// <param name="CatalogRevision">The upstream revision the catalog is pinned to, or null when there is none.</param>
+/// <param name="Notes">Why the catalog is missing, or anything else non-fatal.</param>
+public sealed record VoicesPayload(
+    IReadOnlyList<VoiceEntry> Installed,
+    IReadOnlyList<VoiceEntry> Available,
+    string StoreRoot,
+    string? CatalogRevision = null,
+    IReadOnlyList<string>? Notes = null);
+
+/// <summary>
+/// How far an install has got — one file at a time, since a voice is two.
+/// </summary>
+/// <param name="VoiceId">The voice being installed.</param>
+/// <param name="File">Which of its files is in flight.</param>
+/// <param name="BytesReceived">Bytes written so far.</param>
+/// <param name="BytesTotal">The size the catalog pinned, known before the first byte arrives.</param>
+/// <param name="Message">A line for a log, when there is one instead of a number.</param>
+public sealed record VoiceProgress(
+    string VoiceId,
+    string? File = null,
+    long BytesReceived = 0,
+    long BytesTotal = 0,
+    string? Message = null);
+
+/// <summary>What an install or a remove did.</summary>
+/// <param name="VoiceId">The voice acted on.</param>
+/// <param name="Installed">Whether it is in the store now.</param>
+/// <param name="Path">Its directory.</param>
+/// <param name="Message">One sentence for a user.</param>
+/// <param name="Calibrating">
+/// True when a rate calibration was started in the background. It runs off the
+/// press path and takes about 47 seconds for a <c>high</c> tier, so an install
+/// that reported nothing about it would leave the first minute of a new voice
+/// unexplained — the rate is served by the reciprocal until it lands.
+/// </param>
+public sealed record VoiceActionPayload(
+    string VoiceId,
+    bool Installed,
+    string? Path = null,
+    string? Message = null,
+    bool Calibrating = false);
+
+/// <summary>
 /// JSON, one object per line, both directions.
 ///
 /// <para>Chosen over anything framed or binary for one reason: it can be driven
@@ -546,6 +727,13 @@ public static class Protocol
 [JsonSerializable(typeof(BenchmarkProfile))]
 [JsonSerializable(typeof(BenchmarkMachine))]
 [JsonSerializable(typeof(BenchmarkRow))]
+// P4. VoicesPayload nests two lists of VoiceEntry, and VoiceEntry nests a list
+// of string — the generator walks that graph, so the outer type being present is
+// not enough, which is the lesson the six benchmark types above already paid for.
+[JsonSerializable(typeof(VoicesPayload))]
+[JsonSerializable(typeof(VoiceEntry))]
+[JsonSerializable(typeof(VoiceProgress))]
+[JsonSerializable(typeof(VoiceActionPayload))]
 public sealed partial class ProtocolJson : JsonSerializerContext
 {
 }

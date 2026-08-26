@@ -52,6 +52,25 @@ namespace VibeSuperTonic.Daemon;
 public sealed class LinuxSettings
 {
     public string DefaultVoice { get; set; } = "M1";
+
+    /// <summary>
+    /// The engine-qualified default voice — <c>piper:de_DE-thorsten-high</c> or
+    /// <c>supertonic:M1</c>. Supersedes <see cref="DefaultVoice"/> when present.
+    ///
+    /// <para><b>Why a second key rather than widening the first.</b> The Windows
+    /// engine reads this same <c>settings.json</c> and knows nothing about Piper.
+    /// It carries unknown keys through its <c>[JsonExtensionData]</c> untouched —
+    /// landed one release before there was a writer, for exactly this — so a
+    /// Linux user who picks a Piper voice keeps a file the Windows engine can
+    /// still read, and it goes on speaking <c>DefaultVoice</c>. Widening the
+    /// existing key would have meant Windows reading <c>piper:de_DE-thorsten-high</c>
+    /// as a Supertonic style name and failing to find it.</para>
+    ///
+    /// <para>Empty means "not set", which is why it is not null: the file is
+    /// hand-editable and a key someone blanked should mean the same as a key
+    /// they removed.</para>
+    /// </summary>
+    public string VoiceId { get; set; } = "";
     public string Language { get; set; } = SupertonicLanguages.Default;
     public int TotalStep { get; set; } = 8;
     public float EngineSpeed { get; set; } = 1.05f;
@@ -365,9 +384,13 @@ public sealed class HostConfig
     /// </summary>
     public UtterancePlan Utterance(string? voice, string? language)
     {
-        string voiceId = voice ?? Settings.DefaultVoice;
+        // The one place the qualified form is unwrapped. Everything downstream —
+        // the options record, the store, the calibration file, the engine router
+        // — works in bare ids, because a bare id is what names a directory.
+        var requested = VoiceId.Parse(voice ?? ConfiguredVoice);
+        string voiceId = requested.Bare;
 
-        if (PiperVoices.Config(voiceId) is { } piperVoice)
+        if (requested.MayBePiper && PiperVoices.Config(voiceId) is { } piperVoice)
         {
             var calibration = PiperVoices.Calibration(voiceId);
             var plan = calibration?.Plan(_requestedRate)
@@ -392,12 +415,27 @@ public sealed class HostConfig
     }
 
     /// <summary>
+    /// The configured default voice, as written — the engine-qualified
+    /// <c>VoiceId</c> when the file sets one, otherwise <c>DefaultVoice</c>.
+    ///
+    /// <para>Two keys and one answer, so that everything reading "the default
+    /// voice" reads the same thing. A blank <c>VoiceId</c> means unset rather
+    /// than empty: the file is hand-edited, and a key someone cleared should
+    /// behave like a key they deleted.</para>
+    /// </summary>
+    public string ConfiguredVoice =>
+        string.IsNullOrWhiteSpace(Settings.VoiceId) ? Settings.DefaultVoice : Settings.VoiceId.Trim();
+
+    /// <summary>
     /// The Supertonic half of <see cref="Utterance"/>, kept separate because the
     /// benchmark sweep wants exactly this and has no use for a stretch factor.
     /// </summary>
     public SynthesisOptions Synthesis(string? voice, string? language) =>
         new SupertonicOptions(
-            voice ?? Settings.DefaultVoice,
+            // Bare, for the same reason Utterance unwraps: a Supertonic style
+            // names models/voice_styles/<style>.json, and "supertonic:M1" is not
+            // a filename.
+            VoiceId.Parse(voice ?? ConfiguredVoice).Bare,
             SupertonicLanguages.Normalize(language ?? Settings.Language),
             Settings.TotalStep,
             // The CLAMPED speed, not EngineSpeed: the model is only well behaved

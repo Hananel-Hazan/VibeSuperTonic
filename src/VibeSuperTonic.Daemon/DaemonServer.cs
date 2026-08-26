@@ -23,7 +23,7 @@ namespace VibeSuperTonic.Daemon;
 /// adding any external subscriber, becomes a rewrite. Building the stream first,
 /// with a client that only prints it, is the enforcement.</para>
 /// </summary>
-public sealed class DaemonServer : IDisposable
+public sealed partial class DaemonServer : IDisposable
 {
     private readonly DaemonOptions _options;
     private readonly HostConfig _config;
@@ -414,6 +414,15 @@ public sealed class DaemonServer : IDisposable
                     continue;
                 }
 
+                if (request.Verb == RequestVerb.VoiceInstall)
+                {
+                    // The second multi-reply verb, and it follows the first's
+                    // contract exactly: progress lines, then one reply without
+                    // a progress field. It owns the writer for the duration.
+                    await VoiceInstallAsync(writer, request, token);
+                    continue;
+                }
+
                 if (request.Verb == RequestVerb.Shutdown)
                 {
                     // Answer BEFORE tearing anything down. Cancelling first would
@@ -494,6 +503,19 @@ public sealed class DaemonServer : IDisposable
                 RefreshConfig(force: false);
                 return new Response { Ok = true, Config = ConfigSnapshot() };
 
+            case RequestVerb.Voices:
+                return Voices();
+
+            case RequestVerb.VoiceRemove:
+                return VoiceRemove(request);
+
+            case RequestVerb.VoiceInstall:
+                // Handled in the connection loop, which owns the writer for the
+                // duration. Same shape as Shutdown below: reaching here means a
+                // direct call, and answering honestly beats "unsupported verb"
+                // about a verb that exists.
+                return Response.Fail("voice install streams progress and must be sent over a connection");
+
             case RequestVerb.Shutdown:
                 // Handled in the connection loop, which owns the ordering between
                 // the reply and the teardown. Reaching here means someone called
@@ -518,7 +540,12 @@ public sealed class DaemonServer : IDisposable
     /// winning by default is what makes a portable folder resume with the voice
     /// it was last used with.
     /// </summary>
-    private string EffectiveVoice => _options.VoiceOverride ?? _config.Settings.DefaultVoice;
+    /// <summary>
+    /// The voice the next press would use, as configured — possibly
+    /// engine-qualified. <c>ConfiguredVoice</c> resolves the two settings keys;
+    /// a --voice override on the command line still wins over both.
+    /// </summary>
+    private string EffectiveVoice => _options.VoiceOverride ?? _config.ConfiguredVoice;
     private string EffectiveLanguage => _options.LanguageOverride ?? _config.Settings.Language;
 
     /// <summary>

@@ -102,9 +102,16 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
     /// utterance in flight is using the current engine, and the next press asks
     /// again.</para>
     /// </summary>
-    public Selection Select(string? voiceId)
+    public Selection Select(string? requestedId)
     {
-        string? modelPath = _store.ModelPath(voiceId);
+        // Accepts either form. HostConfig.Utterance already unwraps the qualified
+        // id before building the options, so the press path arrives bare — but
+        // `vst-ctl speak --voice piper:xxx` and the daemon's own startup call
+        // both come straight from a person, and an id that names its engine
+        // should not be the one form that fails to resolve.
+        VoiceId? requested = VoiceId.TryParse(requestedId, out var parsed) ? parsed : null;
+        string? voiceId = requested?.Bare;
+        string? modelPath = requested is { MayBePiper: true } ? _store.ModelPath(voiceId) : null;
 
         lock (_gate)
         {
@@ -155,6 +162,102 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
             StartCalibrationIfNeededLocked(voiceId!, built);
             return new Selection(true, built.SampleRate, null);
         }
+    }
+
+    /// <summary>
+    /// Measure a voice that has just been installed, without selecting it.
+    ///
+    /// <para><b>Why P4 does this rather than leaving it to the first press.</b>
+    /// The measurement is 50-odd renders — 7 to 9 seconds for a <c>medium</c>
+    /// voice, about 47 for a <c>high</c> one — and it has to happen once per
+    /// voice regardless. The install is the moment the user is already watching a
+    /// progress bar for that voice and is least surprised by it continuing to
+    /// work; the alternative is that it happens on the first press instead, where
+    /// the rate is silently served by the reciprocal and can be 20% out.</para>
+    ///
+    /// <para><b>It builds its own session and disposes it.</b> Selecting the
+    /// voice would be the cheaper way and the wrong one: installing a voice must
+    /// not change which voice the next press uses. The cost is one extra Piper
+    /// session — 138-194 MB by P2's measurements — for the length of the
+    /// measurement, and it is off the press path entirely.</para>
+    ///
+    /// <para>Returns false without measuring when the voice is already calibrated,
+    /// is not in the store, or when this process has already tried and failed —
+    /// the same once-per-voice-per-process rule the press path uses, for the same
+    /// reason.</para>
+    /// </summary>
+    public bool StartCalibration(string voiceId, Action<string>? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(voiceId)) return false;
+        if (_store.ModelPath(voiceId) is null) return false;
+        if (_store.Calibration(voiceId) is not null) return false;
+
+        lock (_gate)
+        {
+            if (!_calibrationAttempted.Add(voiceId)) return false;
+        }
+
+        string path = _store.CalibrationPath(voiceId);
+        if (_store.ModelPath(voiceId) is not { } modelPath) return false;
+
+        _calibration = Task.Run(() =>
+        {
+            ISynthesizer? built = null;
+            try
+            {
+                progress?.Invoke($"calibrating {voiceId} — measuring its rate curve");
+                built = _buildPiper(modelPath);
+                if (built is not Onnx.Ort.PiperSynthesizer piper)
+                {
+                    _log($"calibrate: '{voiceId}' built something that is not a Piper session");
+                    return;
+                }
+
+                var voice = piper.Voice;
+                var curve = PiperCalibrator.Measure(
+                    scale => AverageSeconds(piper, voiceId, voice, scale),
+                    DateTimeOffset.UtcNow,
+                    voice.LengthScale);
+
+                if (curve.TrySave(path, out string? error))
+                {
+                    _log($"calibrate: '{voiceId}' delivers up to {curve.MaxRate:F2}x, " +
+                         $"{curve.Points.Count} points, saved to {path}");
+                    progress?.Invoke($"calibrated {voiceId} — up to {curve.MaxRate:F2}x");
+                }
+                else
+                {
+                    _log($"calibrate: measured '{voiceId}' but could not save it to {path}: {error}");
+                    progress?.Invoke($"measured {voiceId} but could not save the curve: {error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _log($"calibrate: could not measure '{voiceId}': {ex.GetType().Name}: " +
+                     $"{ex.Message.Split('\n')[0].Trim()}");
+            }
+            finally
+            {
+                (built as IDisposable)?.Dispose();
+            }
+        });
+
+        return true;
+    }
+
+    /// <summary>
+    /// Forget that a voice was ever calibrated by this process.
+    ///
+    /// <para>Called when a voice is removed. Without it, installing a voice,
+    /// removing it and installing it again within one daemon lifetime leaves the
+    /// second install permanently uncalibrated: the once-per-process guard has
+    /// no idea the directory it recorded a decision about has been deleted and
+    /// recreated.</para>
+    /// </summary>
+    public void ForgetCalibration(string voiceId)
+    {
+        if (string.IsNullOrWhiteSpace(voiceId)) return;
+        lock (_gate) _calibrationAttempted.Remove(voiceId);
     }
 
     /// <summary>

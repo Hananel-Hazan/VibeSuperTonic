@@ -18,16 +18,20 @@ using VibeSuperTonic.Core.Synthesis;
 //   vst-ctl reload              re-read settings.json and pronunciations.json
 //   vst-ctl config              where config was read from, and what it made of it
 //   vst-ctl benchmark           measure this machine and record its thread count
+//   vst-ctl voices              what is installed, and what the catalog offers
+//   vst-ctl voice install ID    download a catalog voice and calibrate it
+//   vst-ctl voice remove ID     delete an installed Piper voice
 //   vst-ctl shutdown            stop the daemon; the next press starts it again
 //
 // It holds no state. The daemon decides what a toggle means, which is what
 // makes the hotkey, the tray menu and D-Bus behave identically — and what lets
 // this be a process whose whole job is one write.
 //
-// `benchmark` is the one verb that reads more than one reply: the daemon reports
-// a row at a time over tens of seconds. It is here rather than in the app because
-// it has to work over ssh, on a server, and before any window exists — and
-// because the Tune tab calls this same verb rather than having a path of its own.
+// `benchmark` and `voice install` are the two verbs that read more than one
+// reply: the daemon reports a row, or a byte count, at a time over tens of
+// seconds. Both are here rather than in the app because they have to work over
+// ssh, on a server, and before any window exists — and because the Tune and
+// Voices tabs call these same verbs rather than having paths of their own.
 
 const int AutoStartBudgetMs = 5000;
 
@@ -58,6 +62,12 @@ if (args.Contains("--version"))
 
 bool noStart = args.Contains("--no-start");
 bool force = args.Contains("--force");
+
+// Trap 7: the voices are a SECOND licence axis, separate from the engine's, and
+// each voice differs. The daemon refuses an install without this, and names the
+// terms in the refusal so the accepting is deliberate rather than discovered.
+bool acceptLicence = args.Contains("--accept-licence") || args.Contains("--accept-license")
+                     || args.Contains("--yes") || args.Contains("-y");
 
 // --voice takes a value, so its argument has to come out of the positional list
 // as well as the flag itself — otherwise the voice id is spoken as text, which
@@ -95,6 +105,38 @@ if (positional.Length == 0)
     return 2;
 }
 
+// `voice install <id>` and `voice remove <id>` are two words, and the wire verb
+// is one. Folded here rather than adding VoiceInstall/VoiceRemove as things a
+// user types: "voice" is the noun the Voices tab uses and the pair reads as a
+// pair, which `voiceinstall` never would.
+string? voiceSubject = null;
+if (string.Equals(positional[0], "voice", StringComparison.OrdinalIgnoreCase))
+{
+    if (positional.Length < 2)
+    {
+        Console.Error.WriteLine("voice needs an action: `voice install <id>` or `voice remove <id>`");
+        return 2;
+    }
+
+    string action = positional[1].ToLowerInvariant();
+    if (action is not ("install" or "remove"))
+    {
+        Console.Error.WriteLine($"unknown voice action: {positional[1]} (install, remove)");
+        return 2;
+    }
+
+    // The id may arrive as the third positional or as --voice; both read
+    // naturally and neither should be the one that fails.
+    voiceSubject = positional.Length > 2 ? positional[2] : voice;
+    if (string.IsNullOrWhiteSpace(voiceSubject))
+    {
+        Console.Error.WriteLine($"voice {action} needs a voice id — `vst-ctl voices` lists them");
+        return 2;
+    }
+
+    positional = new[] { action == "install" ? "voiceinstall" : "voiceremove" };
+}
+
 if (!Enum.TryParse<RequestVerb>(positional[0], ignoreCase: true, out var verb))
 {
     Console.Error.WriteLine($"unknown verb: {positional[0]}");
@@ -126,7 +168,9 @@ var request = new Request
     // Which voice, and therefore which ENGINE: the daemon routes to Piper
     // exactly when the id names an installed Piper voice, so this one flag is
     // how a person asks for the other engine. Null means the daemon's default.
-    Voice = voice,
+    // For `voice install|remove` it is the SUBJECT rather than the voice to
+    // speak with, which is the same field carrying the same kind of value.
+    Voice = voiceSubject ?? voice,
 
     // The session travels with the request, because the daemon may not have one.
     // This process was started by the keybinding, the tray or a shell — all
@@ -139,7 +183,11 @@ var request = new Request
 
     // Only benchmark reads it, and only to override its load guard. Sent as null
     // otherwise so the flag cannot quietly acquire a second meaning later.
-    Force = verb == RequestVerb.Benchmark && force ? true : null,
+    Force = verb is RequestVerb.Benchmark or RequestVerb.VoiceRemove && force ? true : null,
+
+    // Only the install reads it, and sending it on anything else would let the
+    // flag quietly acquire a second meaning later.
+    AcceptLicence = verb == RequestVerb.VoiceInstall && acceptLicence ? true : null,
 };
 
 if (verb == RequestVerb.Speak && string.IsNullOrWhiteSpace(request.Text))
@@ -207,6 +255,10 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     // undisturbed.
     if (verb == RequestVerb.Benchmark) return RunBenchmark(reader);
 
+    // The second streaming verb, and it reads by the same rule: lines until one
+    // arrives without a progress field.
+    if (verb == RequestVerb.VoiceInstall) return RunVoiceInstall(reader);
+
     string? line = reader.ReadLine();
     if (line is null)
     {
@@ -251,6 +303,18 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     if (verb == RequestVerb.Reload)
     {
         Console.Error.WriteLine("reloaded");
+        return 0;
+    }
+
+    if (verb == RequestVerb.Voices)
+    {
+        if (response.Voices is { } list) PrintVoices(list);
+        return 0;
+    }
+
+    if (verb == RequestVerb.VoiceRemove)
+    {
+        Console.Error.WriteLine(response.Voice?.Message ?? "removed");
         return 0;
     }
 
@@ -324,6 +388,9 @@ static void PrintUsage() =>
           reload       re-read settings.json and pronunciations.json
           config       print the effective configuration and its paths
           benchmark    measure this machine's best thread count and record it
+          voices       list installed voices and what the catalog offers
+          voice install ID   download a catalog voice and calibrate it
+          voice remove ID    delete an installed Piper voice
           shutdown     stop the daemon; the next hotkey press starts it again
 
         Options:
@@ -331,7 +398,12 @@ static void PrintUsage() =>
                        installed Piper voice (en_US-lessac-medium), which also
                        chooses the engine
           --no-start   fail instead of starting a daemon that is not running
-          --force      benchmark even on a busy machine (the result is worth less)
+          --force      benchmark even on a busy machine (the result is worth less);
+                       also removes a voice that is the configured default
+          --accept-licence
+                       accept the voice's own licence terms, which `voice install`
+                       requires. Each voice carries its own — some are
+                       NON-COMMERCIAL — and the refusal names them. (-y, --yes)
         """);
 
 /// <summary>
@@ -599,5 +671,139 @@ static bool TryStartDaemon(out string error, out string? startedFrom)
     {
         error = $"{ex.GetType().Name}: {ex.Message}";
         return false;
+    }
+}
+
+/// <summary>
+/// Print the voice list for a person: what is installed, then what the catalog
+/// offers, grouped by language.
+///
+/// <para>Not JSON on stdout, unlike <c>status</c> and <c>config</c>. Those two
+/// exist to be piped into <c>jq</c> when something is misbehaving; this one is a
+/// menu, and 43 catalog entries as one JSON line is not a menu. Anyone scripting
+/// against it can send the verb themselves — the wire format is the same
+/// one-object-per-line it has always been.</para>
+/// </summary>
+static void PrintVoices(VoicesPayload list)
+{
+    Console.WriteLine("INSTALLED");
+    if (list.Installed.Count == 0)
+    {
+        Console.WriteLine("  (none — no models found)");
+    }
+    else
+    {
+        foreach (var v in list.Installed)
+        {
+            var bits = new List<string> { v.Engine };
+            if (v.Quality is { } q) bits.Add(q);
+            if (v.Language is { } lang) bits.Add(lang);
+            if (v.SampleRate is { } rate) bits.Add($"{rate / 1000} kHz");
+            if (v.Bytes is > 0) bits.Add($"{v.Bytes / (1024 * 1024)} MB");
+            if (v.Licence is { } lic) bits.Add(lic);
+            // "styles" for Supertonic and "speakers" for Piper, because they are
+            // not the same thing: a style is a separate voice file, a speaker is
+            // a sid inside one graph.
+            if (v.Speakers is > 1)
+                bits.Add($"{v.Speakers} {(v.Engine == "supertonic" ? "styles" : "speakers")}");
+
+            // Uncalibrated is worth a mark rather than a footnote: until the
+            // curve is measured a requested rate is served by the reciprocal and
+            // can be 20% out, which is audible and otherwise unexplained.
+            if (v.Calibrated == false) bits.Add("not yet calibrated");
+
+            Console.WriteLine($"  {(v.IsDefault ? "*" : " ")} {v.Id,-38} {string.Join(" · ", bits)}");
+        }
+    }
+
+    if (list.Available.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"AVAILABLE ({list.Available.Count}" +
+                          (list.CatalogRevision is { } rev ? $", pinned to {rev}" : "") + ")");
+
+        foreach (var group in list.Available
+                     .GroupBy(v => v.Language ?? "")
+                     .OrderBy(g => g.Key, StringComparer.CurrentCulture))
+        {
+            Console.WriteLine($"  {group.Key}");
+            foreach (var v in group.OrderBy(v => v.Quality switch
+                     {
+                         "high" => 0, "medium" => 1, "low" => 2, _ => 3,
+                     }))
+            {
+                string nc = v.LicenceClass == "nc" ? "  NON-COMMERCIAL" : "";
+                Console.WriteLine(
+                    $"      {v.Id,-38} {v.Quality,-6} {v.SampleRate / 1000,2} kHz " +
+                    $"{v.Bytes / (1024 * 1024),4} MB  {v.Licence}{nc}");
+            }
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"store: {list.StoreRoot}");
+    foreach (string note in list.Notes ?? Array.Empty<string>())
+        Console.WriteLine($"note:  {note}");
+}
+
+/// <summary>
+/// Read an install: a progress line as the bytes arrive, then the verdict.
+///
+/// <para>Same contract as the sweep — lines until one arrives without a progress
+/// field — and the same stdout/stderr split, so the progress that would otherwise
+/// fill a pipe stays on stderr. The bar is rewritten in place with a carriage
+/// return when stderr is a terminal, and printed as ordinary lines when it is
+/// not: a log file full of \r is worse than no bar at all.</para>
+/// </summary>
+static int RunVoiceInstall(StreamReader reader)
+{
+    bool tty = !Console.IsErrorRedirected;
+    bool wroteBar = false;
+
+    while (true)
+    {
+        string? line = reader.ReadLine();
+        if (line is null)
+        {
+            Console.Error.WriteLine("the daemon closed the connection mid-install");
+            return 1;
+        }
+
+        var reply = Protocol.TryDecode<Response>(line);
+        if (reply is null)
+        {
+            Console.Error.WriteLine($"unparseable reply: {line}");
+            return 1;
+        }
+
+        if (reply.VoiceProgress is { } p)
+        {
+            if (p.Message is { } message)
+            {
+                if (wroteBar) { Console.Error.WriteLine(); wroteBar = false; }
+                Console.Error.WriteLine(message);
+            }
+            else if (p.BytesTotal > 0)
+            {
+                double pct = 100.0 * p.BytesReceived / p.BytesTotal;
+                string bar = $"  {p.File} {p.BytesReceived / (1024 * 1024),4}/" +
+                             $"{p.BytesTotal / (1024 * 1024)} MB  {pct,5:F1}%";
+                if (tty) { Console.Error.Write($"\r{bar}   "); wroteBar = true; }
+                else Console.Error.WriteLine(bar);
+            }
+            continue;
+        }
+
+        if (wroteBar) Console.Error.WriteLine();
+
+        if (!reply.Ok)
+        {
+            Console.Error.WriteLine(reply.Error ?? "install failed");
+            return 1;
+        }
+
+        Console.Error.WriteLine(reply.Voice?.Message ?? "installed");
+        if (reply.Notice is { } notice) Console.Error.WriteLine(notice);
+        return 0;
     }
 }
