@@ -1,0 +1,1547 @@
+{
+  "version": "1",
+  "_comment": "Curated, hash-pinned Piper voice catalog. GENERATED — edit build/gen-piper-catalog.py and re-run, never this file. Pinned to rhasspy/piper-voices@v1.0.0, so the sizes and SHA-256 below stay valid even if upstream pushes new commits. The .onnx weights are git-LFS objects whose sha256 IS their LFS content hash; the .onnx.json configs are plain git blobs that this generator downloaded and hashed itself, so both files of every voice are fully verified rather than size-checked. VOICE LICENCES ARE A SEPARATE AXIS FROM THE ENGINE'S: each entry carries the terms from its own MODEL_CARD, the Voices tab shows them before any bytes arrive, and the download is gated on accepting them. A voice whose MODEL_CARD could not state a licence is not in this file at all.",
+  "source": {
+    "repo": "rhasspy/piper-voices",
+    "revision": "v1.0.0",
+    "generated": "2026-08-25",
+    "policy": "C",
+    "policyClasses": [
+      "agpl",
+      "apache",
+      "by",
+      "by-sa",
+      "nc",
+      "public"
+    ]
+  },
+  "voices": [
+    {
+      "id": "ca_ES-upc_ona-medium",
+      "name": "upc_ona",
+      "language": {
+        "code": "ca_ES",
+        "english": "Catalan",
+        "native": "Català",
+        "country": "Spain"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC BY-SA 3.0 ES",
+        "class": "by-sa",
+        "url": "https://collectivat.cat/asr#upc-festcat-tts-corpora"
+      },
+      "files": [
+        {
+          "name": "ca_ES-upc_ona-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx",
+          "mirrors": [],
+          "sha256": "fdb652db8c11a4475527346cf3241cb064d1ba393cf370f3f2ec09a872d118fd",
+          "bytes": 63201294
+        },
+        {
+          "name": "ca_ES-upc_ona-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "7f76acc9c06f4eda9e6aef2997b75782d97855aab48d4b401eb956a6e655eddc",
+          "bytes": 4875
+        }
+      ]
+    },
+    {
+      "id": "ca_ES-upc_ona-x_low",
+      "name": "upc_ona",
+      "language": {
+        "code": "ca_ES",
+        "english": "Catalan",
+        "native": "Català",
+        "country": "Spain"
+      },
+      "quality": "x_low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC BY-SA 3.0 ES",
+        "class": "by-sa",
+        "url": "https://collectivat.cat/asr#upc-festcat-tts-corpora"
+      },
+      "files": [
+        {
+          "name": "ca_ES-upc_ona-x_low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/x_low/ca_ES-upc_ona-x_low.onnx",
+          "mirrors": [],
+          "sha256": "13661d26423e0c791823823a5971f4e1aaf644a62e65e0e94d299c0e70560e14",
+          "bytes": 20628813
+        },
+        {
+          "name": "ca_ES-upc_ona-x_low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/x_low/ca_ES-upc_ona-x_low.onnx.json",
+          "mirrors": [],
+          "sha256": "00e12b206e6ca676e6f992973551b4e068edd9823608144a60365c010dc6bb2f",
+          "bytes": 4159
+        }
+      ]
+    },
+    {
+      "id": "cs_CZ-jirka-medium",
+      "name": "jirka",
+      "language": {
+        "code": "cs_CZ",
+        "english": "Czech",
+        "native": "Čeština",
+        "country": "Czech Republic"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "cs_CZ-jirka-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx",
+          "mirrors": [],
+          "sha256": "cbd5c900acacc8e8cbecd64347abb8de39c00a9d3104bed06fee92e4f319efc8",
+          "bytes": 63201294
+        },
+        {
+          "name": "cs_CZ-jirka-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "fb38b1799b7354808227c065efa97b1ffa2b0cde59505babb56a36d35af9c637",
+          "bytes": 5025
+        }
+      ]
+    },
+    {
+      "id": "cs_CZ-jirka-low",
+      "name": "jirka",
+      "language": {
+        "code": "cs_CZ",
+        "english": "Czech",
+        "native": "Čeština",
+        "country": "Czech Republic"
+      },
+      "quality": "low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "cs_CZ-jirka-low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/low/cs_CZ-jirka-low.onnx",
+          "mirrors": [],
+          "sha256": "72e73fb306a165b41927d2c9d882f71e9f1c86ac5edf37c5441370a6e4e6ef7d",
+          "bytes": 63201294
+        },
+        {
+          "name": "cs_CZ-jirka-low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/low/cs_CZ-jirka-low.onnx.json",
+          "mirrors": [],
+          "sha256": "fc32d8cdd23a6461fdd355de422daad6271cbf15033b754343b8a9262cca1f76",
+          "bytes": 5022
+        }
+      ]
+    },
+    {
+      "id": "cy_GB-bu_tts-medium",
+      "name": "bu_tts",
+      "language": {
+        "code": "cy_GB",
+        "english": "Welsh",
+        "native": "Cymraeg",
+        "country": "Great Britain"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 7,
+      "speakerNames": [
+        "benyw-de-pro",
+        "benyw-gogledd-pro",
+        "gwryw-gogledd-pro",
+        "gwryw-gogledd-2",
+        "gwryw-de-1",
+        "gwryw-gogledd-1",
+        "benyw-gogledd-1"
+      ],
+      "licence": {
+        "name": "CC-BY",
+        "class": "by",
+        "url": "https://huggingface.co/datasets/techiaith/bu-tts-cy-en"
+      },
+      "files": [
+        {
+          "name": "cy_GB-bu_tts-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cy/cy_GB/bu_tts/medium/cy_GB-bu_tts-medium.onnx",
+          "mirrors": [],
+          "sha256": "411b513cd35975b4248cbaa8e3e5a9d9a3b8db6b77680b821e37b75d984be329",
+          "bytes": 77061326
+        },
+        {
+          "name": "cy_GB-bu_tts-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cy/cy_GB/bu_tts/medium/cy_GB-bu_tts-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "c318e3b8700b8eb4ed5deb276872b036dcb67e2882cc8dfb2d59d4a64018b285",
+          "bytes": 5145
+        }
+      ]
+    },
+    {
+      "id": "da_DK-talesyntese-medium",
+      "name": "talesyntese",
+      "language": {
+        "code": "da_DK",
+        "english": "Danish",
+        "native": "Dansk",
+        "country": "Denmark"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-21/"
+      },
+      "files": [
+        {
+          "name": "da_DK-talesyntese-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx",
+          "mirrors": [],
+          "sha256": "b9271efd25f7b8494bbd28d48dd675c8c119daa284f3ee488008935f515f1241",
+          "bytes": 63201294
+        },
+        {
+          "name": "da_DK-talesyntese-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "89fe13bd251406cc0088570d103ea7ac35823211d8466faf913268ab8506f41b",
+          "bytes": 4878
+        }
+      ]
+    },
+    {
+      "id": "de_DE-thorsten-high",
+      "name": "thorsten",
+      "language": {
+        "code": "de_DE",
+        "english": "German",
+        "native": "Deutsch",
+        "country": "Germany"
+      },
+      "quality": "high",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/thorstenMueller/Thorsten-Voice"
+      },
+      "files": [
+        {
+          "name": "de_DE-thorsten-high.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/high/de_DE-thorsten-high.onnx",
+          "mirrors": [],
+          "sha256": "9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1",
+          "bytes": 113895201
+        },
+        {
+          "name": "de_DE-thorsten-high.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json",
+          "mirrors": [],
+          "sha256": "6de734444e4c3f9e33b7ebe2746dbc19b71e85f613e79c65acf623200b99a76a",
+          "bytes": 4875
+        }
+      ]
+    },
+    {
+      "id": "de_DE-thorsten-medium",
+      "name": "thorsten",
+      "language": {
+        "code": "de_DE",
+        "english": "German",
+        "native": "Deutsch",
+        "country": "Germany"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/thorstenMueller/Thorsten-Voice"
+      },
+      "files": [
+        {
+          "name": "de_DE-thorsten-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+          "mirrors": [],
+          "sha256": "7e64762d8e5118bb578f2eea6207e1a35a8e0c30595010b666f983fc87bb7819",
+          "bytes": 63201294
+        },
+        {
+          "name": "de_DE-thorsten-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "974adee790533adb273a1ac88f49027d2a1b8f0f2cf4905954a4791e79264e85",
+          "bytes": 4819
+        }
+      ]
+    },
+    {
+      "id": "de_DE-thorsten-low",
+      "name": "thorsten",
+      "language": {
+        "code": "de_DE",
+        "english": "German",
+        "native": "Deutsch",
+        "country": "Germany"
+      },
+      "quality": "low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/thorstenMueller/Thorsten-Voice"
+      },
+      "files": [
+        {
+          "name": "de_DE-thorsten-low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/low/de_DE-thorsten-low.onnx",
+          "mirrors": [],
+          "sha256": "9ac27fad17cec5c1a791161976a64f026f16fc058b400b1fea62565b8b2cf375",
+          "bytes": 63104526
+        },
+        {
+          "name": "de_DE-thorsten-low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/low/de_DE-thorsten-low.onnx.json",
+          "mirrors": [],
+          "sha256": "df38e892ed949f62d0c40978bc666de0b341c5f7921840ae7c72f4df8e8ffa05",
+          "bytes": 4159
+        }
+      ]
+    },
+    {
+      "id": "el_GR-rapunzelina-low",
+      "name": "rapunzelina",
+      "language": {
+        "code": "el_GR",
+        "english": "Greek",
+        "native": "Ελληνικά",
+        "country": "Greece"
+      },
+      "quality": "low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.kaggle.com/datasets/bryanpark/greek-single-speaker-speech-dataset"
+      },
+      "files": [
+        {
+          "name": "el_GR-rapunzelina-low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/el/el_GR/rapunzelina/low/el_GR-rapunzelina-low.onnx",
+          "mirrors": [],
+          "sha256": "eebb335946c5d868743ff35fbb66b6f00e431b5b9b2e18caf47d3f609a2bf2e1",
+          "bytes": 63104526
+        },
+        {
+          "name": "el_GR-rapunzelina-low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/el/el_GR/rapunzelina/low/el_GR-rapunzelina-low.onnx.json",
+          "mirrors": [],
+          "sha256": "24ccc31c1306df4364fd85b56aeb09aba8c185a1fdf7db1367a72d4affe478e4",
+          "bytes": 4198
+        }
+      ]
+    },
+    {
+      "id": "en_GB-cori-high",
+      "name": "cori",
+      "language": {
+        "code": "en_GB",
+        "english": "English",
+        "native": "English",
+        "country": "Great Britain"
+      },
+      "quality": "high",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "public domain",
+        "class": "public",
+        "url": "https://librivox.org"
+      },
+      "files": [
+        {
+          "name": "en_GB-cori-high.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/high/en_GB-cori-high.onnx",
+          "mirrors": [],
+          "sha256": "470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903",
+          "bytes": 114219352
+        },
+        {
+          "name": "en_GB-cori-high.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/high/en_GB-cori-high.onnx.json",
+          "mirrors": [],
+          "sha256": "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec",
+          "bytes": 4963
+        }
+      ]
+    },
+    {
+      "id": "en_GB-cori-medium",
+      "name": "cori",
+      "language": {
+        "code": "en_GB",
+        "english": "English",
+        "native": "English",
+        "country": "Great Britain"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "public domain",
+        "class": "public",
+        "url": "https://librivox.org"
+      },
+      "files": [
+        {
+          "name": "en_GB-cori-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx",
+          "mirrors": [],
+          "sha256": "1899f98e5fb8310154f3c2973f4b8a929ba7245e722b3d3a85680b833d95f10d",
+          "bytes": 63531379
+        },
+        {
+          "name": "en_GB-cori-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "e262c16d7f192f69d4edd6b4ef8a5915379e67495fcc402f1ab15eeb33da3d36",
+          "bytes": 4966
+        }
+      ]
+    },
+    {
+      "id": "en_US-ljspeech-high",
+      "name": "ljspeech",
+      "language": {
+        "code": "en_US",
+        "english": "English",
+        "native": "English",
+        "country": "United States"
+      },
+      "quality": "high",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "public domain",
+        "class": "public",
+        "url": "https://keithito.com/LJ-Speech-Dataset/"
+      },
+      "files": [
+        {
+          "name": "en_US-ljspeech-high.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx",
+          "mirrors": [],
+          "sha256": "5d4f08ba6a2a48c44592eed3ce56bf85e9de3dd4e20df90541ae68a8310c029a",
+          "bytes": 114199011
+        },
+        {
+          "name": "en_US-ljspeech-high.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json",
+          "mirrors": [],
+          "sha256": "7e1f4634af596d83cca997fb7a931ba80b70f8a316a2655ee69c55365e0ace14",
+          "bytes": 4970
+        }
+      ]
+    },
+    {
+      "id": "en_US-ljspeech-medium",
+      "name": "ljspeech",
+      "language": {
+        "code": "en_US",
+        "english": "English",
+        "native": "English",
+        "country": "United States"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "public domain",
+        "class": "public",
+        "url": "https://keithito.com/LJ-Speech-Dataset/"
+      },
+      "files": [
+        {
+          "name": "en_US-ljspeech-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx",
+          "mirrors": [],
+          "sha256": "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22",
+          "bytes": 63531379
+        },
+        {
+          "name": "en_US-ljspeech-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860",
+          "bytes": 4972
+        }
+      ]
+    },
+    {
+      "id": "es_AR-daniela-high",
+      "name": "daniela",
+      "language": {
+        "code": "es_AR",
+        "english": "Spanish",
+        "native": "Español",
+        "country": "Argentina"
+      },
+      "quality": "high",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "Attribution-ShareAlike 4.0 International",
+        "class": "by-sa",
+        "url": "https://www.openslr.org/61/"
+      },
+      "files": [
+        {
+          "name": "es_AR-daniela-high.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_AR/daniela/high/es_AR-daniela-high.onnx",
+          "mirrors": [],
+          "sha256": "7ceb1fc0dab349418c5b54a639ae9ee595212d7c9ea422220d8419163d5cc985",
+          "bytes": 114199011
+        },
+        {
+          "name": "es_AR-daniela-high.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_AR/daniela/high/es_AR-daniela-high.onnx.json",
+          "mirrors": [],
+          "sha256": "aedbf69647e1d754c62ecf8e0366ca5f16af3e768e3c6b5329af6eb6bde3852b",
+          "bytes": 7248
+        }
+      ]
+    },
+    {
+      "id": "es_ES-davefx-medium",
+      "name": "davefx",
+      "language": {
+        "code": "es_ES",
+        "english": "Spanish",
+        "native": "Español",
+        "country": "Spain"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "es_ES-davefx-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",
+          "mirrors": [],
+          "sha256": "6658b03b1a6c316ee4c265a9896abc1393353c2d9e1bca7d66c2c442e222a917",
+          "bytes": 63201294
+        },
+        {
+          "name": "es_ES-davefx-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "0e0dda87c732f6f38771ff274a6380d9252f327dca77aa2963d5fbdf9ec54842",
+          "bytes": 4817
+        }
+      ]
+    },
+    {
+      "id": "es_MX-ald-medium",
+      "name": "ald",
+      "language": {
+        "code": "es_MX",
+        "english": "Spanish",
+        "native": "Español",
+        "country": "Mexico"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "http://unlicense.org",
+        "class": "public",
+        "url": "https://huggingface.co/datasets/rmcpantoja/Ald_Mexican_Spanish_speech_dataset"
+      },
+      "files": [
+        {
+          "name": "es_MX-ald-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_MX/ald/medium/es_MX-ald-medium.onnx",
+          "mirrors": [],
+          "sha256": "019b3803293c93e34a206dd2e53a3889209a514e786fd7144f7b70196c579b63",
+          "bytes": 63201294
+        },
+        {
+          "name": "es_MX-ald-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_MX/ald/medium/es_MX-ald-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "efab736e62e5321dd5d063d1b46e63c59ce655419816355b81d025c1a8d6b03c",
+          "bytes": 4889
+        }
+      ]
+    },
+    {
+      "id": "fa_IR-amir-medium",
+      "name": "amir",
+      "language": {
+        "code": "fa_IR",
+        "english": "Farsi",
+        "native": "فارسی",
+        "country": "Iran"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://datacula.com/tts-databases"
+      },
+      "files": [
+        {
+          "name": "fa_IR-amir-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx",
+          "mirrors": [],
+          "sha256": "fb815380d969ea372b0b21b0de14421f58fe481047e153e69685d079b6e1a9d1",
+          "bytes": 63531379
+        },
+        {
+          "name": "fa_IR-amir-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "75f918a3bf0f57a9179abe725af529f2a5c79d6c899e2a84aec76c685d5dfb9a",
+          "bytes": 4958
+        }
+      ]
+    },
+    {
+      "id": "fi_FI-harri-medium",
+      "name": "harri",
+      "language": {
+        "code": "fi_FI",
+        "english": "Finnish",
+        "native": "Suomi",
+        "country": "Finland"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.kaggle.com/bryanpark/finnish-single-speaker-speech-dataset"
+      },
+      "files": [
+        {
+          "name": "fi_FI-harri-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx",
+          "mirrors": [],
+          "sha256": "a44167faa34caed940e4fcad139fcc35922266b2593bcebe77701774c0fb2389",
+          "bytes": 63201294
+        },
+        {
+          "name": "fi_FI-harri-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "3f9c9f76f74adf1fbe7279e41eea17d6610757e45effd6808bbea6be74b8916d",
+          "bytes": 4873
+        }
+      ]
+    },
+    {
+      "id": "fi_FI-harri-low",
+      "name": "harri",
+      "language": {
+        "code": "fi_FI",
+        "english": "Finnish",
+        "native": "Suomi",
+        "country": "Finland"
+      },
+      "quality": "low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.kaggle.com/bryanpark/finnish-single-speaker-speech-dataset"
+      },
+      "files": [
+        {
+          "name": "fi_FI-harri-low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/low/fi_FI-harri-low.onnx",
+          "mirrors": [],
+          "sha256": "208847719a1906e2af69dfabc3be4f192536beb1394e253e294690a8ea239853",
+          "bytes": 69795191
+        },
+        {
+          "name": "fi_FI-harri-low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/low/fi_FI-harri-low.onnx.json",
+          "mirrors": [],
+          "sha256": "1dc3a84f99cc744902dcc89f43c60e3c7158ee66d23c480d105315d795e22915",
+          "bytes": 4155
+        }
+      ]
+    },
+    {
+      "id": "fr_FR-gilles-low",
+      "name": "gilles",
+      "language": {
+        "code": "fr_FR",
+        "english": "French",
+        "native": "Français",
+        "country": "France"
+      },
+      "quality": "low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.kaggle.com/datasets/bryanpark/french-single-speaker-speech-dataset"
+      },
+      "files": [
+        {
+          "name": "fr_FR-gilles-low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/gilles/low/fr_FR-gilles-low.onnx",
+          "mirrors": [],
+          "sha256": "5cd711846720e261c2a176f6924c198a7424d0a75dd4b0a5357a5fb9cb739285",
+          "bytes": 63104526
+        },
+        {
+          "name": "fr_FR-gilles-low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/gilles/low/fr_FR-gilles-low.onnx.json",
+          "mirrors": [],
+          "sha256": "5a47cc0789e91267d17666bbec842dd92950669271a09023eb6970ee364cf88a",
+          "bytes": 4158
+        }
+      ]
+    },
+    {
+      "id": "hi_IN-pratham-medium",
+      "name": "pratham",
+      "language": {
+        "code": "hi_IN",
+        "english": "Hindi",
+        "native": "हिन्दी",
+        "country": "India"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "http://creativecommons.org/licenses/by-nc-sa/4.0/",
+        "class": "nc",
+        "url": ""
+      },
+      "files": [
+        {
+          "name": "hi_IN-pratham-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hi/hi_IN/pratham/medium/hi_IN-pratham-medium.onnx",
+          "mirrors": [],
+          "sha256": "169964b0871667f6793416d4b35e97357a68ba1ad01df8580c28048989ee7693",
+          "bytes": 63516050
+        },
+        {
+          "name": "hi_IN-pratham-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hi/hi_IN/pratham/medium/hi_IN-pratham-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "b68edd2cd7950dd436314013b7cd12e9699e5a3f6fe5af5af94294cf6aa7b9fd",
+          "bytes": 4970
+        }
+      ]
+    },
+    {
+      "id": "hu_HU-anna-medium",
+      "name": "anna",
+      "language": {
+        "code": "hu_HU",
+        "english": "Hungarian",
+        "native": "Magyar",
+        "country": "Hungary"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "hu_HU-anna-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx",
+          "mirrors": [],
+          "sha256": "968c0c3a66cb667811242cc88653bff9247395fc7a0517fbeef7d8c08cdae62a",
+          "bytes": 63201294
+        },
+        {
+          "name": "hu_HU-anna-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "ccf967d8db8018c9d8ffdb0edc8814ffcb6b75273bb0d84337317240f710283a",
+          "bytes": 5018
+        }
+      ]
+    },
+    {
+      "id": "kk_KZ-issai-high",
+      "name": "issai",
+      "language": {
+        "code": "kk_KZ",
+        "english": "Kazakh",
+        "native": "қазақша",
+        "country": "Kazakhstan"
+      },
+      "quality": "high",
+      "sampleRate": 22050,
+      "speakers": 6,
+      "speakerNames": [
+        "ISSAI_KazakhTTS2_M2",
+        "ISSAI_KazakhTTS_M1_Iseke",
+        "ISSAI_KazakhTTS2_F3",
+        "ISSAI_KazakhTTS_F1_Raya",
+        "ISSAI_KazakhTTS2_F1",
+        "ISSAI_KazakhTTS2_F2"
+      ],
+      "licence": {
+        "name": "CC-BY-4.0",
+        "class": "by",
+        "url": "https://github.com/IS2AI/Kazakh_TTS"
+      },
+      "files": [
+        {
+          "name": "kk_KZ-issai-high.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx",
+          "mirrors": [],
+          "sha256": "4dee767c893e8535da821447d12cb030e3569e11254c14030a1da5d8b2222c16",
+          "bytes": 127864258
+        },
+        {
+          "name": "kk_KZ-issai-high.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx.json",
+          "mirrors": [],
+          "sha256": "eb145ac8712b87beda9f0266e95b98cad76acce89d4626cd8b1408234e9842f0",
+          "bytes": 4358
+        }
+      ]
+    },
+    {
+      "id": "lb_LU-marylux-medium",
+      "name": "marylux",
+      "language": {
+        "code": "lb_LU",
+        "english": "Luxembourgish",
+        "native": "Lëtzebuergesch",
+        "country": "Luxembourg"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "http://creativecommons.org/licenses/by-nc-sa/4.0/",
+        "class": "nc",
+        "url": "https://github.com/marytts/marylux-data"
+      },
+      "files": [
+        {
+          "name": "lb_LU-marylux-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/lb/lb_LU/marylux/medium/lb_LU-marylux-medium.onnx",
+          "mirrors": [],
+          "sha256": "4147ecacdd98932951d0f956555542de358d3ccff708d4996e305c3ce287097a",
+          "bytes": 63201294
+        },
+        {
+          "name": "lb_LU-marylux-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/lb/lb_LU/marylux/medium/lb_LU-marylux-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "e5c5dec5433d33ff573e76fa567e80dcf636d05de5dcc817b273963f0733d742",
+          "bytes": 4979
+        }
+      ]
+    },
+    {
+      "id": "lv_LV-aivars-medium",
+      "name": "aivars",
+      "language": {
+        "code": "lv_LV",
+        "english": "Latvian",
+        "native": "Latviešu",
+        "country": "Latvia"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0 1.0 Universal",
+        "class": "public",
+        "url": "https://huggingface.co/RaivisDejus/Piper-lv_LV-Aivars-medium"
+      },
+      "files": [
+        {
+          "name": "lv_LV-aivars-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/lv/lv_LV/aivars/medium/lv_LV-aivars-medium.onnx",
+          "mirrors": [],
+          "sha256": "9d855a47c22e2b94795be9e0eb9e8c4c02ce251dc89461dede94de20ff08bd8e",
+          "bytes": 63511038
+        },
+        {
+          "name": "lv_LV-aivars-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/lv/lv_LV/aivars/medium/lv_LV-aivars-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "08ae2c297be8aa04f15f3f97b7ffeae0146b30b0bd8f7baebcdc46bc2c2f33dc",
+          "bytes": 7242
+        }
+      ]
+    },
+    {
+      "id": "ne_NP-chitwan-medium",
+      "name": "chitwan",
+      "language": {
+        "code": "ne_NP",
+        "english": "Nepali",
+        "native": "नेपाली",
+        "country": "Nepal"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "ne_NP-chitwan-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ne/ne_NP/chitwan/medium/ne_NP-chitwan-medium.onnx",
+          "mirrors": [],
+          "sha256": "f7ba6b0927688f92717e93ca52bc06f5783ce8edc765d5f85365acef1d41822c",
+          "bytes": 62950044
+        },
+        {
+          "name": "ne_NP-chitwan-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ne/ne_NP/chitwan/medium/ne_NP-chitwan-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "18d523b03b201422d14e2892cc750a81208d2e45158a9c6a7e4e06a500930dee",
+          "bytes": 5043
+        }
+      ]
+    },
+    {
+      "id": "nl_BE-nathalie-medium",
+      "name": "nathalie",
+      "language": {
+        "code": "nl_BE",
+        "english": "Dutch",
+        "native": "Nederlands",
+        "country": "Belgium"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/rhasspy/dataset-voice-nathalie"
+      },
+      "files": [
+        {
+          "name": "nl_BE-nathalie-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_BE/nathalie/medium/nl_BE-nathalie-medium.onnx",
+          "mirrors": [],
+          "sha256": "49cf48023861f9fd42e13a8632f068fee67d1ce244a6ee38f29595afbf0a6be4",
+          "bytes": 63201294
+        },
+        {
+          "name": "nl_BE-nathalie-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_BE/nathalie/medium/nl_BE-nathalie-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "4704af2736022e910a3f32672480d5530dd39da5c2bcc079f315f604166ff0de",
+          "bytes": 4879
+        }
+      ]
+    },
+    {
+      "id": "nl_BE-nathalie-x_low",
+      "name": "nathalie",
+      "language": {
+        "code": "nl_BE",
+        "english": "Dutch",
+        "native": "Nederlands",
+        "country": "Belgium"
+      },
+      "quality": "x_low",
+      "sampleRate": 16000,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/rhasspy/dataset-voice-nathalie"
+      },
+      "files": [
+        {
+          "name": "nl_BE-nathalie-x_low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_BE/nathalie/x_low/nl_BE-nathalie-x_low.onnx",
+          "mirrors": [],
+          "sha256": "7d005d2d9b3db4326fc4a1ac86b61ab40252ccf97b76d527f4ffd76d4e3f7dbe",
+          "bytes": 20628813
+        },
+        {
+          "name": "nl_BE-nathalie-x_low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_BE/nathalie/x_low/nl_BE-nathalie-x_low.onnx.json",
+          "mirrors": [],
+          "sha256": "390d21992bd734a49c015fcd7027e4af7b2779f5867ff762e6453e323f554bd8",
+          "bytes": 4163
+        }
+      ]
+    },
+    {
+      "id": "nl_NL-pim-medium",
+      "name": "pim",
+      "language": {
+        "code": "nl_NL",
+        "english": "Dutch",
+        "native": "Nederlands",
+        "country": "Netherlands"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "nl_NL-pim-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/pim/medium/nl_NL-pim-medium.onnx",
+          "mirrors": [],
+          "sha256": "403e58c3675c394f505c2428117bf34cc56e9542dcf6eadbdd3a84706c12e048",
+          "bytes": 63516050
+        },
+        {
+          "name": "nl_NL-pim-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/pim/medium/nl_NL-pim-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "08b58456ca00cf77123826b1712758f99d5fd19ddfb7ec7da8e1a715b047f642",
+          "bytes": 5037
+        }
+      ]
+    },
+    {
+      "id": "no_NO-talesyntese-medium",
+      "name": "talesyntese",
+      "language": {
+        "code": "no_NO",
+        "english": "Norwegian",
+        "native": "Norsk",
+        "country": "Norway"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-15/"
+      },
+      "files": [
+        {
+          "name": "no_NO-talesyntese-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx",
+          "mirrors": [],
+          "sha256": "b763aebe02e72c4628c4074c4b8b448f05ffe523b975bfcd58e2c5d531270c13",
+          "bytes": 63201294
+        },
+        {
+          "name": "no_NO-talesyntese-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "b0eb0491fc8bf9843d2beac8acf8773b6cf59274316406b36ff579ae8a1909d5",
+          "bytes": 4880
+        }
+      ]
+    },
+    {
+      "id": "pl_PL-darkman-medium",
+      "name": "darkman",
+      "language": {
+        "code": "pl_PL",
+        "english": "Polish",
+        "native": "Polski",
+        "country": "Poland"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "pl_PL-darkman-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx",
+          "mirrors": [],
+          "sha256": "db505438a5364e8e2e0242c4324130a873ed660dfbe8d9689cef428ffb1b645f",
+          "bytes": 63201294
+        },
+        {
+          "name": "pl_PL-darkman-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "70f999f11fa8ad13d3ef779041ee93c9f38be5abdbacdfad42449712fe91c81b",
+          "bytes": 4816
+        }
+      ]
+    },
+    {
+      "id": "pt_BR-cadu-medium",
+      "name": "cadu",
+      "language": {
+        "code": "pt_BR",
+        "english": "Portuguese",
+        "native": "Português",
+        "country": "Brazil"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "pt_BR-cadu-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/cadu/medium/pt_BR-cadu-medium.onnx",
+          "mirrors": [],
+          "sha256": "765f0809a6ea9035d4a6d0d008dbf8876e68b2dd32029312672fa8f405bdb535",
+          "bytes": 62950044
+        },
+        {
+          "name": "pt_BR-cadu-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/cadu/medium/pt_BR-cadu-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "5fe03aa3d4901880554905b12075713cd552598c8a350455a1ec73f8b4e6be19",
+          "bytes": 5040
+        }
+      ]
+    },
+    {
+      "id": "pt_PT-tugão-medium",
+      "name": "tugão",
+      "language": {
+        "code": "pt_PT",
+        "english": "Portuguese",
+        "native": "Português",
+        "country": "Portugal"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "pt_PT-tugão-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx",
+          "mirrors": [],
+          "sha256": "223a7aaca69a155c61897e8ada7c3b13bc306e16c72dbb9c2fed733e2b0927d4",
+          "bytes": 63201294
+        },
+        {
+          "name": "pt_PT-tugão-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "fe0918dfc0f1a89264a6eea4afe8e95d8e9fed3cc6c81b5c2f87fcb2b50c7320",
+          "bytes": 5026
+        }
+      ]
+    },
+    {
+      "id": "ro_RO-mihai-medium",
+      "name": "mihai",
+      "language": {
+        "code": "ro_RO",
+        "english": "Romanian",
+        "native": "Română",
+        "country": "Romania"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "ro_RO-mihai-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx",
+          "mirrors": [],
+          "sha256": "e0608bbbd53c80267c09ece681b09f5199f54e792356684c8073738e5f15d29f",
+          "bytes": 63201294
+        },
+        {
+          "name": "ro_RO-mihai-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "8cc0c9f077dc0cec3c25a6a055ec8046db8e40a2510591582f2c9c869f4bc47e",
+          "bytes": 4877
+        }
+      ]
+    },
+    {
+      "id": "ru_RU-denis-medium",
+      "name": "denis",
+      "language": {
+        "code": "ru_RU",
+        "english": "Russian",
+        "native": "Русский",
+        "country": "Russia"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "ru_RU-denis-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx",
+          "mirrors": [],
+          "sha256": "15fab56e11a097858ee115545d0f697fc2a316c41a291a5362349fb870411b0a",
+          "bytes": 63201294
+        },
+        {
+          "name": "ru_RU-denis-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "831c860dac0b5073eaa81610a0a638ec23d90a6cf8e5f871b4485c2cec3767c8",
+          "bytes": 4823
+        }
+      ]
+    },
+    {
+      "id": "sk_SK-lili-medium",
+      "name": "lili",
+      "language": {
+        "code": "sk_SK",
+        "english": "Slovak",
+        "native": "Slovenčina",
+        "country": "Slovakia"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "sk_SK-lili-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sk/sk_SK/lili/medium/sk_SK-lili-medium.onnx",
+          "mirrors": [],
+          "sha256": "d8e21603e0165252849efe0bcb3fbffd1b3193c36bd1f556e1106911e8015526",
+          "bytes": 63201294
+        },
+        {
+          "name": "sk_SK-lili-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sk/sk_SK/lili/medium/sk_SK-lili-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "b7c474eba411913f9feb65b9da322463e8698e7b200d2b757f6e684802951333",
+          "bytes": 4963
+        }
+      ]
+    },
+    {
+      "id": "sl_SI-artur-medium",
+      "name": "artur",
+      "language": {
+        "code": "sl_SI",
+        "english": "Slovenian",
+        "native": "Slovenščina",
+        "country": "Slovenia"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "https://creativecommons.org/licenses/by/4.0/",
+        "class": "by",
+        "url": "https://huggingface.co/datasets/ppisljar/artur_studio_tts/"
+      },
+      "files": [
+        {
+          "name": "sl_SI-artur-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sl/sl_SI/artur/medium/sl_SI-artur-medium.onnx",
+          "mirrors": [],
+          "sha256": "9222ed93ef425524ad4be0b083369af8ea8db18455576a6016b154192f4ed38c",
+          "bytes": 63200492
+        },
+        {
+          "name": "sl_SI-artur-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sl/sl_SI/artur/medium/sl_SI-artur-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "741283430f1fa2be5c61717c6f1fe795a7b9f537491927340dd12f90f3b3cc04",
+          "bytes": 4970
+        }
+      ]
+    },
+    {
+      "id": "sr_RS-serbski_institut-medium",
+      "name": "serbski_institut",
+      "language": {
+        "code": "sr_RS",
+        "english": "Serbian",
+        "native": "srpski",
+        "country": "Serbia"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 2,
+      "speakerNames": [
+        "dsb",
+        "hsb"
+      ],
+      "licence": {
+        "name": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+        "class": "nc",
+        "url": "https://github.com/marytts/serbski-institut-dsb-data"
+      },
+      "files": [
+        {
+          "name": "sr_RS-serbski_institut-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx",
+          "mirrors": [],
+          "sha256": "d7003890cf596e653f660a4fd97fd17f57f1eceb6d9727abad9cd76d2fda0d80",
+          "bytes": 76733615
+        },
+        {
+          "name": "sr_RS-serbski_institut-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "39ad6531b46ac629c0bed10aa9205dd2431e2dab3808b8535808711db87c2bc0",
+          "bytes": 4999
+        }
+      ]
+    },
+    {
+      "id": "sv_SE-nst-medium",
+      "name": "nst",
+      "language": {
+        "code": "sv_SE",
+        "english": "Swedish",
+        "native": "Svenska",
+        "country": "Sweden"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-17/"
+      },
+      "files": [
+        {
+          "name": "sv_SE-nst-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx",
+          "mirrors": [],
+          "sha256": "df011f56825a59dd1efc080c38a65a1ef70407e60f63050e9246f43a3d7e471e",
+          "bytes": 63104526
+        },
+        {
+          "name": "sv_SE-nst-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "d45dd74cbb4eca58694bf04a97e243044092476f28a55ae26424f0653086980a",
+          "bytes": 4157
+        }
+      ]
+    },
+    {
+      "id": "tr_TR-fahrettin-medium",
+      "name": "fahrettin",
+      "language": {
+        "code": "tr_TR",
+        "english": "Turkish",
+        "native": "Türkçe",
+        "country": "Turkey"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "tr_TR-fahrettin-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx",
+          "mirrors": [],
+          "sha256": "39081c47270180e8a0dfac69b07bf329fb6d039fcc1279dbe26c2daf2848b190",
+          "bytes": 63201294
+        },
+        {
+          "name": "tr_TR-fahrettin-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "93741b234acc5f123430a0e343f619e01cfda6b1dc0970ee80bce7da22b1a09b",
+          "bytes": 5022
+        }
+      ]
+    },
+    {
+      "id": "uk_UA-ukrainian_tts-medium",
+      "name": "ukrainian_tts",
+      "language": {
+        "code": "uk_UA",
+        "english": "Ukrainian",
+        "native": "украї́нська мо́ва",
+        "country": "Ukraine"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 3,
+      "speakerNames": [
+        "lada",
+        "mykyta",
+        "tetiana"
+      ],
+      "licence": {
+        "name": "CC0",
+        "class": "public",
+        "url": "https://github.com/NabuCasa/voice-datasets"
+      },
+      "files": [
+        {
+          "name": "uk_UA-ukrainian_tts-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
+          "mirrors": [],
+          "sha256": "7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f",
+          "bytes": 76735663
+        },
+        {
+          "name": "uk_UA-ukrainian_tts-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "4e96e72917ca9b94edc77d6ccfee03a73f450ba2fc1ca93c2e562bc014e5aa55",
+          "bytes": 2002
+        }
+      ]
+    },
+    {
+      "id": "vi_VN-vais1000-medium",
+      "name": "vais1000",
+      "language": {
+        "code": "vi_VN",
+        "english": "Vietnamese",
+        "native": "Tiếng Việt",
+        "country": "Vietnam"
+      },
+      "quality": "medium",
+      "sampleRate": 22050,
+      "speakers": 1,
+      "speakerNames": [],
+      "licence": {
+        "name": "https://creativecommons.org/licenses/by/4.0/",
+        "class": "by",
+        "url": "https://ieee-dataport.org/documents/vais-1000-vietnamese-speech-synthesis-corpus"
+      },
+      "files": [
+        {
+          "name": "vi_VN-vais1000-medium.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx",
+          "mirrors": [],
+          "sha256": "ec7c89e2c85f4d1edc24b6120c18aaf1bda614f06b511567eb9c7c0de15e2dab",
+          "bytes": 63201294
+        },
+        {
+          "name": "vi_VN-vais1000-medium.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx.json",
+          "mirrors": [],
+          "sha256": "fafb9da1354ed4b77c31af228ed41fb41cd825c14cffa105454b25e6ae751ee0",
+          "bytes": 4860
+        }
+      ]
+    }
+  ]
+}
