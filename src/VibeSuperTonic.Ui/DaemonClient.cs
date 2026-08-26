@@ -150,8 +150,9 @@ public sealed class DaemonClient
     }
 
     /// <summary>
-    /// Send one verb that answers more than once — <c>benchmark</c> is the only
-    /// one — reporting each intermediate reply and returning the last.
+    /// Send one verb that answers more than once — <c>benchmark</c> and
+    /// <c>voice install</c> — reporting each intermediate reply and returning the
+    /// last.
     ///
     /// <para><b>Why this exists rather than a longer timeout on
     /// <see cref="SendAsync"/>.</b> A sweep is about a minute of the daemon being
@@ -182,10 +183,17 @@ public sealed class DaemonClient
         {
             if (Protocol.TryDecode<Response>(line) is not { } reply) continue;
 
-            // Progress replies carry a row and nothing else; the final one carries
-            // the payload, or a failure. That is the shape vst-ctl relies on too,
-            // and it is what lets this loop end without a sentinel message.
-            if (reply.Progress is not null) { onReply(reply); continue; }
+            // Progress replies carry a row, or a byte count, and nothing else;
+            // the final one carries the payload, or a failure. That is the shape
+            // vst-ctl relies on too, and it is what lets this loop end without a
+            // sentinel message. Both streaming verbs are listed here rather than
+            // testing "is any payload null", so that adding a third is a
+            // deliberate edit instead of an accident of field ordering.
+            if (reply.Progress is not null || reply.VoiceProgress is not null)
+            {
+                onReply(reply);
+                continue;
+            }
 
             return reply;
         }

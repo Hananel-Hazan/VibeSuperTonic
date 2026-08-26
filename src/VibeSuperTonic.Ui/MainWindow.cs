@@ -8,15 +8,22 @@ using VibeSuperTonic.Core.Ipc;
 namespace VibeSuperTonic.Ui;
 
 /// <summary>
-/// The window. Reader, Tune, Pronunciations, Status, About — and Monitor is gone,
-/// collapsed into Status, because with one daemon instead of N SAPI hosts
-/// per-host monitoring has lost the thing it monitored.
+/// The window. Reader, Voices, Tune, Pronunciations, Status, About — and Monitor
+/// is gone, collapsed into Status, because with one daemon instead of N SAPI
+/// hosts per-host monitoring has lost the thing it monitored.
+///
+/// <para>Voices arrived in P4 and sits second, next to Reader rather than beside
+/// the knobs: choosing a voice is a thing a person does deliberately and often,
+/// and it is where a second engine becomes visible at all — the first-run screen
+/// deliberately says nothing about Piper.</para>
 ///
 /// <para><b>Parity.</b> Every control here sends a verb <c>vst-ctl</c> also has.
 /// The one stated exception is configuration, which the UI writes as a file and
 /// the daemon re-reads on mtime. Walk the toolbar and name the verb behind each
 /// button: read, stop, pause, resume, reload. A control that cannot be named
-/// that way does not belong in this window.</para>
+/// that way does not belong in this window. Voices keeps the rule literally —
+/// voices, voice install, voice remove, speak — with the same one exception: its
+/// Use button writes settings.json.</para>
 ///
 /// <para><b>The events arrive on a socket thread</b> and are marshalled here,
 /// once, at the boundary. Nothing below this class touches a dispatcher.</para>
@@ -50,6 +57,7 @@ public sealed class MainWindow : Window
             Items =
             {
                 new TabItem { Header = "Reader", Content = _reader },
+                new TabItem { Header = "Voices", Content = new VoicesTab(client) },
                 new TabItem { Header = "Tune", Content = new TuneTab(client) },
                 new TabItem { Header = "Pronunciations", Content = new PronunciationsTab(client) },
                 new TabItem { Header = "Status", Content = _status },

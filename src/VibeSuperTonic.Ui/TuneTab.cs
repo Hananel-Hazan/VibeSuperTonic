@@ -47,7 +47,25 @@ public sealed class TuneTab : UserControl
         Content = "Keep using the GPU on battery",
     };
 
+    /// <summary>
+    /// Installed voices, both engines, as engine-qualified ids. A picker rather
+    /// than the text box this was, because since P4 the set of valid answers is
+    /// knowable — the daemon can list them — and a typo in a free-text voice
+    /// field is a hotkey that refuses with a sentence about a voice nobody meant
+    /// to type.
+    /// </summary>
+    private readonly ComboBox _voice = new() { Width = 260, MinWidth = 200 };
+
+    /// <summary>Said beside the controls a Piper voice cannot honour, and blank otherwise.</summary>
+    private readonly TextBlock _engineNote = Ui.Label("");
+
     private string? _settingsPath;
+
+    /// <summary>Suppresses the selection handler while <see cref="RefreshAsync"/> populates the picker.</summary>
+    private bool _loading;
+
+    /// <summary>The last voice list, so the engine rules can read a row's details without a round trip.</summary>
+    private List<VoiceEntry> _installedVoices = [];
 
     /// <summary>
     /// The keys this tab owns, with the units a person needs to type one. Held
@@ -69,14 +87,16 @@ public sealed class TuneTab : UserControl
     {
         _client = client;
 
-        var voice = new TextBox { Width = 120 };
         var language = new TextBox { Width = 120 };
-        _fields["DefaultVoice"] = voice;
         _fields["Language"] = language;
 
+        _voice.SelectionChanged += (_, _) => { if (!_loading) ApplyEngineRules(); };
+
         var grid = new StackPanel { Spacing = 8 };
-        grid.Children.Add(Row("Voice", voice, "M1 … F5, as the models directory names them."));
+        grid.Children.Add(Row("Voice", _voice,
+            "Installed voices, both engines. Add and remove them in the Voices tab."));
         grid.Children.Add(Row("Language", language, "en — a Supertonic code, not en-US."));
+        grid.Children.Add(_engineNote);
 
         foreach (var (key, label, hint) in Numbers)
         {
@@ -185,11 +205,11 @@ public sealed class TuneTab : UserControl
             return;
         }
 
+        await RefreshVoicePickerAsync(c.Voice);
+
         // Blank means "not set in the file", and the placeholder shows what the
         // daemon is using instead. An empty box that silently means 8 would make
         // "clear it to get the default" indistinguishable from "it is 8".
-        _fields["DefaultVoice"].Text = root.String("DefaultVoice") ?? "";
-        _fields["DefaultVoice"].Watermark = c.Voice;
         _fields["Language"].Text = root.String("Language") ?? "";
         _fields["Language"].Watermark = c.Language;
 
@@ -224,6 +244,69 @@ public sealed class TuneTab : UserControl
                           : " This machine has never been measured.");
     }
 
+    /// <summary>
+    /// Fill the picker from <c>voices</c>, keeping whatever is selected if it is
+    /// still installed.
+    ///
+    /// <para>The daemon is asked rather than the models directory read, because
+    /// this window is a client: the same rule that put the sweep behind a verb.
+    /// A daemon that does not answer leaves the picker holding just the voice in
+    /// force, so the tab still shows the truth and simply cannot offer
+    /// alternatives.</para>
+    /// </summary>
+    private async Task RefreshVoicePickerAsync(string inForce)
+    {
+        var reply = await _client.SendAsync(new Request { Verb = RequestVerb.Voices });
+
+        var ids = reply?.Voices?.Installed.Select(v => v.Id).ToList() ?? [];
+        _installedVoices = reply?.Voices?.Installed.ToList() ?? [];
+
+        // The voice actually in force may not be installed — the setting can name
+        // a voice someone removed. Listing it anyway is what makes that visible
+        // in the one control whose job is to show which voice is chosen.
+        var qualified = VibeSuperTonic.Core.Synthesis.VoiceId.Parse(inForce).ToString();
+        if (!ids.Contains(qualified)) ids.Insert(0, qualified);
+
+        _loading = true;
+        _voice.ItemsSource = ids;
+        _voice.SelectedItem = ids.Contains(qualified) ? qualified : ids.FirstOrDefault();
+        _loading = false;
+
+        ApplyEngineRules();
+    }
+
+    /// <summary>
+    /// Grey out what the selected engine cannot honour, and say why.
+    ///
+    /// <para>A Piper voice IS a language and it has no diffusion steps — asking
+    /// it for either is not a thing that can be done, rather than a thing that is
+    /// ignored. The tab already does this for <c>MaxCpuPercent</c>, whose value
+    /// is real but does not apply until the next start; the principle is the
+    /// same and so is the remedy: a control that cannot apply must say so, not
+    /// sit there accepting input.</para>
+    /// </summary>
+    private void ApplyEngineRules()
+    {
+        string? selected = _voice.SelectedItem as string;
+        bool piper = selected is not null
+                     && VibeSuperTonic.Core.Synthesis.VoiceId.Parse(selected).Engine
+                        == VibeSuperTonic.Core.Synthesis.VoiceEngine.Piper;
+
+        _fields["Language"].IsEnabled = !piper;
+        _fields["TotalStep"].IsEnabled = !piper;
+
+        var entry = _installedVoices.FirstOrDefault(v => v.Id == selected);
+
+        _engineNote.Text = piper
+            ? "Language and Model steps do not apply to a Piper voice: it is trained for one "
+              + "language, which is baked into its own config, and it has no diffusion steps."
+              + (entry?.Calibrated == false
+                  ? "  This voice has not been calibrated yet, so a requested rate is approximate "
+                    + "until the daemon finishes measuring it."
+                  : "")
+            : "";
+    }
+
     private async Task SaveAsync()
     {
         if (_settingsPath is null) { _status.Text = "nothing to save to."; return; }
@@ -236,7 +319,10 @@ public sealed class TuneTab : UserControl
         // when the tab opened: settings.json is a file a person also edits in an
         // editor, and a save that silently reverts a hand edit made five minutes
         // ago is the worst kind of correct.
-        root.Set("DefaultVoice", Text(_fields["DefaultVoice"]));
+        // The shared writer, so this picker and the Voices tab's Use button
+        // cannot disagree about what choosing a voice means.
+        if (_voice.SelectedItem is string chosen && chosen.Length > 0) root.SetVoice(chosen);
+
         root.Set("Language", Text(_fields["Language"]));
 
         foreach (var (key, label, _) in Numbers)

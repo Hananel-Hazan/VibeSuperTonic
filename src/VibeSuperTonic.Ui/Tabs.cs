@@ -63,6 +63,7 @@ public sealed class StatusTab : UserControl
     {
         var status = await _client.SendAsync(new Request { Verb = RequestVerb.Status });
         var config = await _client.SendAsync(new Request { Verb = RequestVerb.Config });
+        var voices = await _client.SendAsync(new Request { Verb = RequestVerb.Voices });
 
         if (status?.Status is not { } s || config?.Config is not { } c)
         {
@@ -82,7 +83,8 @@ public sealed class StatusTab : UserControl
         _body.Text = $"""
             daemon      {s.Version}, {s.State}{(s.Paused ? " (paused)" : "")}
             model       {(s.ModelLoaded ? "loaded" : "not loaded yet")}
-            voice       {s.Voice} / {s.Language}
+            voice       {s.Voice}{EngineSuffix(s)}
+            output      {Rate(voices, s)}
 
             inference   {c.Provider}, {c.IntraOpThreads} threads ({c.ThreadsReason})
             benchmark   {benchmark}
@@ -99,6 +101,40 @@ public sealed class StatusTab : UserControl
             acknowledge → painted   {Latency()}
             {string.Join("\n", c.Notes.Select(n => "note        " + n))}
             """;
+    }
+
+    /// <summary>
+    /// Which engine will speak, and the language only when it means something.
+    ///
+    /// <para>A Supertonic voice takes a language per utterance and a Piper voice
+    /// IS one, so "en_US-ljspeech-high / en" would report a setting that the
+    /// voice cannot be asked to honour — see the Tune tab, which greys the field
+    /// for the same reason.</para>
+    /// </summary>
+    private static string EngineSuffix(StatusPayload s) =>
+        s.Engine == "piper"
+            ? "   (piper)"
+            : $" / {s.Language}   ({s.Engine ?? "supertonic"})";
+
+    /// <summary>
+    /// The rate the sink is tuned to, which since P3 is the VOICE's own rate
+    /// rather than a constant.
+    ///
+    /// <para>Worth reporting for exactly that reason: 44.1 kHz used to be a
+    /// property of the program and is now a property of whichever voice is
+    /// selected, so "why does this voice sound different" has an answer here
+    /// instead of nowhere.</para>
+    /// </summary>
+    private static string Rate(Response? voices, StatusPayload s)
+    {
+        var entry = voices?.Voices?.Installed.FirstOrDefault(v => v.IsDefault);
+        if (entry?.SampleRate is not { } rate) return "unknown";
+
+        string calibration = entry.Engine == "piper" && entry.Calibrated == false
+            ? "   (rate curve not yet measured — a requested speed is approximate)"
+            : "";
+
+        return $"{rate} Hz{calibration}";
     }
 
     /// <summary>

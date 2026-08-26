@@ -74,6 +74,34 @@ internal static class SettingsFile
         else root[key] = value;
     }
 
+    /// <summary>
+    /// Record the chosen voice, in the one way that keeps both platforms honest.
+    ///
+    /// <para><b>Two writers, one rule.</b> The Voices tab's Use button and the
+    /// Tune tab's voice picker both set the default voice, and they must not be
+    /// able to disagree — so neither writes the keys directly.</para>
+    ///
+    /// <para>The engine-qualified <c>VoiceId</c> is always written, because that
+    /// is what the Linux daemon reads and it is unambiguous. <c>DefaultVoice</c>
+    /// is written <em>only</em> for a Supertonic style, and then it is written
+    /// too: the Windows engine reads that key and knows nothing about Piper, so
+    /// for the one choice Windows can honour the two files agree, and for the one
+    /// it cannot the old value is left exactly where it was. A Windows install
+    /// sharing this settings.json therefore goes on speaking a style it
+    /// understands instead of being handed "piper:de_DE-thorsten-high" as the
+    /// name of one.</para>
+    /// </summary>
+    /// <param name="root">The settings tree, already read.</param>
+    /// <param name="qualifiedId">"piper:en_US-ljspeech-high" or "supertonic:M1".</param>
+    public static void SetVoice(this JsonObject root, string qualifiedId)
+    {
+        var voice = VibeSuperTonic.Core.Synthesis.VoiceId.Parse(qualifiedId);
+        root.Set("VoiceId", qualifiedId);
+
+        if (voice.Engine == VibeSuperTonic.Core.Synthesis.VoiceEngine.Supertonic)
+            root.Set("DefaultVoice", voice.Bare);
+    }
+
     public static string? String(this JsonObject root, string key) =>
         root[key]?.GetValue<string>();
 
