@@ -20,6 +20,32 @@ namespace VibeSuperTonic.Core.Models;
 /// </summary>
 public delegate string? FileLockDescriber(string path);
 
+/// <summary>
+/// How far one file has got. Reported alongside the log lines rather than
+/// instead of them.
+///
+/// <para><b>Added in P4, and the reason is a bar rather than a scroll.</b> The
+/// first-run flow downloads 383 MB of Supertonic weights as a fixed set with a
+/// line per file, and a log was the right shape for it. A voice install is one
+/// file the user chose, of 20 to 137 MB, started from a row they clicked — and a
+/// UI that can say only "DL en_US-ljspeech-high.onnx (114 MB)…" and then nothing
+/// for two minutes is indistinguishable from one that has hung.</para>
+///
+/// <para><paramref name="BytesTotal"/> is the manifest's figure, not the
+/// server's <c>Content-Length</c>, so it is known before the first byte and
+/// cannot be moved by a mirror serving something else — the hash check is what
+/// catches that.</para>
+/// </summary>
+/// <param name="Path">The manifest-relative path being fetched.</param>
+/// <param name="BytesReceived">Written so far, this attempt.</param>
+/// <param name="BytesTotal">Expected total, or 0 when the manifest does not say.</param>
+public readonly record struct DownloadProgress(string Path, long BytesReceived, long BytesTotal)
+{
+    /// <summary>0..1, or null when the total is unknown.</summary>
+    public double? Fraction =>
+        BytesTotal > 0 ? Math.Clamp((double)BytesReceived / BytesTotal, 0, 1) : null;
+}
+
 public sealed class ModelDownloader
 {
     private readonly string _baseDir;
@@ -41,7 +67,18 @@ public sealed class ModelDownloader
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibeSuperTonic/1.0");
     }
 
-    public async Task<bool> EnsureAllAsync(IProgress<string>? log, CancellationToken ct)
+    /// <inheritdoc cref="EnsureAllAsync(IProgress{string}?, IProgress{DownloadProgress}?, CancellationToken)"/>
+    public Task<bool> EnsureAllAsync(IProgress<string>? log, CancellationToken ct) =>
+        EnsureAllAsync(log, null, ct);
+
+    /// <param name="log">Line per file, as the first-run flow has always had.</param>
+    /// <param name="bytes">
+    /// Optional byte-level progress for the file in flight. Null costs nothing —
+    /// the copy loop is only entered when someone is listening.
+    /// </param>
+    /// <param name="ct">Cancellation. A part file is removed on the way out.</param>
+    public async Task<bool> EnsureAllAsync(
+        IProgress<string>? log, IProgress<DownloadProgress>? bytes, CancellationToken ct)
     {
         bool allOk = true;
         bool anyEmptyUrl = false;
@@ -92,7 +129,7 @@ public sealed class ModelDownloader
             {
                 string src = sources[i];
                 if (i > 0) log?.Report($"     primary failed — trying mirror {i}: {Shorten(src)}");
-                if (!await DownloadAsync(fullPath, src, f, log, ct)) continue;
+                if (!await DownloadAsync(fullPath, src, f, log, bytes, ct)) continue;
                 if (await VerifyAsync(fullPath, f, ct)) { got = true; break; }
                 log?.Report($"FAIL hash mismatch on {f.Path} from {Shorten(src)}");
             }
@@ -119,7 +156,8 @@ public sealed class ModelDownloader
     private static string Shorten(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u) ? $"{u.Host}/…/{u.Segments[^1]}" : url;
 
-    private async Task<bool> DownloadAsync(string fullPath, string url, ManifestEntry f, IProgress<string>? log, CancellationToken ct)
+    private async Task<bool> DownloadAsync(string fullPath, string url, ManifestEntry f,
+        IProgress<string>? log, IProgress<DownloadProgress>? bytes, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         string tmp = fullPath + ".part";
@@ -129,7 +167,34 @@ public sealed class ModelDownloader
             resp.EnsureSuccessStatusCode();
             await using var src = await resp.Content.ReadAsStreamAsync(ct);
             await using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-                await src.CopyToAsync(dst, 81920, ct);
+            {
+                if (bytes is null)
+                {
+                    await src.CopyToAsync(dst, 81920, ct);
+                }
+                else
+                {
+                    bytes.Report(new DownloadProgress(f.Path, 0, f.Bytes));
+                    var buffer = new byte[81920];
+                    long done = 0;
+                    long lastReported = 0;
+                    int n;
+                    while ((n = await src.ReadAsync(buffer, ct)) > 0)
+                    {
+                        await dst.WriteAsync(buffer.AsMemory(0, n), ct);
+                        done += n;
+
+                        // Roughly every 512 KB rather than every 80 KB chunk. A
+                        // 114 MB voice is 1400 reports at this rate and 1500 at
+                        // the other, but the receiver is a UI thread marshal on
+                        // the far side of a socket, and a progress bar nobody
+                        // can see move faster than this does not need the wakeups.
+                        if (done - lastReported < 512 * 1024 && done != f.Bytes) continue;
+                        lastReported = done;
+                        bytes.Report(new DownloadProgress(f.Path, done, f.Bytes));
+                    }
+                }
+            }
             File.Move(tmp, fullPath, overwrite: true);
             return true;
         }
@@ -141,7 +206,22 @@ public sealed class ModelDownloader
         }
     }
 
-    private static async Task<bool> VerifyAsync(string fullPath, ManifestEntry f, CancellationToken ct)
+    /// <summary>
+    /// Does the file on disk match what the manifest pinned — exact size, then
+    /// SHA-256 when one is recorded?
+    ///
+    /// <para>Public because <see cref="PiperVoiceInstaller"/> has to ask the same
+    /// question after a failed install, to decide what to delete. A second
+    /// implementation of "is this file the one we meant" is precisely the kind of
+    /// duplicate that drifts, and it would drift on the side that decides whether
+    /// corrupt weights stay in the store.</para>
+    ///
+    /// <para><b>An empty <see cref="ManifestEntry.Sha256"/> passes.</b> That is
+    /// deliberate for the Supertonic manifest's small JSON blobs, which have no
+    /// LFS hash to pin, and it is why the Piper catalog hashes both of its files
+    /// at generation time instead of relying on this.</para>
+    /// </summary>
+    public static async Task<bool> VerifyAsync(string fullPath, ManifestEntry f, CancellationToken ct)
     {
         if (!File.Exists(fullPath)) return false;
         if (f.Bytes > 0)

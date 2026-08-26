@@ -32,6 +32,18 @@
       part the checks read.
     -->
     <None Update="Resources\reference-envelope.txt" CopyToOutputDirectory="PreserveNewest" />
+
+    <!--
+      THE SHIPPED CATALOG ITSELF, linked rather than copied (P4). PiperCatalogTests
+      asserts the invariants the product depends on — every voice pinned by
+      sha256, every voice carrying licence terms a gate can show, every id naming
+      its own directory — and none of those are checked by
+      build/gen-piper-catalog.py merely running to completion. Regenerating the
+      catalog against a new upstream revision therefore fails the ordinary test
+      run if it breaks one, instead of failing on a user's machine.
+    -->
+    <None Include="..\..\piper-voices.json" Link="Resources\piper-voices.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

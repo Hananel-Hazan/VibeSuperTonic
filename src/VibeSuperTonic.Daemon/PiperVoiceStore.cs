@@ -1,3 +1,4 @@
+using VibeSuperTonic.Core.Models;
 using VibeSuperTonic.Core.Synthesis.Piper;
 
 namespace VibeSuperTonic.Daemon;
@@ -34,8 +35,12 @@ namespace VibeSuperTonic.Daemon;
 /// </summary>
 public sealed class PiperVoiceStore
 {
-    public const string FolderName = "piper";
-    public const string CalibrationFileName = "calibration.json";
+    // Defined by Core, not here. PiperVoiceInstaller writes this layout and this
+    // class reads it; two spellings of "piper" that agree by inspection is how a
+    // downloaded voice ends up somewhere the daemon never looks, with both sides
+    // reporting success.
+    public const string FolderName = PiperVoiceInstaller.StoreFolderName;
+    public const string CalibrationFileName = PiperVoiceInstaller.CalibrationFileName;
 
     private readonly string _root;
     private readonly object _gate = new();
