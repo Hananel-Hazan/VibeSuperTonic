@@ -257,9 +257,12 @@ using ISynthesizer synth = switcher = new ProviderSwitchingSynthesizer(
 //
 // PROBED AT STARTUP AND LOGGED, because the difference between our espeak-ng and
 // a distro one is inaudible right up until it is a report about prosody:
-// espeak_TextToPhonemesWithTerminator does not exist at the 1.52.0 tag Ubuntu
-// ships, and without it every input collapses to one sentence and the trailing
-// punctuation the models were trained on is missing. See EspeakLibrary.
+// espeak_TextToPhonemesWithTerminator does not exist at the 1.52.0 TAG, and
+// without it every input collapses to one sentence and the trailing punctuation
+// the models were trained on is missing. Whether a distro package has it is a
+// separate question the version string does not answer — Ubuntu 26.04's 1.52.0
+// package DOES export it, Debian 12's 1.51 does not — so the phonemizer asks the
+// library it bound rather than reasoning from the version. See EspeakLibrary.
 var espeak = EspeakLibrary.Probe();
 DaemonLog.Write(config.PiperVoices.Voices.Count > 0 || espeak.Path is not null
     ? espeak.Describe()

@@ -41,8 +41,12 @@ public readonly record struct PiperRatePlan(float LengthScale, double StretchFac
 ///
 /// <para><b>And it saturates.</b> Below roughly <c>length_scale</c> 0.15 the
 /// output stops changing — 0.15, 0.05 and 0.01 produce byte-for-byte the same
-/// duration. The wall was ~1.97x for lessac <c>high</c> and ~1.88x for
-/// <c>medium</c>. Past it the model physically will not go faster, so the rate
+/// duration. The wall is per voice and the ladder finds it: measured through the
+/// product, 2.21x for <c>en_US-lessac-high</c>, 2.14x for
+/// <c>en_US-lessac-medium</c>, and 1.84x for <c>en_GB-vctk-medium</c>. P2's
+/// spike put lessac at ~1.97x and ~1.88x, measured with the noise off and a
+/// coarser ladder; these are the numbers the shipped configuration produces.
+/// Past it the model physically will not go faster, so the rate
 /// can only be served by the time-stretch: that is what
 /// <see cref="PiperRatePlan.StretchFactor"/> carries, and it is a capability
 /// limit rather than a quality one.</para>
@@ -230,8 +234,8 @@ public static class PiperCalibrator
     /// <summary>
     /// Rungs <b>relative to the voice's own <c>length_scale</c></b>, descending,
     /// going well past the wall on purpose: the saturation point is found rather
-    /// than assumed, because it differs per voice — 1.55x for
-    /// <c>en_GB-vctk-medium</c> against 2.23x for <c>en_US-lessac-high</c> — and
+    /// than assumed, because it differs per voice — 1.84x for
+    /// <c>en_GB-vctk-medium</c> against 2.21x for <c>en_US-lessac-high</c> — and
     /// a hardcoded one would be wrong for the first voice nobody measured.
     ///
     /// <para><b>Relative, and that was a defect.</b> These were absolute
@@ -242,6 +246,12 @@ public static class PiperCalibrator
     /// rate INCLUDING 1.0x, which cannot be a curve problem: the voice's natural
     /// speed is its own default, and anchoring 1.0x anywhere else makes "no speed
     /// change" a speed change.</para>
+    ///
+    /// <para>The wall above is where that shows: the absolute ladder reported
+    /// vctk's as <b>1.55x</b>, and 1.84 / 1.187 is 1.55 — the same 18.7% once
+    /// more. A number carried over from before the fix would still read as a
+    /// measurement, which is why it is named here rather than quietly
+    /// replaced.</para>
     /// </summary>
     public static readonly IReadOnlyList<float> Ladder =
     [
@@ -271,13 +281,16 @@ public static class PiperCalibrator
     /// a curve measured with the noise off describes a render the product never
     /// performs: calibrating that way left a worst-case delivered-rate error of
     /// <b>6.4%</b>, and calibrating through the voice's real settings brought the
-    /// same five voices to <b>2.1%</b>. The averaging is what makes a stochastic
+    /// same five voices to <b>2.4%</b>. The averaging is what makes a stochastic
     /// predictor's output a measurement rather than a sample — one render per
     /// rung is a coin toss written into a file the product then trusts.</para>
     ///
-    /// <para>Four is where the cost stops buying accuracy: 17 rungs at 4 renders
-    /// is about 5 seconds for a <c>medium</c> voice and 25 for a <c>high</c> one,
-    /// once per voice, and the verified error stops improving below it.</para>
+    /// <para>Four is where the cost stops buying accuracy: the 13-rung
+    /// <see cref="Ladder"/> at 4 renders is 7-9 seconds for a <c>medium</c> voice
+    /// and about 47 for a <c>high</c> one, once per voice, and the verified error
+    /// stops improving below it. <c>EngineRoutingSynthesizer</c> quotes the same
+    /// two figures where it explains why this runs off the press path; they are
+    /// one measurement and have to move together.</para>
     /// </summary>
     public const int Repeats = 4;
 

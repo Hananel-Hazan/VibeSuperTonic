@@ -783,7 +783,9 @@ roughly [0.9, 1.3]. On this path the whole rate goes to the model and
 [no-resampling decision](#decisions) was protecting, given back a second time.
 
 The unavoidable design work is
-[SynthesisOptions](../src/VibeSuperTonic.Core/Synthesis/ISynthesizer.cs#L52): it
+[SynthesisOptions](../src/VibeSuperTonic.Core/Synthesis/SynthesisOptions.cs) —
+which was on `ISynthesizer.cs` when this was written, and P3 moved it to its own
+file along with splitting it: it
 is Supertonic-shaped. `TotalStep`, `Language` and `Speed` have no Piper meaning;
 `length_scale`, `noise_scale`, `noise_w` and `speaker_id` have no Supertonic
 meaning. Doing this with a real second implementation in hand is the point of
