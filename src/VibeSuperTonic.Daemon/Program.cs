@@ -429,5 +429,12 @@ try { await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* 
 
 foreach (var registration in signals) registration.Dispose();
 
+// The renders measured since the last flush. Batched during the run so a page of
+// text is not a dozen file writes inside the press-to-speech budget, which leaves
+// a handful owed at exit — and this is the only place they can be paid. SIGKILL
+// and a hard logout skip it and lose them, which is the right trade for a
+// measurement that reproduces by using the program again.
+switcher?.FlushUsage();
+
 DaemonLog.Write("stopped");
 return 0;

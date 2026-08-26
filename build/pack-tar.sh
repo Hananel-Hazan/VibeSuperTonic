@@ -186,6 +186,26 @@ chmod 755 "$staging/keybindings.sh"
 cp "$root/build/install-gpu.sh" "$staging/install-gpu.sh"
 chmod 755 "$staging/install-gpu.sh"
 
+# The two provider-choice helpers. Neither is required for the product to work —
+# the daemon falls back on its own when a GPU fails mid-render — and both exist
+# because "works" and "is right" are different:
+#
+#   vst-gpu-guard.sh  notices a GPU that has failed for the machine's reasons
+#                     (the 2026-08-26 "GPU requires reset") and pins the CPU
+#                     until it recovers, so the daemon stops paying a failed
+#                     CUDA session on every start. It also un-pins, which is the
+#                     half that keeps it from becoming a manual setting nobody
+#                     remembers to undo.
+#   vst-autotune.sh   routes on what the two providers actually cost for THIS
+#                     user's text, from data/usage-stats.json, rather than on
+#                     one sweep of one passage taken once.
+#
+# Meant for a timer; both do nothing most times they run.
+for helper in vst-gpu-guard.sh vst-autotune.sh; do
+    cp "$root/build/$helper" "$staging/$helper"
+    chmod 755 "$staging/$helper"
+done
+
 [[ -f "$root/README.md" ]] && cp "$root/README.md" "$staging/README.md"
 [[ -f "$root/LICENSE" ]]   && cp "$root/LICENSE"   "$staging/LICENSE.txt"
 
@@ -482,6 +502,36 @@ GpuOnBattery in data/settings.json (or the Tune tab) if you are permanently on a
 dock. `./vst-ctl status` says which is in force and why.
 
     ./install-gpu.sh --remove   puts the machine back on the CPU
+
+
+Optional: keep the provider choice honest
+-----------------------------------------
+Two helpers, both safe to run on a timer and both silent when there is nothing
+to do. Neither is required: the daemon already falls back to the CPU by itself
+if the GPU fails while rendering, and stays there until it is restarted.
+
+    ./vst-gpu-guard.sh
+
+A GPU can fail for reasons that have nothing to do with this program. A driver
+can put a card into "GPU requires reset", where it still enumerates, still loads
+the CUDA provider and still builds a session — and then fails every render. This
+notices that, pins Provider=cpu, and puts it back when the card recovers (on a
+laptop that usually means after a reboot; nvidia-smi -r answers "Not Supported"
+when a display is attached). It leaves a Provider you set by hand alone.
+
+    ./vst-autotune.sh            decide from your own reading
+    ./vst-autotune.sh --status   what it has measured so far
+
+`vst-ctl benchmark` sweeps one passage on an idle machine. This watches what the
+providers actually cost for the text YOU read, on a machine doing YOUR work, and
+pins the faster one when it has enough of both to be worth believing. It has to
+alternate to get samples of both, so give it a while:
+
+    */20 * * * * /path/to/vst-autotune.sh -q
+
+Timings come from data/usage-stats.json, which the daemon writes as wall time
+over audio duration — the same number the benchmark calls Rtf, so the two files
+can be read against each other. Delete it to start over.
 
 
 Known limits

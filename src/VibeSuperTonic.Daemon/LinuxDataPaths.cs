@@ -322,6 +322,16 @@ internal static class LinuxDataPaths
         Path.Combine(dataDir, VibeSuperTonic.Core.Synthesis.BenchmarkStore.FileName);
 
     /// <summary>
+    /// What each execution provider has actually cost on this machine, measured
+    /// from the user's own utterances. Beside <see cref="BenchmarkFile"/> and for
+    /// the same reason — it is state that is read back and acted on, not a record
+    /// of something that happened — and separate from it because the sweep and
+    /// the observations answer different questions. See <see cref="UsageStats"/>.
+    /// </summary>
+    public static string UsageStatsFile(string dataDir) =>
+        Path.Combine(dataDir, "usage-stats.json");
+
+    /// <summary>
     /// Best effort, and deliberately not fatal. A portable folder can sit on a
     /// read-only mount, a CD, or a directory owned by root — in which case the
     /// settings that are already there still load and still apply, and only
