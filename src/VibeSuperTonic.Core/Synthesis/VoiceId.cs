@@ -41,11 +41,29 @@ public enum VoiceEngine
 /// <c>settings.json</c> this writes.</para>
 /// </summary>
 /// <param name="Engine">The engine named by the prefix, or <see cref="VoiceEngine.Unspecified"/>.</param>
-/// <param name="Bare">The id with any prefix removed — what reaches the store and the model directory.</param>
-public readonly record struct VoiceId(VoiceEngine Engine, string Bare)
+/// <param name="Bare">The id with any prefix and speaker removed — what names the model directory.</param>
+/// <param name="Speaker">
+/// Which speaker of a multi-speaker voice, from a <c>#N</c> suffix, or null.
+///
+/// <para><b>Part of the id rather than a setting of its own</b>, decided in P4.
+/// A speaker only means anything relative to one voice —
+/// <c>en_GB-vctk-medium</c> has 109 and <c>de_DE-thorsten-high</c> has none — so
+/// a separate <c>SpeakerId</c> key would go on describing the previous voice the
+/// moment someone changed voices, and would do it silently, since speaker 12 of
+/// a single-speaker voice is not an error but a clamp. Carrying it here means
+/// switching voices cannot leave it behind, and
+/// <c>vst-ctl speak --voice piper:en_GB-vctk-medium#12</c> works for free.</para>
+///
+/// <para><see cref="Bare"/> deliberately excludes it: the bare id names a
+/// directory and a file, and <c>en_GB-vctk-medium#12.onnx</c> is not one.</para>
+/// </param>
+public readonly record struct VoiceId(VoiceEngine Engine, string Bare, int? Speaker = null)
 {
     public const string SupertonicPrefix = "supertonic:";
     public const string PiperPrefix = "piper:";
+
+    /// <summary>Separates a voice from the speaker inside it.</summary>
+    public const char SpeakerSeparator = '#';
 
     /// <summary>True when the id named its engine rather than leaving it to be inferred.</summary>
     public bool IsQualified => Engine != VoiceEngine.Unspecified;
@@ -64,7 +82,8 @@ public readonly record struct VoiceId(VoiceEngine Engine, string Bare)
         if (s.StartsWith(SupertonicPrefix, StringComparison.OrdinalIgnoreCase))
             return Qualified(VoiceEngine.Supertonic, s[SupertonicPrefix.Length..], s);
 
-        return new VoiceId(VoiceEngine.Unspecified, s);
+        var (bare, speaker) = SplitSpeaker(s);
+        return new VoiceId(VoiceEngine.Unspecified, bare, speaker);
 
         // "piper:" with nothing after it names no voice. Treating it as the bare
         // id keeps the "never throws on shape" promise, and the lookup that
@@ -72,10 +91,27 @@ public readonly record struct VoiceId(VoiceEngine Engine, string Bare)
         static VoiceId Qualified(VoiceEngine engine, string rest, string whole)
         {
             rest = rest.Trim();
-            return rest.Length == 0
-                ? new VoiceId(VoiceEngine.Unspecified, whole)
-                : new VoiceId(engine, rest);
+            if (rest.Length == 0) return new VoiceId(VoiceEngine.Unspecified, whole);
+
+            var (bare, speaker) = SplitSpeaker(rest);
+            return new VoiceId(engine, bare, speaker);
         }
+    }
+
+    /// <summary>
+    /// Split a trailing <c>#N</c>. Anything that is not a non-negative integer
+    /// stays part of the id — a voice called <c>foo#bar</c> is a voice that will
+    /// not be found, which is a better failure than one silently renamed to
+    /// <c>foo</c>.
+    /// </summary>
+    private static (string Bare, int? Speaker) SplitSpeaker(string s)
+    {
+        int at = s.LastIndexOf(SpeakerSeparator);
+        if (at <= 0 || at == s.Length - 1) return (s, null);
+
+        return int.TryParse(s[(at + 1)..], out int speaker) && speaker >= 0
+            ? (s[..at], speaker)
+            : (s, null);
     }
 
     /// <summary>Parse, or false on null/blank. For settings files, where absent is normal.</summary>
@@ -87,7 +123,8 @@ public readonly record struct VoiceId(VoiceEngine Engine, string Bare)
     }
 
     /// <summary>A qualified id for an engine that is known.</summary>
-    public static VoiceId ForPiper(string bare) => new(VoiceEngine.Piper, Require(bare));
+    public static VoiceId ForPiper(string bare, int? speaker = null) =>
+        new(VoiceEngine.Piper, Require(bare), speaker);
 
     /// <inheritdoc cref="ForPiper"/>
     public static VoiceId ForSupertonic(string bare) => new(VoiceEngine.Supertonic, Require(bare));
@@ -109,10 +146,17 @@ public readonly record struct VoiceId(VoiceEngine Engine, string Bare)
     /// The canonical string: qualified when the engine is known, bare when it is
     /// not. Round-trips through <see cref="Parse"/>.
     /// </summary>
-    public override string ToString() => Engine switch
+    public override string ToString()
     {
-        VoiceEngine.Piper => PiperPrefix + Bare,
-        VoiceEngine.Supertonic => SupertonicPrefix + Bare,
-        _ => Bare,
-    };
+        string tail = Speaker is { } n ? Bare + SpeakerSeparator + n : Bare;
+        return Engine switch
+        {
+            VoiceEngine.Piper => PiperPrefix + tail,
+            VoiceEngine.Supertonic => SupertonicPrefix + tail,
+            _ => tail,
+        };
+    }
+
+    /// <summary>The same voice with a speaker chosen, or with none.</summary>
+    public VoiceId WithSpeaker(int? speaker) => this with { Speaker = speaker };
 }

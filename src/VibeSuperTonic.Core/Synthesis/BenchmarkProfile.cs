@@ -61,6 +61,24 @@ public sealed record BenchmarkRow(
 /// <param name="Language">Language the sample was rendered in — provenance, not a trigger.</param>
 /// <param name="PowerState">"ac", "battery" or "unknown" at the time of the sweep.</param>
 /// <param name="IdleCpuPercent">How busy the machine was before the sweep started. See the guard in <see cref="BenchmarkSweep"/>.</param>
+/// <param name="Engine">
+/// Which engine the sweep measured — "supertonic" or "piper".
+///
+/// <para><b>Added in P4, and it is a staleness trigger for the same reason
+/// <see cref="ModelSet"/> is.</b> A thread count is a property of a cost curve,
+/// and the two engines do not share one: P2 measured Supertonic's whole pipeline
+/// against a single VITS forward pass, and CUDA buying the Piper <c>high</c> tier
+/// 399 → 116 ms while the <c>medium</c> tier moved 72 → 61. A profile measured on
+/// one engine and applied to the other is an extrapolation nobody performed —
+/// and, exactly like a profile from another machine, it would look perfectly
+/// valid while being about something else.</para>
+///
+/// <para>Empty on every profile written before P4, which is why
+/// <see cref="BenchmarkProfile.StalenessAgainst"/> treats an absent value as
+/// "no claim" rather than as a mismatch. Those profiles were all Supertonic;
+/// inventing that fact and stamping it on them would be a guess written down as
+/// a measurement.</para>
+/// </param>
 public sealed record BenchmarkMachine(
     string MachineId,
     string Cpu,
@@ -70,7 +88,8 @@ public sealed record BenchmarkMachine(
     string Voice,
     string Language,
     string PowerState,
-    double IdleCpuPercent);
+    double IdleCpuPercent,
+    string Engine = "");
 
 /// <summary>
 /// The answer a machine reached about itself, with everything needed to judge
@@ -139,6 +158,18 @@ public sealed record BenchmarkProfile(
 
         if (Machine.TotalStep != now.TotalStep)
             reasons.Add($"measured at TotalStep {Machine.TotalStep}, this daemon runs {now.TotalStep}");
+
+        // An absent Engine is a profile written before P4, when there was only
+        // one. Silence is the honest reading: those sweeps WERE Supertonic, but
+        // saying so here would be this code asserting a fact it inferred, and the
+        // whole point of the field is that the engine is recorded rather than
+        // assumed.
+        if (!string.IsNullOrEmpty(Machine.Engine)
+            && !string.IsNullOrEmpty(now.Engine)
+            && !string.Equals(Machine.Engine, now.Engine, StringComparison.Ordinal))
+        {
+            reasons.Add($"measured on {Machine.Engine}, this daemon runs {now.Engine}");
+        }
 
         return reasons;
     }

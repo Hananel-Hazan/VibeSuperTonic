@@ -123,6 +123,64 @@ public class VoiceIdTests
         Assert.Equal("supertonic:M1", VoiceId.ForSupertonic("M1").ToString());
     }
 
+    // ------------------------------------------------------------------ speaker
+
+    [Fact]
+    public void A_speaker_suffix_is_parsed_and_kept_out_of_the_bare_id()
+    {
+        // The bare id names a directory and a file. "en_GB-vctk-medium#12.onnx"
+        // is not one, so the suffix has to come off before the store sees it.
+        var v = VoiceId.Parse("piper:en_GB-vctk-medium#12");
+        Assert.Equal(VoiceEngine.Piper, v.Engine);
+        Assert.Equal("en_GB-vctk-medium", v.Bare);
+        Assert.Equal(12, v.Speaker);
+        Assert.Equal("piper:en_GB-vctk-medium#12", v.ToString());
+    }
+
+    [Fact]
+    public void A_speaker_on_a_bare_id_works_too()
+    {
+        var v = VoiceId.Parse("en_GB-vctk-medium#3");
+        Assert.Equal(VoiceEngine.Unspecified, v.Engine);
+        Assert.Equal("en_GB-vctk-medium", v.Bare);
+        Assert.Equal(3, v.Speaker);
+    }
+
+    [Fact]
+    public void Speaker_zero_is_a_choice_and_not_the_absence_of_one()
+    {
+        // It round-trips, because "the user picked the first speaker" and "the
+        // user picked nothing" are different states in a settings file even
+        // though they render the same audio.
+        var v = VoiceId.Parse("piper:x#0");
+        Assert.Equal(0, v.Speaker);
+        Assert.Equal("piper:x#0", v.ToString());
+        Assert.Null(VoiceId.Parse("piper:x").Speaker);
+    }
+
+    [Theory]
+    [InlineData("piper:foo#bar")]
+    [InlineData("piper:foo#")]
+    [InlineData("piper:foo#-1")]
+    [InlineData("piper:#4")]
+    public void A_suffix_that_is_not_a_speaker_number_stays_part_of_the_id(string input)
+    {
+        // A voice that will not be found beats a voice silently renamed. The last
+        // case matters most: "#4" with nothing before it is not a speaker of
+        // nothing, it is an id someone mistyped.
+        var v = VoiceId.Parse(input);
+        Assert.Null(v.Speaker);
+        Assert.EndsWith(v.Bare, input);
+    }
+
+    [Fact]
+    public void Choosing_a_speaker_leaves_everything_else_alone()
+    {
+        var v = VoiceId.Parse("piper:en_GB-vctk-medium");
+        Assert.Equal("piper:en_GB-vctk-medium#7", v.WithSpeaker(7).ToString());
+        Assert.Equal("piper:en_GB-vctk-medium", v.WithSpeaker(7).WithSpeaker(null).ToString());
+    }
+
     // ------------------------------------------------------------------ routing
 
     [Fact]

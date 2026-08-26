@@ -81,6 +81,23 @@ each exists because the failure it catches is silent:
   supported distro told `GLIBC_2.39 not found` by a binary that ran yesterday.
   2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+.
 
+- **The Piper voice catalog ships, and it is checked** (P4, 2026-08-25).
+  `piper-voices.json` is copied to the archive root beside `models-manifest.json`
+  — it is what the Voices tab reads, and without it an install can list the
+  voices it has and offer none. Assertion 3b runs
+  [check-piper-catalog.py](build/check-piper-catalog.py) over the shipped file
+  and refuses an unhashed voice (it would download unverified, because an empty
+  `sha256` means "nothing to check"), a non-https URL, a duplicate id, a filename
+  that does not match its voice id, an entry with no licence text (the download
+  gate would be empty), or a speaker count that disagrees with its names. It also
+  refuses a catalog over 1 MB, which is the shape a generator bug that inlined
+  weights would take — a stray `.onnx` is caught by assertion 3, and one enormous
+  JSON file is not. Regenerate with
+  `python3 build/gen-piper-catalog.py`; it is deterministic for a given revision
+  and policy, and **it must stay that way** — a catalog that moves when
+  regenerated is one whose per-voice `MODEL_CARD` review no longer describes what
+  shipped.
+
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
 nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a

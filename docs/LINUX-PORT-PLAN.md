@@ -35,12 +35,16 @@ after the rebase, 897 of them ours.
   go/no-go passed with 0 divergences across 327 sentences, and **a Piper voice
   now speaks through the daemon**, at its own sample rate, within 2.4% of the
   requested speaking rate, with Supertonic still the default.
-  **[P4 is where the next agent starts](PIPER-PLAN.md#next)** — the catalog, the
-  download and the Voices tab — and
-  [what P3 left open](PIPER-PLAN.md#p3-open) is the list to read first. Two
-  entries there are commitments rather than deferrals: **the Windows build has
-  been compiled but not run** since the second engine landed, and **espeak-ng is
-  still bound from a developer path** until P5 ships ours beside the binary.
+  **P4 landed 2026-08-25** — a curated 43-voice catalog across 35 languages, the
+  three `voice` verbs, a Voices tab, and the engine-qualified `VoiceId` setting;
+  a voice can now be found, licensed, downloaded, calibrated and spoken without
+  touching the filesystem by hand.
+  **[P5 is where the next agent starts](PIPER-PLAN.md#next)** — packaging — and
+  [what P4 left open](PIPER-PLAN.md#p4-open) is the list to read first. Three
+  entries there are commitments rather than deferrals: **the Voices tab has been
+  built but never looked at**, **the Windows build has been compiled but not
+  run** since the second engine landed, and **espeak-ng is still bound from a
+  developer path** until P5 ships ours beside the binary.
 
   Two things from P3 bind work in *this* document. The audio sink re-tunes
   between utterances now (`LazyAudioSink.Retune`), which is the third case of the
@@ -150,7 +154,7 @@ before changing it.
 | — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
 | — · **Releases 0.2.8, 0.2.9, 0.2.10** | **All shipped, and the two things only a person could do are [both done](#battery-verified) — 2026-08-24.** 0.2.8 the tarball, 0.2.9 the AppImage beside it, 0.2.10 the portable-home fix and its store remedy. Both artifacts of each are in `dist/`, and `<VstVersion>` is `0.2.10` |
 | 9 · [AppImage](#phase-9) | **Done — shipped as 0.2.9 on 2026-08-24.** The gate passed by more than expected (+14.7 ms), the store left the executable's directory, the packer builds from the tarball's own tree, and the hotkey client is copied out and kept current. The one piece of planned work that disappeared was the container build — [measured away](#glibc-floor) |
-| — · [Piper](PIPER-PLAN.md) | **Started, and past the go/no-go — [P3 is next](PIPER-PLAN.md#next).** P0, P1 and P2 all landed 2026-08-25: the graph runs byte-identically to `python -m piper`, phoneme parity passed at 327 sentences across 8 languages with **0 divergences**, and the numbers are in. Ships as 0.3. P3 is the first phase that touches `src/` |
+| — · [Piper](PIPER-PLAN.md) | **Past the go/no-go and past the product work — [P5 is next](PIPER-PLAN.md#next).** P0 through P4 all landed 2026-08-25: the graph runs byte-identically to `python -m piper`, phoneme parity passed at 327 sentences across 8 languages with **0 divergences**, and the numbers are in. Ships as 0.3. P3 is the first phase that touches `src/` |
 
 <a name="windows-check"></a>
 
@@ -444,10 +448,12 @@ and 0.2.10 followed it: a portable home that had made the hotkeys unbindable, an
 a store remedy that could otherwise have orphaned 762 MB of models.
 
 **7 · [Piper](PIPER-PLAN.md) — this is where the work is now.** Ships as 0.3.
-~~Start at P0~~ — P0, P1 and P2 all landed 2026-08-25 and the go/no-go passed
-with zero phoneme divergences. **Start at [P3](PIPER-PLAN.md#next)**, which is
-the first phase of this project whose failure would be a bug rather than the end
-of it. Its per-voice store hangs off the data directory Phase 9 decided on:
+~~Start at P0~~ — P0 through P4 all landed 2026-08-25: the go/no-go passed with
+zero phoneme divergences, a Piper voice speaks through the daemon, and the
+catalog, the download and the Voices tab are in. **Start at
+[P5](PIPER-PLAN.md#next)**, which is packaging — and which P4 has already begun,
+since the archive now carries the voice catalog and an assertion that refuses a
+bad one. Its per-voice store hangs off the data directory Phase 9 decided on:
 `--data` / `$VST_DATA_DIR`, then a store beside the AppImage, then XDG — never
 off a path computed a second time.
 

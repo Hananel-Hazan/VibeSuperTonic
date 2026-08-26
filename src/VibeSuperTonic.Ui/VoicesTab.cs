@@ -223,10 +223,41 @@ public sealed class VoicesTab : UserControl
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
 
-        if (!v.IsDefault)
+        // A voice holding more than one speaker needs somewhere to choose, and
+        // this is it — en_GB-vctk-medium has 109. The choice rides in the id as a
+        // #N suffix rather than in a setting of its own, so it cannot outlive the
+        // voice it describes. Supertonic's styles are not speakers and are not
+        // offered here: each is its own voice file, and the Voices tab lists the
+        // family as one row.
+        ComboBox? speakers = null;
+        if (v.Engine == "piper" && v.Speakers is > 1)
+        {
+            var names = v.SpeakerNames is { Count: > 0 } given
+                ? given.Select((n, i) => $"{i}: {n}").ToList()
+                // A hand-installed voice the catalog does not carry has a count
+                // from its config and no names. Numbers still let it be used.
+                : Enumerable.Range(0, v.Speakers.Value).Select(i => i.ToString()).ToList();
+
+            speakers = new ComboBox { ItemsSource = names, Width = 160 };
+            speakers.SelectedIndex = Math.Clamp(
+                VibeSuperTonic.Core.Synthesis.VoiceId.Parse(v.Id).Speaker ?? 0, 0, names.Count - 1);
+            buttons.Children.Add(speakers);
+        }
+
+        // The id as the buttons should use it: the row's voice, plus whichever
+        // speaker is showing right now.
+        string Chosen() => speakers is null
+            ? v.Id
+            : VibeSuperTonic.Core.Synthesis.VoiceId.Parse(v.Id)
+                .WithSpeaker(speakers.SelectedIndex >= 0 ? speakers.SelectedIndex : null)
+                .ToString();
+
+        // Offered even for the current default when there is a speaker to change:
+        // "already in use" and "in use with this speaker" are different states.
+        if (!v.IsDefault || speakers is not null)
         {
             var use = new Button { Content = "Use" };
-            use.Click += async (_, _) => await UseAsync(v);
+            use.Click += async (_, _) => await UseAsync(Chosen());
             buttons.Children.Add(use);
         }
 
@@ -234,7 +265,7 @@ public sealed class VoicesTab : UserControl
         sample.Click += async (_, _) => await _client.SendAsync(new Request
         {
             Verb = RequestVerb.Speak,
-            Voice = v.Id,
+            Voice = Chosen(),
             Text = SampleText(v),
         });
         buttons.Children.Add(sample);
@@ -299,7 +330,7 @@ public sealed class VoicesTab : UserControl
 
     // ------------------------------------------------------------------ actions
 
-    private async Task UseAsync(VoiceEntry v)
+    private async Task UseAsync(string qualifiedId)
     {
         if (_settingsPath is not { } path)
         {
@@ -315,7 +346,7 @@ public sealed class VoicesTab : UserControl
             // cannot disagree about what choosing a voice means. See SetVoice for
             // why DefaultVoice moves for a Supertonic style and not for a Piper
             // voice.
-            root.SetVoice(v.Id);
+            root.SetVoice(qualifiedId);
             SettingsFile.Write(path, root);
         }
         catch (Exception ex)
@@ -326,7 +357,7 @@ public sealed class VoicesTab : UserControl
 
         // No verb needed: the daemon notices the mtime and re-reads. The refresh
         // is so the dot moves now rather than at the next press.
-        _status.Text = $"{v.Id} will be used from the next utterance.";
+        _status.Text = $"{qualifiedId} will be used from the next utterance.";
         await RefreshAsync();
     }
 

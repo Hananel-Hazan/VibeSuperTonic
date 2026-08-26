@@ -401,7 +401,10 @@ public sealed class HostConfig
                 plan.LengthScale,
                 piperVoice.NoiseScale,
                 piperVoice.NoiseW,
-                SpeakerId: 0,
+                // Clamped by PiperSynthesizer against the voice's own count, so
+                // an id carrying #12 for a voice that has since been replaced by
+                // a single-speaker one renders speaker 0 rather than throwing.
+                SpeakerId: requested.Speaker ?? 0,
                 SilenceSeconds: Settings.SynthesisSilenceSec);
 
             return new UtterancePlan(options, plan.StretchFactor, "piper",

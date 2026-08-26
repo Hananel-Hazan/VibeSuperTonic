@@ -657,6 +657,27 @@ public sealed partial class DaemonServer : IDisposable
                 .ToList()
             : _config.Notes;
 
+        // The benchmark measured Supertonic, and it still governs the Supertonic
+        // session correctly — so this is a note rather than a staleness reason.
+        // What it is about is the OTHER session: Program builds a Piper session
+        // with the thread count this decision produced, and the two engines do
+        // not share a cost curve. P2 measured CUDA taking the Piper `high` tier
+        // 399 -> 116 ms and the `medium` tier only 72 -> 61, against a whole
+        // Supertonic pipeline; a count that is right for one is an extrapolation
+        // for the other. Saying so beats a number that looks measured and is not.
+        if (_engines is not null
+            && string.Equals(_config.Utterance(null, null).Engine, "piper", StringComparison.Ordinal)
+            && BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(_config.DataDir)) is { } measured
+            && measured.Machine.Engine is not "piper")
+        {
+            notes = notes.Append(
+                $"the stored benchmark was measured on {(measured.Machine.Engine is { Length: > 0 } e ? e : "supertonic")} " +
+                "and this daemon is speaking through piper. It still applies to the Supertonic " +
+                "session; the Piper session inherits its thread count, which was measured against " +
+                "a different cost curve.")
+                .ToList();
+        }
+
         if (LinuxDataPaths.PortableHome is { } portable)
             notes = notes.Append(
                 $"a portable home is in use ({portable}), so $HOME points inside it. " +

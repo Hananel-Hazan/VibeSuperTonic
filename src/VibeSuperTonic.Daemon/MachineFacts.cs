@@ -29,8 +29,16 @@ internal static class MachineFacts
     /// when this is only being assembled to test a stored profile for staleness —
     /// the field is provenance, never a comparison key.
     /// </param>
+    /// <param name="engine">
+    /// Which engine this sweep measured, or would be applied to — "supertonic" or
+    /// "piper". Defaults to Supertonic because that is what <c>benchmark</c> still
+    /// sweeps; the parameter exists so the staleness check has something to
+    /// compare, and so the day a Piper sweep lands the profile already says which
+    /// it was.
+    /// </param>
     public static BenchmarkMachine Current(
-        string modelsRoot, int totalStep, string voice, string language, double idleCpuPercent = 0) =>
+        string modelsRoot, int totalStep, string voice, string language,
+        double idleCpuPercent = 0, string engine = "supertonic") =>
         new(
             MachineId: MachineId(),
             Cpu: CpuName(),
@@ -40,7 +48,8 @@ internal static class MachineFacts
             Voice: voice,
             Language: language,
             PowerState: PowerState(),
-            IdleCpuPercent: idleCpuPercent);
+            IdleCpuPercent: idleCpuPercent,
+            Engine: engine);
 
     /// <summary>
     /// A stable per-machine identifier that is not <c>/etc/machine-id</c> itself.

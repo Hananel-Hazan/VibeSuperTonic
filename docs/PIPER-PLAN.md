@@ -119,31 +119,36 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | P1 · Phoneme parity | **Passed 2026-08-25.** 327 sentences, 8 languages, **0 divergences** — and five deliberate sabotages all caught, so the pass means something. [The record](#p1-landed) |
 | P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed) — RTF, cold load and resident set per voice, one process per row — and [the listening verdict](#speed-verdict): no quality ceiling at any rate, by either mechanism. It ended up settling the speed question rather than the licence one, which was [settled ahead of it](#decisions), and it handed [three items forward](#p3-inbox) |
 | P3 · `PiperSynthesizer` + the options refactor | **Done 2026-08-25.** All five exit criteria met and verified on hardware — a Piper voice speaks through the daemon, the sink re-tunes between utterances, and a requested rate lands within 2.8%. [The record](#p3-landed), and [what it left open](#p3-open) |
-| P4 · Catalog, download, and the [Voices tab](#ui) | **Next — [start here](#next).** The bulk of the calendar time, and the least risky part. SAPI tokens are **out of this round** |
-| P5 · Packaging | Not started. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage shipped 2026-08-24, building from the tarball's own tree — so this phase edits one packer and inherits the other. What is left is the GPL obligations, a second `LICENSE-MODELS` story, two more packer assertions, and **moving [build-espeak.sh](../spike/piper-phonemes/build-espeak.sh) out of the spike into `build/`** — it is a script now rather than a command line, which P1 fixed, but it lives where a release run does not look. [What P3 left it](#p3-owes-p5) |
+| P4 · Catalog, download, and the [Voices tab](#ui) | **Done 2026-08-25.** 43 voices across 35 languages, hash-pinned; three verbs; a Voices tab; the qualified `VoiceId` setting. Verified end to end — a voice downloaded, verified, calibrated itself and spoke. [The record](#p4-landed), and [what it left open](#p4-open) |
+| P5 · Packaging | **Next — [start here](#next).** Partly begun by P4, which added the catalog to the archive and an assertion for it. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage shipped 2026-08-24, building from the tarball's own tree — so this phase edits one packer and inherits the other. What is left is the GPL obligations, a second `LICENSE-MODELS` story, two more packer assertions, and **moving [build-espeak.sh](../spike/piper-phonemes/build-espeak.sh) out of the spike into `build/`** — it is a script now rather than a command line, which P1 fixed, but it lives where a release run does not look. [What P3 left it](#p3-owes-p5) |
 
 <a name="next"></a>
 
 ### What to do next, in order
 
-**Start at [P4](#p4).** Read, in this order: [what P3 left open](#p3-open) — eight
-items, none of them blocking, two of them commitments that will not fix
-themselves — then [what P3 left P4 specifically](#p3-owes-p4), the
-[decisions](#decisions) it implements — the curated hash-pinned catalog and the
-highest-tier default are both settled — then [P4](#p4) itself. The first thing to
-settle is *which* thirty voices, and it is a product answer made once, with each
-`MODEL_CARD` read ([trap 7](#traps)).
+**Start at [P5](#p5).** Read [what P4 left open](#p4-open) first — six items, none
+blocking — then [what P3 left P5](#p3-owes-p5), which is unchanged and is still
+the bulk of it: `build-espeak.sh` moved into `build/`, the GPL source offer, and
+the `espeak/` directory the probe already looks for.
 
-**The state of the tree as P4 opens, verified 2026-08-25:** clean, **1027 tests
-green** (996 Core + 31 Daemon), `0.2.10` shipped as both Linux artifacts, and a
-second engine that speaks. Installing a Piper voice is still a hand operation —
-three files into `models/piper/<id>/` — and turning that into a download is
-exactly what P4 is.
+**P4 has already done two of P5's jobs**, so start by reading
+[pack-tar.sh](../build/pack-tar.sh) rather than the list: the catalog ships in the
+archive, and assertion 3b — [check-piper-catalog.py](../build/check-piper-catalog.py)
+— refuses a catalog carrying an unhashed voice, a non-https URL, a duplicate id,
+a filename that does not match its voice id, a licence-less entry, or a speaker
+count that disagrees with its names. All six were checked by sabotage rather than
+by reading. P5's *"no voice models in the archive"* assertion is therefore
+already true by construction and half-asserted; what remains for it is espeak-ng.
 
-**What P4 does not need and must not wait for**: whether `alignments` is worth a
-patched model (revisit after P4, not during), and whether Piper eventually
-becomes the Linux default (not this round). Both are in
-[Open decisions](#open).
+**The state of the tree as P5 opens, verified 2026-08-25:** clean, **1096 tests
+green** (1057 Core + 39 Daemon), the Linux packer runs end to end with all six
+existing assertions plus the new one, and a Piper voice can be found, licensed,
+downloaded, calibrated, chosen and spoken without touching the filesystem by
+hand.
+
+**What P5 does not need and must not wait for**: whether `alignments` is worth a
+patched model, and whether Piper eventually becomes the Linux default (not this
+round). Both are in [Open decisions](#open).
 
 ~~**Do P0 and P1 before planning anything else.**~~ **Both done 2026-08-25**, and
 P2 and P3 with them.
@@ -1059,7 +1064,7 @@ product currently fails because of them.
 
 <a name="p4"></a>
 
-### Phase P4 — Catalog, download, and the Voices tab
+### Phase P4 — Catalog, download, and the Voices tab · **done 2026-08-25**
 
 The bulk of the time, and the least likely to surprise anyone. Per-voice
 on-demand download through Core's own `ModelDownloader` — resume, mirrors and
@@ -1131,6 +1136,137 @@ Changes elsewhere, all of them small and all of them required by the parity rule
 - **`benchmark`** — `MachineFacts` records the *engine*, so a profile measured on
   Supertonic reports "measured on supertonic, this daemon runs piper" and falls
   back, instead of silently applying a thread count from a different cost curve.
+
+<a name="p4-landed"></a>
+
+#### It landed — 2026-08-25, and the catalog is smaller than the plan assumed
+
+Everything P4 named is in: a curated hash-pinned catalog, per-voice download
+through Core's own `ModelDownloader`, three verbs, a Voices tab, the qualified
+`VoiceId` setting, the speaker picker, and the tier choice shown rather than
+made. What follows is only the parts that are not simply "as designed".
+
+**The catalog is 43 entries across 35 languages, and the licence line chose
+them.** [gen-piper-catalog.py](../build/gen-piper-catalog.py) reads all 142
+`MODEL_CARD`s and **33 voices state no usable licence at all** — "See URL",
+"Unknown", "See LICENSE file". Those are ineligible under every policy, which is
+what costs the catalog `zh_CN`, `it_IT`, `ar_JO`, `is_IS`, `ka_GE`, `ml_IN` and
+`sw_CD` entirely. The user chose policy C on 2026-08-25 with the three options
+costed: permissive-only would have been exactly 30 voices, and C buys Hindi,
+Luxembourgish and Serbian for three NonCommercial entries whose terms the gate
+now states.
+
+| Policy | Voices | Languages | Gains |
+| --- | --- | --- | --- |
+| A · CC0/BY/Apache | 30 | 30 | — |
+| B · + ShareAlike | 32 | 32 | Catalan, Argentine Spanish (a `high`) |
+| **C · + NonCommercial** | **35 names, 43 entries** | **35** | Hindi, Luxembourgish, Serbian |
+
+**`en_US-lessac` is not in the catalog**, and that is the licence rule arriving
+somewhere it can be felt. Its `MODEL_CARD` points at a bespoke Blizzard 2013
+terms page rather than stating a licence, so it is ineligible — the voice P0
+through P3 measured against, and the one still installed by hand on the dev box.
+It still speaks: the store takes any directory, and `voices` reports it as *"not
+in the catalog — installed by hand"*. It simply cannot be offered for download.
+`en_US-ljspeech` (public domain, `high`) is what en_US resolves to instead.
+
+**Generating it costs 400 KB, not 2.9 GB.** A git-LFS pointer's `oid` **is** the
+sha256 of its content — checked against a real 20 MB download, byte for byte — so
+the HF tree API hands over every weight hash with no weight transferred. Only the
+5 KB configs and 300 byte cards are fetched, and the configs are hashed by the
+generator rather than size-checked, which is one better than the Supertonic
+manifest manages for its own small files.
+
+**The generator was not deterministic, and that is the finding worth keeping.**
+Languages routinely offer several CC0 `medium` voices, which tie on both real
+criteria; `eligible` is a set, so the winner was whichever iteration reached
+first, and **two runs on the same pinned revision swapped seven voices**. A
+curated catalog that moves when regenerated is one whose `MODEL_CARD` review no
+longer describes what shipped — the review and the artifact would silently
+diverge. The id is now the final tiebreak and three consecutive runs are
+byte-identical.
+
+**A voice with corrupt weights was left in the store looking installed.** Found
+by testing the installer against a real `ModelDownloader` over a loopback
+`HttpListener` rather than a stub. The cleanup asked `IsInstalled`, which only
+means *both files are present* — and a truncated `.onnx` is still moved into
+place by the downloader, since the transfer succeeded and only the hash did not,
+after which its `.onnx.json` downloads perfectly. So the voice answered yes and
+stayed. It would then load, or fail inside ORT with something about a protobuf,
+and the one thing it would never do is report that its bytes were wrong. The rule
+is now **an install leaves a verified voice or leaves no voice**, enforced by
+asking the pinned hash rather than the filesystem — which also means a failed
+upgrade removes the old voice, deliberately, because a changed pin means what is
+on disk is no longer what the catalog describes.
+
+**Removing the default voice produced a voice that did not exist.** The settings
+key still named it, the store no longer did, so the list built the Supertonic row
+from `def.Bare` regardless and reported `supertonic:ca_ES-upc_ona-x_low` — starred
+as the voice the next press would use, on a daemon whose next press would in fact
+have refused. "Is the default a style that actually exists" is now its own
+question, and the third answer — *neither* — is a note rather than a fiction.
+
+**The qualified id settles an ambiguity that was always there.** A bare `M1` is
+only a Supertonic style because no Piper voice happens to be installed under that
+name; the same file means something different on a machine where one is. The
+routing rule from P3 is unchanged — a bare id still asks the store — and the
+prefix exists so a settings file and a catalog can say which engine they mean
+without consulting the filesystem. `DefaultVoice` is untouched for a Piper
+choice, because Windows reads the same file and would take
+`piper:de_DE-thorsten-high` for the name of a style.
+
+**The speaker rides in the id** — `piper:en_GB-vctk-medium#12` — rather than in a
+key of its own. A speaker only means something relative to one voice, so a
+separate setting would go on describing the previous voice after a change, and
+silently, since speaker 12 of a single-speaker voice is a clamp rather than an
+error.
+
+<a name="p4-verified"></a>
+
+#### What was actually verified, and what was not
+
+Against a real daemon on the P3 model tree, 2026-08-25:
+
+- `voices` lists both engines; both hand-installed voices report *not in the
+  catalog*, and `supertonic:M1` shows its 10 styles.
+- The licence gate refuses without acceptance and **names the terms**, including
+  `NON-COMMERCIAL USE ONLY` for `hi_IN-pratham-medium`.
+- A 19 MB Catalan voice downloaded with byte progress, verified its hash, and
+  **calibrated itself to 1.64x** in the background — the install is the moment
+  P3 said it should happen.
+- It then spoke through a qualified id: `engine: supertonic -> piper
+  'ca_ES-upc_ona-x_low', 16000 Hz`.
+- `voice remove` refuses the configured default, accepts `--force`, and frees the
+  directory including the calibration.
+- The packer runs end to end; the catalog is in the archive and `.onnx` count is
+  **0**.
+- The catalog checker was proved by **sabotage, seven ways** — unhashed voice,
+  missing licence, non-https URL, duplicate id, mismatched filename, speaker
+  count disagreeing with its names, empty catalog — each caught with the right
+  message.
+
+**Not verified: the Voices tab's rendered content.** The window opens against a
+live daemon with no exceptions and the tab strip reads *Reader | Voices | Tune*,
+so the tab is registered and constructed — but Avalonia is on the native Wayland
+backend on this machine, there is no `xdotool`/`wmctrl`/`kdotool` to raise and
+click a window, and the desktop belonged to someone who was using it. Its data
+path is verified end to end through `vst-ctl`, which sends the same three verbs
+over the same socket. **Someone should open the tab once before 0.3 ships.**
+
+<a name="p4-open"></a>
+
+#### What P4 left open — read this before starting P5
+
+| Open | Owner | Why it is not a blocker |
+| --- | --- | --- |
+| ⚠ **The Voices tab has never been looked at.** Constructed, registered, no exceptions; its rows, its filters and its licence dialog have not been seen by a human eye | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`, so what is unproven is layout rather than behaviour |
+| ⚠ **The Windows build has never been run, only compiled.** Unchanged from P3, and now with more to check: `LinuxSettings.VoiceId` is a key Windows must carry through `[JsonExtensionData]` untouched | Whoever ships next | Nothing Windows-side changed behaviourally; the new key is additive and the engine reads `DefaultVoice`, which P4 leaves alone for a Piper choice |
+| **The Piper session is still always CPU**, and still borrows the Supertonic decision's thread count | P5 or later | Unchanged from P3. `config` now *says so* — a note when the daemon is speaking Piper against a Supertonic-measured profile — which was the reporting half of the job |
+| **`vst-ctl benchmark` still measures Supertonic only** | Later | `BenchmarkMachine.Engine` now records which engine a profile describes, and `StalenessAgainst` compares it, so the day a Piper sweep lands nothing has to be retrofitted. Absent on pre-P4 profiles, and treated as "no claim" rather than as a mismatch |
+| **The catalog is pinned to `v1.0.0` and nothing watches upstream** | Later | Regenerating is one command and the tests assert the result. A moved revision is a decision, not a drift |
+| **Windows ships no catalog.** `pack-zip.ps1` is untouched | The Windows convergence | Piper on Windows is not this round ([decision](#decisions)); the catalog lives in Core so adopting it is additive |
+
+---
 
 <a name="p5"></a>
 
