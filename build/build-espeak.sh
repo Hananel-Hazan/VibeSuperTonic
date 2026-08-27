@@ -171,14 +171,33 @@ step "Composing the espeak/ payload"
 rm -rf "$payload"
 mkdir -p "$payload/espeak-ng-data"
 
-# One real file, no symlinks. The probe in EspeakLibrary takes the longest
-# libespeak-ng.so* name it finds, and an archive that carried both a symlink and
-# its target would ship a link that a hand-untar, a copy or a zip round-trip can
-# turn into a dangling one. The P/Invoke resolves an explicit path, so the
-# soname is never consulted.
-soname="$(basename "$lib")"
+# ONE REAL FILE, NAMED AS ITS SONAME, AND NO SYMLINKS.
+#
+# Two requirements that pull in opposite directions, met by picking the right
+# single name rather than by shipping a link:
+#
+#   * No symlink. An archive carrying both a link and its target ships something
+#     a hand-untar, a `cp` without -a, or a zip round-trip can turn into a
+#     dangling link — and a dangling libespeak-ng is a voice that says nothing.
+#   * The name must be the SONAME. The P/Invoke resolves an explicit path and
+#     never consults it, so this looked free — but espeak-ng's own BINARY links
+#     against `libespeak-ng.so.1`, and that binary is what renders the echo
+#     voice (docs/SPEECHD-PLAN.md). Shipping the versioned name only would give
+#     us a 31 KB executable that cannot find the library sitting beside it.
+#
+# So the real file is called what the linker asks for. The true version lives in
+# BUILD-INFO, which is where the packer reads it from anyway.
+soname="$(objdump -p "$lib" | awk '/SONAME/ {print $2; exit}')"
+[[ -n "$soname" ]] || die "the built library declares no SONAME"
 install -m 644 "$lib" "$payload/$soname"
 strip --strip-unneeded "$payload/$soname"
+
+# The renderer for short utterances — 31 KB, and it links nothing but the
+# library above and libc. Measured 2026-08-27 at 3.3 ms to first audio for a
+# single character, against 383 ms for the neural path and 6.6 ms for the
+# distro's espeak-ng. It is why the archive needs no espeak-ng package.
+install -m 755 "$espeak_bin" "$payload/espeak-ng"
+strip --strip-unneeded "$payload/espeak-ng"
 
 # The base: everything that is not a dictionary. phondata, phontab, phonindex,
 # intonations, lang/ and voices/ — about 2 MB, and every voice needs all of it.

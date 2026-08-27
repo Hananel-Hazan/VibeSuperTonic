@@ -395,12 +395,32 @@ _assert_espeak() {
     [[ -d "$dir/espeak-ng-data" ]] || die "espeak/espeak-ng-data is missing.
        A library with no data produces no phonemes, from an install that looks complete."
 
-    # The binary from the SAME build as the shipped library — same code, same
-    # revision — pointed at the data that is actually in the box.
-    local bin="$espeak_payload/../install/bin/espeak-ng"
-    [[ -x "$bin" ]] || die "no espeak-ng binary at $bin.
-       It is what checks that every catalog voice can phonemise against the shipped
-       data. Re-run: bash build/build-espeak.sh"
+    # THE SHIPPED BINARY, not the build output. It is 27 KB, it is in the archive
+    # because it renders the short-utterance voice (docs/SPEECHD-PLAN.md), and
+    # using it here means the check exercises exactly what a user will run.
+    local bin="$dir/espeak-ng"
+    [[ -x "$bin" ]] || die "no espeak-ng binary in $dir.
+       It renders single characters and key names in 3.3 ms where the neural path
+       takes 383, and it is what makes the archive need no espeak-ng package.
+       Re-run: bash build/build-espeak.sh"
+
+    # It must find the library beside it rather than one on the machine. The
+    # binary links its SONAME, so the shipped library has to BE that name — a
+    # versioned filename would send it to the loader path, where it would find
+    # the distro's espeak-ng on this machine and nothing at all on a user's.
+    local bin_needs
+    bin_needs="$(objdump -p "$bin" | awk '/NEEDED/ {print $2}' | sort | tr '\n' ' ')"
+    [[ "$bin_needs" == "libc.so.6 libespeak-ng.so.1 " ]] \
+        || die "the shipped espeak-ng binary links $bin_needs
+       It must link our libespeak-ng.so.1 and libc, and nothing else."
+    [[ -e "$dir/libespeak-ng.so.1" ]] \
+        || die "the shipped library is not named libespeak-ng.so.1, which is the
+       SONAME espeak-ng links against. It would load the machine's espeak-ng
+       instead — working here, silent on a user's machine."
+
+    # Everything below runs the binary with the payload as its library path, which
+    # is exactly how the module config will invoke it.
+    export LD_LIBRARY_PATH="$dir"
 
     local probe="1 2 3, this is a test."
     local voices bad=0
@@ -436,12 +456,24 @@ print("\n".join(v))
             echo "       $v: produced no phonemes" >&2; bad=1
         fi
     done
+
+    # AUDIO, not just phonemes. Synthesis is a different path through the library
+    # from phonemisation, and it is the one the echo voice uses — so a payload
+    # that phonemises 32 voices and renders no audio would pass every check above.
+    local wav
+    wav="$("$bin" --path="$dir" -v en --stdout "test" 2>"$errfile" | head -c 4)"
+    [[ "$wav" == "RIFF" ]] || die "the shipped espeak-ng produced no audio.
+       It phonemises, so the data is fine — but --stdout returned $(printf %q "$wav")
+       rather than a WAV, and that is the path the short-utterance voice renders on.
+       $(cat "$errfile")"
+
     rm -f "$errfile"
+    unset LD_LIBRARY_PATH
     (( bad == 0 )) || die "one or more espeak voices the catalog offers cannot be phonemised by the
        shipped data. Every one of them is a voice a user can download, accept a
        licence for, install and select, which then produces silence."
 
-    info "espeak-ng $(awk '/^described/ {print $2}' "$info"), ${#voices[@]} voices phonemise, $(ls "$dir"/espeak-ng-data/*_dict | wc -l) dictionaries"
+    info "espeak-ng $(awk '/^described/ {print $2}' "$info"), ${#voices[@]} voices phonemise and it renders audio, $(ls "$dir"/espeak-ng-data/*_dict | wc -l) dictionaries"
 }
 _assert_espeak
 
