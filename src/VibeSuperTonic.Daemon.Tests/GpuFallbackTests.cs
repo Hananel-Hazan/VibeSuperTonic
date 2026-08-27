@@ -327,6 +327,21 @@ public class GpuFallbackTests : IDisposable
         // sentence also carries the veto phrase and the thread-count clause and
         // neither is this test's business.
         Assert.DoesNotContain(new string('x', 200), reason);
-        Assert.EndsWith("…, 20% of 20 logical processors, never benchmarked", reason);
+
+        // THE PROCESSOR COUNT IS COMPUTED, NOT WRITTEN DOWN. This read
+        // "20% of 20 logical processors" — the count of the machine the test was
+        // written on. It therefore passed on that one laptop and failed on every
+        // other machine in the world, including every CI runner, which is how it
+        // sat red from 2026-08-25 to 2026-08-27 while the suite was green locally.
+        //
+        // The clause comes from ExecutionDecision's
+        // "{percent}% of {processorCount} logical processors, never benchmarked",
+        // and processorCount is Environment.ProcessorCount. What this test is
+        // actually asserting is that the ellipsis lands immediately before that
+        // clause — that the message was truncated and the sentence still finishes
+        // — so the clause is built the same way the product builds it.
+        Assert.EndsWith(
+            $"…, 20% of {Environment.ProcessorCount} logical processors, never benchmarked",
+            reason);
     }
 }

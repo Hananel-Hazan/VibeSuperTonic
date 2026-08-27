@@ -184,10 +184,43 @@ internal static unsafe class WaylandNative
     /// <summary>
     /// Is there a Wayland compositor to talk to at all? Cheap, and used to decide
     /// which selection source the daemon builds.
+    ///
+    /// <para><b>A MISSING libwayland-client IS AN ANSWER, NOT AN ERROR.</b> This
+    /// is asked once, from the daemon's startup path, and the P/Invoke below
+    /// throws <see cref="DllNotFoundException"/> when the machine has no
+    /// <c>libwayland-client.so.0</c> — which killed the daemon outright, before
+    /// it had bound its socket, with a stack trace about a shared library.</para>
+    ///
+    /// <para>Every desktop that could possibly run Wayland has that library, so
+    /// this was invisible until something asked without one: a container, a
+    /// minimal X11-only install, a server. Found 2026-08-27 by
+    /// <c>build/smoke-test.sh</c> inside a bare <c>ubuntu:22.04</c>, which is the
+    /// first machine to run this product that did not already have a desktop on
+    /// it.</para>
+    ///
+    /// <para>The honest reading of "the Wayland client library is not installed"
+    /// is <c>false</c> — there is no compositor here — and the daemon then builds
+    /// the X11 source and says so in its log, which is what it does on any X11
+    /// session anyway.</para>
     /// </summary>
     internal static bool CanConnect()
     {
-        IntPtr d = wl_display_connect(null);
+        IntPtr d;
+        try
+        {
+            d = wl_display_connect(null);
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // A libwayland-client.so.0 that exists and is not one — stub
+            // packages and ABI-renamed forks both turn up in the wild.
+            return false;
+        }
+
         if (d == IntPtr.Zero) return false;
         wl_display_disconnect(d);
         return true;

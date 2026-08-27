@@ -324,5 +324,29 @@ Fixed by matching the daemon and `vst-ctl`, plus **assertion 3d**: every
 smoke test is what found it, and the packer assertion is what makes it a
 five-second failure on any machine instead of a container-only one.
 
-**Both findings are the same lesson.** A check that only ever runs where the
-product already works cannot find what the product needs.
+### And the third, which was not in the archive at all
+
+The same CI run had a second red job: `dotnet test`, failing on the runner and
+green on the developer's machine, deterministically, for three runs. Reproduced
+by running the suite in a container with **two CPUs**:
+
+```
+Assert.EndsWith("…, 20% of 20 logical processors, never benchmarked", reason);
+```
+
+**Twenty is this laptop's core count.** The assertion could only ever pass on the
+machine it was written on. It went in with P3 on 2026-08-25 and CI had not run
+the Linux suite since, so it sat red for two days while the suite was green
+locally — and a green suite locally is exactly what stops anyone looking.
+
+Fixed by computing the clause the way the product computes it, from
+`Environment.ProcessorCount`. The test's own comment already said the thread
+count "is not this test's business"; the assertion had made it so.
+
+**All three findings are the same lesson.** A check that only ever runs where the
+product already works cannot find what the product needs — and that applies to
+the test suite itself, not only to the archive.
+
+**The cheapest guard against the third kind**: run the suite in a
+CPU-constrained container occasionally. `docker run --cpus 2` found in one
+attempt what three CI runs had only reported as "exit code 1".
