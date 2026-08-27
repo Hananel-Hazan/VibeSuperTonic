@@ -100,6 +100,37 @@ def classify(line):
     return None
 
 
+def speakable(cfg):
+    """Why this voice cannot be spoken by this product, or None when it can.
+
+    THE SECOND ELIGIBILITY AXIS, and it is not a licence. A Piper voice states
+    what its symbols ARE, and not all of them are phonemes:
+
+      * phoneme_type "espeak"  — ids are IPA from espeak-ng. What this product
+        synthesises, and what P1 measured parity for.
+      * phoneme_type "text"    — ids are the language's LETTERS. uk_UA's
+        ukrainian_tts is one: its id map is Cyrillic graphemes. Feeding it IPA
+        looks up symbols that are almost all absent, so the model receives an
+        input of a few punctuation ids and renders something between silence and
+        noise. It does not fail — that is the whole problem, and it is trap 1 in
+        docs/PIPER-PLAN.md with a real name attached.
+
+    The key is also not always a plain string: es_MX-ald-medium carries
+    "PhonemeType.ESPEAK", a Python enum repr that leaked into upstream's config.
+    It is espeak, and rejecting it over its spelling would cost a language for a
+    formatting accident — so the comparison is on the value, not the text.
+
+    Absent means espeak, confirmed in upstream's config.py.
+    """
+    raw = cfg.get("phoneme_type", "espeak")
+    kind = str(raw).strip().lower().rsplit(".", 1)[-1]
+    if kind != "espeak":
+        return f"phoneme_type is {raw!r}: its symbols are not espeak phonemes"
+    if not (cfg.get("espeak") or {}).get("voice"):
+        return "config names no espeak voice"
+    return None
+
+
 def fetch(url, timeout=90):
     req = urllib.request.Request(urllib.parse.quote(url, safe=":/?&=%"), headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -173,6 +204,35 @@ def main():
     sys.stderr.write(f"  {len(eligible)} eligible under policy {args.policy} "
                      f"({'/'.join(sorted(allowed))})\n")
 
+    # --- the configs, BEFORE selection --------------------------------------
+    #
+    # Every eligible voice, not just the winners, and that ordering is the whole
+    # point. Whether a voice is speakable at all lives in its config, and a
+    # non-speakable voice found AFTER selection can only be dropped — which
+    # silently costs its entire language, because selection already discarded the
+    # alternatives. Read first, select second, and uk_UA falls back to its next
+    # voice instead of vanishing. About 550 KB of configs against 400 KB.
+    def config_of(key):
+        path = [p for p in index[key]["files"] if p.endswith(".onnx.json")][0]
+        return key, path, fetch(raw_url(args.revision, path))
+
+    configs = {}
+    with concurrent.futures.ThreadPoolExecutor(12) as ex:
+        for key, path, blob in ex.map(config_of, sorted(eligible)):
+            configs[key] = (path, blob, json.loads(blob))
+
+    unspeakable = {}
+    for key in sorted(eligible):
+        why = speakable(configs[key][2])
+        if why:
+            unspeakable[key] = why
+    for key, why in unspeakable.items():
+        sys.stderr.write(f"  excluded {key}: {why}\n")
+    eligible -= set(unspeakable)
+    if unspeakable:
+        sys.stderr.write(f"  {len(unspeakable)} eligible voices are not espeak-phonemised "
+                         f"and are excluded\n")
+
     # --- selection: one NAME per language, then every tier of that name -----
     by_lang = collections.defaultdict(list)
     for key in sorted(eligible):
@@ -219,22 +279,11 @@ def main():
         for dirpath, entries in ex.map(tree_of, dirs):
             trees[dirpath] = {e["path"]: e for e in entries}
 
-    def config_of(key):
-        path = [p for p in index[key]["files"] if p.endswith(".onnx.json")][0]
-        blob = fetch(raw_url(args.revision, path))
-        return key, path, blob
-
-    configs = {}
-    with concurrent.futures.ThreadPoolExecutor(12) as ex:
-        for key, path, blob in ex.map(config_of, chosen):
-            configs[key] = (path, blob)
-
     voices = []
     for key in chosen:
         v = index[key]
         onnx_path = [p for p in v["files"] if p.endswith(".onnx")][0]
-        cfg_path, cfg_blob = configs[key]
-        cfg = json.loads(cfg_blob)
+        cfg_path, cfg_blob, cfg = configs[key]
 
         entry = trees[onnx_path.rsplit("/", 1)[0]].get(onnx_path)
         if entry is None or "lfs" not in entry:
@@ -264,6 +313,15 @@ def main():
             },
             "quality": v["quality"],
             "sampleRate": cfg["audio"]["sample_rate"],
+            # The espeak-ng voice this model was TRAINED against, taken from its
+            # own config rather than derived from the language code — because the
+            # two disagree and the disagreement is silent. no_NO phonemises as
+            # "nb", ca_ES as "ca", pt_BR as "pt-br": a rule that split the code on
+            # "_" would ask espeak-ng for a voice called "no", get a dictionary
+            # that is not the one the model was trained on, and produce confident
+            # nonsense rather than an error. It is also what P5's packer names
+            # when it checks a dictionary is reachable for every voice offered.
+            "espeakVoice": (cfg.get("espeak") or {}).get("voice", ""),
             "speakers": speakers,
             "speakerNames": names,
             "licence": {"name": lic, "class": lic_class, "url": lic_url or ""},

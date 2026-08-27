@@ -123,6 +123,31 @@ public class PiperCatalogTests
     }
 
     [Fact]
+    public void Every_shipped_voice_names_the_espeak_voice_it_was_trained_on()
+    {
+        // The packer runs each of these against the espeak data it is about to
+        // ship and refuses the archive if any produces no phonemes. A voice with
+        // an empty one is not caught by that check — it is silently removed FROM
+        // it, which is the failure this test exists to make loud.
+        foreach (var v in Shipped().Voices)
+            Assert.False(string.IsNullOrWhiteSpace(v.EspeakVoice), $"{v.Id} names no espeak voice");
+    }
+
+    [Fact]
+    public void The_espeak_voice_is_not_derivable_from_the_language_code()
+    {
+        // Guarding a temptation rather than a defect. The two names look alike
+        // for 42 of the 43 entries, which is exactly what makes "just split the
+        // code on _" look correct — and no_NO is why it is not. If this ever
+        // fails because the catalog lost its Norwegian voice, the rule it warns
+        // against is still wrong: es_MX is "es-419" and pt_BR is "pt-br", neither
+        // of which any rule over language codes produces either.
+        var voices = Shipped().Voices;
+        Assert.Contains(voices, v => v.Language.Code == "no_NO" && v.EspeakVoice == "nb");
+        Assert.Contains(voices, v => v.Language.Code == "es_MX" && v.EspeakVoice == "es-419");
+    }
+
+    [Fact]
     public void Shipped_urls_all_point_at_the_pinned_revision()
     {
         // The revision is the whole reason the hashes stay valid. A URL that
@@ -280,7 +305,8 @@ public class PiperCatalogTests
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Resources", "piper-voices.json")));
         var first = doc.RootElement.GetProperty("voices")[0];
         foreach (string name in new[]
-                 { "id", "name", "language", "quality", "sampleRate", "speakers", "speakerNames", "licence", "files" })
+                 { "id", "name", "language", "quality", "sampleRate", "espeakVoice", "speakers",
+                   "speakerNames", "licence", "files" })
             Assert.True(first.TryGetProperty(name, out _), $"the generator no longer emits '{name}'");
     }
 }

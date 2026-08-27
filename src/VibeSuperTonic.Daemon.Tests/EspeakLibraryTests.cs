@@ -46,7 +46,7 @@ public class EspeakLibraryTests
     [Fact]
     public void Beside_the_executable_beats_the_loader_path()
     {
-        // Where P5 will ship ours. Checked with an explicit base directory so the
+        // Where P5 ships ours, since 2026-08-27. Checked with an explicit base directory so the
         // test does not depend on where the test host happens to run from.
         string root = Path.Combine(Path.GetTempPath(), $"vst-espeak-{Guid.NewGuid():N}");
         string beside = Path.Combine(root, "espeak");

@@ -4,7 +4,7 @@
   "source": {
     "repo": "rhasspy/piper-voices",
     "revision": "v1.0.0",
-    "generated": "2026-08-25",
+    "generated": "2026-08-27",
     "policy": "C",
     "policyClasses": [
       "agpl",
@@ -27,6 +27,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "ca",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -62,6 +63,7 @@
       },
       "quality": "x_low",
       "sampleRate": 16000,
+      "espeakVoice": "ca",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -97,6 +99,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "cs",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -132,6 +135,7 @@
       },
       "quality": "low",
       "sampleRate": 16000,
+      "espeakVoice": "cs",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -167,6 +171,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "cy",
       "speakers": 7,
       "speakerNames": [
         "benyw-de-pro",
@@ -210,6 +215,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "da",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -245,6 +251,7 @@
       },
       "quality": "high",
       "sampleRate": 22050,
+      "espeakVoice": "de",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -280,6 +287,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "de",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -315,6 +323,7 @@
       },
       "quality": "low",
       "sampleRate": 16000,
+      "espeakVoice": "de",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -350,6 +359,7 @@
       },
       "quality": "low",
       "sampleRate": 16000,
+      "espeakVoice": "el",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -385,6 +395,7 @@
       },
       "quality": "high",
       "sampleRate": 22050,
+      "espeakVoice": "en",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -420,6 +431,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "en",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -455,6 +467,7 @@
       },
       "quality": "high",
       "sampleRate": 22050,
+      "espeakVoice": "en",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -490,6 +503,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "en",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -525,6 +539,7 @@
       },
       "quality": "high",
       "sampleRate": 22050,
+      "espeakVoice": "es-419",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -560,6 +575,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "es",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -595,6 +611,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "es-419",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -630,6 +647,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "fa",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -665,6 +683,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "fi",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -700,6 +719,7 @@
       },
       "quality": "low",
       "sampleRate": 16000,
+      "espeakVoice": "fi",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -735,6 +755,7 @@
       },
       "quality": "low",
       "sampleRate": 16000,
+      "espeakVoice": "fr",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -770,6 +791,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "hi",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -805,6 +827,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "hu",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -840,6 +863,7 @@
       },
       "quality": "high",
       "sampleRate": 22050,
+      "espeakVoice": "kk",
       "speakers": 6,
       "speakerNames": [
         "ISSAI_KazakhTTS2_M2",
@@ -882,6 +906,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "lb",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -917,6 +942,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "lv",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -952,6 +978,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "ne",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -987,6 +1014,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "nl",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1022,6 +1050,7 @@
       },
       "quality": "x_low",
       "sampleRate": 16000,
+      "espeakVoice": "nl",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1057,6 +1086,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "nl",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1092,6 +1122,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "nb",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1127,6 +1158,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "pl",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1162,6 +1194,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "pt-br",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1197,6 +1230,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "pt",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1232,6 +1266,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "ro",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1267,6 +1302,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "ru",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1302,6 +1338,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "sk",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1337,6 +1374,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "sl",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1372,6 +1410,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "sr",
       "speakers": 2,
       "speakerNames": [
         "dsb",
@@ -1410,6 +1449,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "sv",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1445,6 +1485,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "tr",
       "speakers": 1,
       "speakerNames": [],
       "licence": {
@@ -1470,41 +1511,38 @@
       ]
     },
     {
-      "id": "uk_UA-ukrainian_tts-medium",
-      "name": "ukrainian_tts",
+      "id": "uk_UA-lada-x_low",
+      "name": "lada",
       "language": {
         "code": "uk_UA",
         "english": "Ukrainian",
         "native": "украї́нська мо́ва",
         "country": "Ukraine"
       },
-      "quality": "medium",
-      "sampleRate": 22050,
-      "speakers": 3,
-      "speakerNames": [
-        "lada",
-        "mykyta",
-        "tetiana"
-      ],
+      "quality": "x_low",
+      "sampleRate": 16000,
+      "espeakVoice": "uk",
+      "speakers": 1,
+      "speakerNames": [],
       "licence": {
-        "name": "CC0",
-        "class": "public",
-        "url": "https://github.com/NabuCasa/voice-datasets"
+        "name": "Apache 2.0",
+        "class": "apache",
+        "url": "https://github.com/egorsmkv/ukrainian-tts-datasets/tree/main/lada"
       },
       "files": [
         {
-          "name": "uk_UA-ukrainian_tts-medium.onnx",
-          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
+          "name": "uk_UA-lada-x_low.onnx",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/lada/x_low/uk_UA-lada-x_low.onnx",
           "mirrors": [],
-          "sha256": "7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f",
-          "bytes": 76735663
+          "sha256": "f8d015d3fc19ea6bd8ac3ca1fd0c0fbac5054c609599ee73799235fd2cf5c786",
+          "bytes": 20628813
         },
         {
-          "name": "uk_UA-ukrainian_tts-medium.onnx.json",
-          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json",
+          "name": "uk_UA-lada-x_low.onnx.json",
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/lada/x_low/uk_UA-lada-x_low.onnx.json",
           "mirrors": [],
-          "sha256": "4e96e72917ca9b94edc77d6ccfee03a73f450ba2fc1ca93c2e562bc014e5aa55",
-          "bytes": 2002
+          "sha256": "2df74b622e78930e8a62432d1cc8380f79f34f02c8c58ebd68e6ccbc857d80aa",
+          "bytes": 4186
         }
       ]
     },
@@ -1519,6 +1557,7 @@
       },
       "quality": "medium",
       "sampleRate": 22050,
+      "espeakVoice": "vi",
       "speakers": 1,
       "speakerNames": [],
       "licence": {

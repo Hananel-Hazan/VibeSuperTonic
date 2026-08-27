@@ -87,6 +87,25 @@ public sealed class PiperCatalogVoice
     /// </summary>
     [JsonPropertyName("sampleRate")]   public int SampleRate { get; set; }
 
+    /// <summary>
+    /// The espeak-ng voice this model was trained against — <c>en</c>, <c>nb</c>,
+    /// <c>es-419</c>. Taken from the voice's own config by the generator, never
+    /// derived from <see cref="Language"/>.
+    ///
+    /// <para><b>Three names, and they disagree.</b> The catalog's language code,
+    /// the espeak voice and the dictionary file are related by nothing a rule can
+    /// express: <c>no_NO</c> phonemises as <c>nb</c> and reads <c>no_dict</c>;
+    /// <c>es_MX</c> is <c>es-419</c> and reads <c>es_dict</c>. A derived mapping
+    /// would ask espeak for a voice that does not exist, or worse, for one that
+    /// does and is wrong.</para>
+    ///
+    /// <para>What reads it: the Linux packer, which runs every one of these
+    /// against the espeak data it is about to ship and refuses an archive where
+    /// any of them phonemises to nothing. A missing dictionary is not an error in
+    /// espeak-ng — it exits 0 and returns no phonemes.</para>
+    /// </summary>
+    [JsonPropertyName("espeakVoice")]  public string EspeakVoice { get; set; } = "";
+
     [JsonPropertyName("speakers")]     public int Speakers { get; set; } = 1;
 
     /// <summary>

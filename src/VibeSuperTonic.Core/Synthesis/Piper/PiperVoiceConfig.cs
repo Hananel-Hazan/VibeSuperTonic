@@ -97,6 +97,39 @@ public sealed class PiperVoiceConfig
         if (sampleRate <= 0)
             throw new InvalidDataException($"Piper voice config has audio.sample_rate {sampleRate}{where}");
 
+        // WHAT THE SYMBOLS ARE, asked before anything is done with them.
+        //
+        // A Piper voice's ids are not necessarily phonemes. phoneme_type "text"
+        // means the id map is the language's LETTERS — uk_UA's ukrainian_tts is
+        // one, and its map is Cyrillic graphemes. Nothing else distinguishes it:
+        // it carries an espeak.voice like every other voice, its phoneme_id_map
+        // is well formed, and it holds the three required symbols. Feeding it IPA
+        // looks up phonemes that are almost all absent, so the model receives a
+        // handful of punctuation ids and renders something between silence and
+        // noise — a voice that downloaded, verified, calibrated and speaks
+        // rubbish.
+        //
+        // The value is not always a plain string either: es_MX-ald-medium says
+        // "PhonemeType.ESPEAK", a Python enum repr that leaked into upstream's
+        // config and is espeak. Compared on the value rather than the spelling,
+        // so a formatting accident does not cost a working voice.
+        //
+        // Absent means espeak, confirmed in upstream's config.py.
+        if (root.TryGetProperty("phoneme_type", out var pt)
+            && pt.ValueKind == JsonValueKind.String
+            && pt.GetString() is { Length: > 0 } phonemeType)
+        {
+            string kind = phonemeType.Trim();
+            int dot = kind.LastIndexOf('.');
+            if (dot >= 0) kind = kind[(dot + 1)..];
+            if (!kind.Equals("espeak", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"Piper voice config has phoneme_type '{phonemeType}'{where}: its symbols are " +
+                    "not espeak phonemes, so this voice cannot be spoken by this engine. " +
+                    "A voice like this renders noise rather than failing, which is why it is " +
+                    "refused here. Remove it and install one the Voices tab offers.");
+        }
+
         string espeak = root.TryGetProperty("espeak", out var esp)
                         && esp.TryGetProperty("voice", out var v)
                         && v.GetString() is { Length: > 0 } voice

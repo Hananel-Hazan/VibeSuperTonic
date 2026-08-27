@@ -8,7 +8,7 @@ these voices were trained on, so there is no fallback.
 **It does. 327 sentences, 8 languages, zero divergences.**
 
 ```bash
-bash spike/piper-phonemes/build-espeak.sh          # ~2 min, prints the two vars
+bash build/build-espeak.sh                         # ~2 min, prints the two vars
 export VST_ESPEAK_LIB=…  VST_ESPEAK_DATA=…
 
 dotnet run --project spike/piper-phonemes -- --negative-control   # prove it can fail
@@ -71,5 +71,5 @@ model was trained on never reaches it. It is also **newer than the 1.52.0
 release** — it exists at the commit piper pins and not at the tag, so a build
 from the release would have compiled, linked, run, and been wrong.
 
-Both are why [build-espeak.sh](build-espeak.sh) pins a commit and asserts the
+Both are why [build-espeak.sh](../../build/build-espeak.sh) pins a commit and asserts the
 symbol is exported rather than trusting a version number.

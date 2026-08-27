@@ -26,6 +26,30 @@ In that order, and a failed tarball means no AppImage. `pack-appimage.sh` refuse
 to run against a composed tree whose binaries report a different version, so the
 two artifacts of one release cannot come from two builds.
 
+**Since P5 (2026-08-27) a Linux release needs one step before either**, because
+the archive now contains a phonemiser:
+
+```bash
+bash build/build-espeak.sh          # ~2 min, and only when the payload is stale
+```
+
+It clones espeak-ng at the commit piper pins, builds it with audio and
+time-stretch turned off, prunes 118 dictionaries to the ~31 the catalog and P1's
+corpus need, and composes `build/espeak-out/espeak` — the payload `pack-tar.sh`
+copies in. **The packer refuses to run without it** and refuses a payload whose
+recorded pin disagrees with the script's, so a stale build cannot ship. It is a
+separate script rather than a step inside the packer because it clones a
+repository and compiles dictionaries: two minutes and a network fetch that have
+nothing to do with a release run, and that only matter when the pin moves.
+
+**From that release onward the archive as a whole is GPL-3.0-or-later**, because
+it distributes espeak-ng. The repository's own source stays MIT — MIT is
+GPL-compatible and no `.cs` file changes — and `LICENSE-PHONEMIZER.txt`, written
+by the packer, is where the terms and the source offer live. Releases up to and
+including 0.2.11 contain no espeak-ng and are unaffected; that is worth saying in
+their release notes, because "the project became GPL" is what a reader will
+otherwise conclude retroactively.
+
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:
 
@@ -98,6 +122,27 @@ each exists because the failure it catches is silent:
   regenerated is one whose per-voice `MODEL_CARD` review no longer describes what
   shipped.
 
+- **The phonemiser is the one we built, and it works** (P5, 2026-08-27). Three
+  failures, all silent, all in `espeak/`. *The revision*: nothing rebuilds the
+  payload when the pin in [build-espeak.sh](build/build-espeak.sh) moves, so a
+  months-old `espeak-out/` composes in without complaint — the packer compares
+  the pin against the one the payload recorded. *The link line*: a build that
+  picked up `libsonic` or `libpcaudio` because they were installed on the build
+  machine produces an archive that works there and nowhere else, so the shipped
+  `.so` must declare exactly `libc` and `libm`, and must export
+  `espeak_TextToPhonemesWithTerminator` — which does not exist at the 1.52.0 tag
+  and whose absence is wrong prosody rather than a failure. *The data*: *a
+  missing dictionary makes espeak-ng exit 0, print one line to stderr that
+  nothing reads, and return no phonemes* — which reaches a user as a voice they
+  downloaded, accepted a licence for, installed and selected, and which then says
+  nothing. So that check is behavioural: every espeak voice the catalog names
+  phonemises a probe sentence against the **shipped** data, and exit code, stdout
+  and stderr all have to be right. Nothing maps between the three names involved,
+  because they disagree — `no_NO` is voice `nb` and reads `no_dict`, `es_MX` is
+  `es-419` and reads `es_dict`. The catalog carries each voice's `espeakVoice`,
+  taken from the model's own config, and `build-espeak.sh` discovers the
+  dictionaries by asking espeak which file it failed to open.
+
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
 nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a
@@ -130,18 +175,31 @@ Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
-**The three-release sequence settled on 2026-08-24 is spent**, and it grew a
-fourth entry it did not plan for. `<VstVersion>` is `0.2.10`.
+**The three-release sequence settled on 2026-08-24 is spent**, and it has grown
+twice since. `<VstVersion>` is `0.2.11`.
 
 | Version | What it is | State |
 | --- | --- | --- |
 | `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
 | `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
-| `0.2.10` | What looking harder at 0.2.9 found: a portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **decided 2026-08-25**, packs from this tree |
-| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md) | next |
+| `0.2.10` | A portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **shipped 2026-08-25** |
+| `0.2.11` | A GPU that failed while reporting itself healthy. Only the number: the tree is `7ed7a67` exactly | **shipped 2026-08-27** |
+| `0.2.12` | A Speech Dispatcher module — SAPI's equivalent on the Debian family, so any screen reader can use these voices — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) | next |
+| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md). **P0–P5 are done and in the tree** | after |
 
-`0.3` is the next number and it is settled. **Everything after it is a decision
-to ask about** — propose a bump from what changed, and use `AskUserQuestion`.
+**`0.2.11` was cut from the pre-P5 tree on purpose** and that reasoning is worth
+keeping. The GPU fix landed on 2026-08-26, after 0.2.10's artifacts were packed
+on the 25th, so the two files named 0.2.10 do not contain it. But by then P5 had
+put espeak-ng in the archive and moved the whole thing to GPL-3.0-or-later, and a
+patch release is not where a user should discover new licence terms. So the fix
+was given a number of its own and packed from `7ed7a67`. **The same question now
+applies to `0.2.12`**: it will be built from a tree that contains P5, so it will
+ship espeak-ng and it will be the release where those terms first apply — say so
+in its notes, or hold P5 back deliberately.
+
+`0.2.12` and `0.3` are the next two numbers. **Everything after them is a
+decision to ask about** — propose a bump from what changed, and use
+`AskUserQuestion`.
 
 After a release ships, update `<VstVersion>` in
 [Directory.Build.props](Directory.Build.props) to the version just shipped, so
@@ -150,6 +208,11 @@ is the one exception on record and it was the user's call: the bump was committe
 with the work rather than after the pack, so that one commit *is* the release.
 The rule still holds for everything after it — a release run passes `-v`
 explicitly either way, so the default is a safety net rather than an input.
+
+**The safety net has a hole worth knowing about**: the default names the *last
+shipped* version, so a `pack-tar.sh` run with no `-v` overwrites the artifact
+that is already in `dist/` — and from this tree that artifact would gain
+espeak-ng and lose its licence description. Pass `-v`.
 
 Use `AskUserQuestion` to confirm the version — do not silently pick one. The
 version is durable: it embeds in the ZIP filename and is what the user will

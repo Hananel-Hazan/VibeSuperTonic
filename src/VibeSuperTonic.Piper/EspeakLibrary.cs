@@ -7,7 +7,7 @@ namespace VibeSuperTonic.Piper;
 ///
 /// <para><b>This is the day-one question P3 was told to answer before there was a
 /// call site to retrofit.</b> P1 measured parity against a library built from
-/// <see href="../../spike/piper-phonemes/build-espeak.sh">our own script</see>,
+/// <see href="../../build/build-espeak.sh">our own script</see>,
 /// pinned to the commit piper pins, <c>724808c5</c>.</para>
 ///
 /// <para><b>The function this needs is newer than the release.</b>
@@ -161,7 +161,8 @@ public static class EspeakLibrary
         return $"the espeak-ng at {resolution.Path ?? "the loader path"} has no {TerminatorExport}, " +
                "so it cannot tell a clause that ends a sentence from one that does not. " +
                "It is newer than the 1.52.0 release and older builds do not have it. " +
-               $"Set {LibraryVariable} to one that does — spike/piper-phonemes/build-espeak.sh builds it.";
+               $"Set {LibraryVariable} to one that does. The release archive ships one in " +
+               "espeak/ beside the executable; build/build-espeak.sh is what builds it.";
     }
 
     private static int _resolverInstalled;

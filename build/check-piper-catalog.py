@@ -22,6 +22,11 @@ Voices tab renders happily, and the product is wrong:
     because it looks like consent was obtained.
   * A duplicate id means two catalog rows share one directory, and whichever was
     installed second wins with the first one's name still on screen.
+  * A voice naming no espeakVoice cannot be phonemised, and nothing downstream
+    can tell which dictionary it needs. The packer runs every one of these
+    against the espeak data it is about to ship — a missing dictionary makes
+    espeak-ng exit 0 and return no phonemes — so an entry without one silently
+    removes a voice from that check rather than failing it.
 
 The size ceiling is in the packer rather than here, because it is a fact about
 the archive rather than about the catalog.
@@ -85,6 +90,12 @@ def main():
         licence = v.get("licence") or {}
         if not (licence.get("name") or "").strip():
             problems.append(f"{vid}: states no licence, and the download gate has nothing to show")
+
+        # Not derived from the language code, and it must not be: no_NO's voice
+        # is "nb", es_MX's is "es-419". The generator takes it from the model's
+        # own config, which is the only authority on what it was trained against.
+        if not (v.get("espeakVoice") or "").strip():
+            problems.append(f"{vid}: names no espeakVoice, so nothing can check it phonemises")
 
         speakers = v.get("speakers")
         names = v.get("speakerNames") or []

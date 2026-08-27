@@ -67,6 +67,39 @@ public class PiperVoiceConfigTests
         Assert.Contains("voice.onnx.json", ex.Message);
     }
 
+    [Theory]
+    // uk_UA's ukrainian_tts is a real voice with this key, and it shipped in the
+    // 0.2.10 catalog. Its id map is Cyrillic LETTERS: it carries an espeak.voice
+    // like everything else, its map is well formed, and it holds all three
+    // required symbols — so nothing but this key separates it from a voice that
+    // works. Fed IPA it looks up phonemes that are almost all absent and renders
+    // noise, which is why it is refused rather than rendered.
+    [InlineData("\"text\"")]
+    [InlineData("\"PhonemeType.TEXT\"")]
+    public void A_voice_whose_symbols_are_not_phonemes_is_refused(string phonemeType)
+    {
+        var graphemes = Lessac.Replace("\"phoneme_type\": \"espeak\"", $"\"phoneme_type\": {phonemeType}");
+        var ex = Assert.Throws<InvalidDataException>(
+            () => PiperVoiceConfig.Parse(graphemes, "voice.onnx.json"));
+        Assert.Contains("phoneme_type", ex.Message);
+        Assert.Contains("voice.onnx.json", ex.Message);
+    }
+
+    [Theory]
+    // es_MX-ald-medium says "PhonemeType.ESPEAK" — a Python enum repr that leaked
+    // into upstream's config. It is espeak, and rejecting it over its spelling
+    // would cost a working voice for a formatting accident. Absent means espeak,
+    // which is upstream's own default in config.py.
+    [InlineData("\"phoneme_type\": \"espeak\",")]
+    [InlineData("\"phoneme_type\": \"PhonemeType.ESPEAK\",")]
+    [InlineData("\"phoneme_type\": \"ESPEAK\",")]
+    [InlineData("")]
+    public void The_espeak_phoneme_type_is_accepted_however_it_is_spelled(string line)
+    {
+        var config = Lessac.Replace("\"phoneme_type\": \"espeak\",", line);
+        Assert.Equal("en-us", PiperVoiceConfig.Parse(config).EspeakVoice);
+    }
+
     [Fact]
     public void Keys_upstream_may_add_are_ignored_rather_than_refused()
     {

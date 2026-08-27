@@ -26,7 +26,7 @@ became constants in the product, so they come out of `PiperSynthesizer` and
 `EspeakPhonemizer` themselves.
 
 ```bash
-export VST_ESPEAK_LIB=… VST_ESPEAK_DATA=…      # bash build-espeak.sh prints both
+export VST_ESPEAK_LIB=… VST_ESPEAK_DATA=…      # bash build/build-espeak.sh prints both
 
 # measure every voice in voice/ and write each curve beside its .onnx
 dotnet run --project spike/piper-render -c Release -- --calibrate --out-dir voice

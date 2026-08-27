@@ -1,5 +1,10 @@
 # Piper as a second engine — plan
 
+Status: **P0–P5 are done.** The engine, the catalog, the UI and the packaging all
+landed between 2026-08-25 and 2026-08-27; what ships from this tree contains a
+Piper engine, 43 voices behind their own licences, and the phonemiser they need.
+Older status line, kept because the dates in it are load-bearing:
+
 Status: **[P0](#p0), [P1](#p1) and [P2](#p2)'s measurements all landed
 2026-08-25.** The go/no-go is answered — phoneme parity, 327 sentences across 8
 languages, zero divergences — and nothing that can kill this project is left.
@@ -120,42 +125,38 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 | P2 · Measure | **Done 2026-08-25.** [The table](#p2-landed) — RTF, cold load and resident set per voice, one process per row — and [the listening verdict](#speed-verdict): no quality ceiling at any rate, by either mechanism. It ended up settling the speed question rather than the licence one, which was [settled ahead of it](#decisions), and it handed [three items forward](#p3-inbox) |
 | P3 · `PiperSynthesizer` + the options refactor | **Done 2026-08-25.** All five exit criteria met and verified on hardware — a Piper voice speaks through the daemon, the sink re-tunes between utterances, and a requested rate lands within 2.8%. [The record](#p3-landed), and [what it left open](#p3-open) |
 | P4 · Catalog, download, and the [Voices tab](#ui) | **Done 2026-08-25.** 43 voices across 35 languages, hash-pinned; three verbs; a Voices tab; the qualified `VoiceId` setting. Verified end to end — a voice downloaded, verified, calibrated itself and spoke. [The record](#p4-landed), and [what it left open](#p4-open) |
-| P5 · Packaging | **Next — [start here](#next).** Partly begun by P4, which added the catalog to the archive and an assertion for it. **Unblocked:** [pack-tar.sh](../build/pack-tar.sh) landed 2026-08-22 and the AppImage shipped 2026-08-24, building from the tarball's own tree — so this phase edits one packer and inherits the other. What is left is the GPL obligations, a second `LICENSE-MODELS` story, two more packer assertions, and **moving [build-espeak.sh](../spike/piper-phonemes/build-espeak.sh) out of the spike into `build/`** — it is a script now rather than a command line, which P1 fixed, but it lives where a release run does not look. [What P3 left it](#p3-owes-p5) |
+| P5 · Packaging | **Done 2026-08-27.** The archive ships espeak-ng: [build-espeak.sh](../build/build-espeak.sh) in `build/`, a pruned payload in `espeak/`, three new packer assertions all seen to fire, `LICENSE-PHONEMIZER.txt` and the source offer. It also found two defects — a voice in the shipped catalog whose symbols are not phonemes, and a pruning rule that broke P1's own evidence. [The record](#p5-landed), and [what it left open](#p5-open) |
 
 <a name="next"></a>
 
 ### What to do next, in order
 
-**Start at [P5](#p5).** Read [what P4 left open](#p4-open) first — six items, none
-blocking — then [what P3 left P5](#p3-owes-p5), which is unchanged and is still
-the bulk of it: `build-espeak.sh` moved into `build/`, the GPL source offer, and
-the `espeak/` directory the probe already looks for.
+**P0–P5 are done.** Piper is a working second engine, packaged, and every phase's
+record is below. What is left is not a phase of this plan:
 
-**P4 has already done two of P5's jobs**, so start by reading
-[pack-tar.sh](../build/pack-tar.sh) rather than the list: the catalog ships in the
-archive, and assertion 3b — [check-piper-catalog.py](../build/check-piper-catalog.py)
-— refuses a catalog carrying an unhashed voice, a non-https URL, a duplicate id,
-a filename that does not match its voice id, a licence-less entry, or a speaker
-count that disagrees with its names. All six were checked by sabotage rather than
-by reading. P5's *"no voice models in the archive"* assertion is therefore
-already true by construction and half-asserted; what remains for it is espeak-ng.
+1. **Look at the Voices tab.** It has never been seen by a human eye — carried
+   open through P4 and P5, and it is the one thing between here and a release
+   that no assertion covers. Every verb behind it is verified; its layout is not.
+2. **Ship it.** The next release is `0.2.12`
+   ([SPEECHD-PLAN.md](SPEECHD-PLAN.md)), and it will be built from a tree that
+   contains all of this — so it ships espeak-ng and it is the release where
+   GPL-3.0-or-later first applies. Say so in its notes.
+3. **Then the open items**, none of which is a blocker:
+   [what P5 left](#p5-open), which absorbed [what P4 left](#p4-open).
 
-**The state of the tree as P5 opens, verified 2026-08-25:** clean, **1096 tests
-green** (1057 Core + 39 Daemon), the Linux packer runs end to end with all six
-existing assertions plus the new one, and a Piper voice can be found, licensed,
-downloaded, calibrated, chosen and spoken without touching the filesystem by
-hand.
+**Before touching the model again, check the ground has not moved** — the note
+below still applies, and its dates are what make it worth reading.
 
-**What P5 does not need and must not wait for**: whether `alignments` is worth a
-patched model, and whether Piper eventually becomes the Linux default (not this
-round). Both are in [Open decisions](#open).
+~~**What P5 does not need and must not wait for**~~ — and it did not: whether
+`alignments` is worth a patched model, and whether Piper becomes the Linux
+default. Both are still open, both are still in [Open decisions](#open), and
+neither held anything up.
 
-~~**Do P0 and P1 before planning anything else.**~~ **Both done 2026-08-25**, and
-P2 and P3 with them.
-
-They were the only two phases that could have ended this, and
-[P1's zero divergences](#p1-landed) is what makes every estimate in P4–P5 worth
-having.
+~~**Do P0 and P1 before planning anything else.**~~ **All six done**, P0–P4 on
+2026-08-25 and P5 on the 27th. P0 and P1 were the only two that could have ended
+this, and [P1's zero divergences](#p1-landed) is what made every estimate after
+them worth having — including P5's, which [re-ran that corpus against the
+payload it composed](#p5-found) and got the same number.
 
 **Before touching the model again, check the ground has not moved.** This document's
 [upstream facts](#reference) were checked 2026-08-19 and are dated for that
@@ -399,6 +400,15 @@ where shipping 15 MB of dictionaries for languages a user will never select is
 voice cannot be installed without the dictionary that phonemises it, because
 they arrive together.
 
+> **Reversed by [P5](#p5-landed), 2026-08-27, and the paragraph above is kept
+> because both halves of it turned out to be wrong in an instructive way.** A
+> dictionary is an output of *our* build and upstream hosts none, so "travels
+> with its voice" would mean publishing and hash-pinning 31 files ourselves plus
+> a new failure mode — the voice arrives, the dictionary does not — which is the
+> opposite of the last sentence's claim. And the 15 MB is uncompressed: in the
+> archive the whole payload is 7.1 MB, of which Russian alone is 4.9 and the
+> other 30 languages are 2.3. All of them ship. [The measurement](#p5-landed).
+
 **Verified, because a pruned data directory that silently mis-phonemises is
 exactly the shape of bug this project keeps finding.** Our minimal build with
 English-only data against the distro's full build, over sentences carrying
@@ -518,7 +528,7 @@ code.**
 - **It does not exist at the 1.52.0 release.** Piper pins commit `724808c5` —
   `1.52.0-229-g724808c5` — and the function is one of those 229 commits. A build
   from the tag compiles, links, phonemises, and is missing the API. So the pin is
-  a commit and [the build script](../spike/piper-phonemes/build-espeak.sh)
+  a commit and [the build script](../build/build-espeak.sh)
   asserts the symbol is exported rather than trusting a version number.
 
 **A third thing, found by building rather than by reading: GCC 15 raises the
@@ -1044,8 +1054,11 @@ product currently fails because of them.
 
 #### What P3 leaves P5
 
+**All three were done by [P5](#p5-landed) on 2026-08-27.** Kept as written,
+because what they asked for is why the payload has the shape it does.
+
 - **`build-espeak.sh` is a script, and it is in the wrong place.**
-  [spike/piper-phonemes/build-espeak.sh](../spike/piper-phonemes/build-espeak.sh)
+  [build/build-espeak.sh](../build/build-espeak.sh)
   builds the pinned commit, asserts the terminator symbol, the two-library
   dependency floor and the glibc floor — everything the GPL offer and the packer
   need. It belongs in `build/`, run by a release, with its output composed into
@@ -1298,6 +1311,112 @@ The GPL obligation is to offer *the exact source we built*, which a hand-run
 `./configure` cannot discharge — and the script is also where the data pruning
 lives, since 2.2 MB against 25 MB is a build step rather than a decision anyone
 should be making by hand at release time.
+
+---
+
+<a name="p5-landed"></a>
+
+#### P5 landed — 2026-08-27
+
+All of it, plus two defects it was not looking for. What shipped:
+
+- **[build-espeak.sh](../build/build-espeak.sh) is in `build/`**, and it now
+  composes rather than just builds: the pinned commit, the three library
+  assertions P1 wrote, a pruned `espeak-ng-data`, a `BUILD-INFO` the packer
+  reads, `COPYING` beside the library, and a source tarball for the GPL offer.
+- **[pack-tar.sh](../build/pack-tar.sh) composes `espeak/`** into the archive and
+  refuses to run without a payload. The AppImage inherits it, unchanged, because
+  it builds from the tarball's own tree.
+- **Three assertions, all seen to fire.** Sabotaged one at a time on 2026-08-27:
+  a removed `no_dict`, a `BUILD-INFO` recording another pin, the distro's
+  `libespeak-ng` in place of ours, a deleted `espeak-ng-data`, no payload at all,
+  and a real ELF that exports `espeak_TextToPhonemes` but not the terminator.
+  Six sabotages, six refusals.
+- **`LICENSE-PHONEMIZER.txt`, and the archive's terms stated.** Written by the
+  packer with the commit interpolated, naming two places the source can be had.
+  `LICENSE-MODELS.txt` now opens by saying it is one of three licence axes,
+  because on its own it read as the whole story.
+
+**The dictionaries ship — all 31 — and the plan said they would not.** It said
+each language's dictionary would travel with its voice, and that cannot be built:
+a dictionary is an output of *our* build, upstream hosts none, and per-voice
+delivery would mean publishing and hash-pinning 31 files ourselves plus a new
+failure mode where the voice arrives and its dictionary does not. The arithmetic
+had also been done uncompressed, which is not what a tarball costs:
+
+| | Uncompressed | In the archive |
+| --- | --- | --- |
+| Base, no dictionaries | 1.9 MB | 616 KB |
+| All 31 except `ru_dict` | 5.2 MB | 2.3 MB |
+| `ru_dict` alone (`EXTRA_ru=ON`, which piper also passes) | 8.7 MB | **4.9 MB** |
+| Everything | 15 MB | **7.1 MB** |
+
+So 30 languages cost 2.3 MB and Russian costs 4.9. The whole payload is 7.1 MB
+against a 52 MB tarball, the archive went 54 MB → 59 MB, and nothing new can
+fail. Decided 2026-08-27, and the measurement is here so it is not re-derived.
+
+**Pruning was checked rather than assumed**, because a data directory that
+silently mis-phonemises is this project's recurring bug. Two questions:
+
+- *Does a missing dictionary degrade or collapse?* It collapses, silently:
+  espeak-ng prints one line to stderr, **exits 0**, and returns no phonemes.
+  That is why the packer's check is behavioural rather than a file listing.
+- *Does pruning change mixed-language text?* No. Pruned against full, over
+  sentences carrying Chinese, Cyrillic, Italian, French and German inside five
+  voices: **0 differences in 30 comparisons**. espeak does not switch into a
+  dictionary it was not asked for — it reads the letters — so a pruned directory
+  is invisible for everything except directly selecting an absent language.
+
+<a name="p5-found"></a>
+
+#### The two defects P5 found, neither of them in P5
+
+**1. A voice in the shipped catalog whose symbols are not phonemes.**
+`uk_UA-ukrainian_tts-medium` has `phoneme_type: "text"`: its `phoneme_id_map` is
+Cyrillic **letters**. Nothing else distinguishes it — it carries an
+`espeak.voice` like every other voice, its map is well formed, and it holds all
+three required symbols — so [PiperVoiceConfig](../src/VibeSuperTonic.Core/Synthesis/Piper/PiperVoiceConfig.cs)
+loaded it and would have fed it IPA, looking up phonemes that are almost all
+absent and rendering something between silence and noise. It shipped in the
+0.2.10 catalog. This is [trap 1](#traps) with a name attached, found by asking
+the generator a question it had never asked.
+
+Fixed in three places, because one was not enough: the generator excludes it, the
+config parse refuses it — a copy may already be installed on someone's disk — and
+[check-piper-catalog.py](../build/check-piper-catalog.py) requires the field the
+exclusion depends on. Ukrainian did not leave the catalog: the eligibility check
+moved *ahead* of selection, so the language fell back to `uk_UA-lada-x_low`
+instead of vanishing with the voice. Selecting first and filtering second is what
+would have cost it.
+
+`es_MX-ald-medium` is the same key spelled `"PhonemeType.ESPEAK"` — a Python enum
+repr that leaked into upstream's config. It is espeak, and the first version of
+this check rejected it, which would have cost a language to a formatting
+accident. Compared on the value, never on the text.
+
+**2. A pruning rule that broke the project's own evidence.** Pruning to the
+catalog's languages is the obvious rule and it is wrong: P1's corpus covers
+`it_IT`, and the catalog offers no Italian voice because no `it_IT` MODEL_CARD
+states a licence. Run [the parity spike](../spike/piper-phonemes) against the
+first payload and it reported **NOT PARITY — 5 of 327 sentences differ**, five
+Italian sentences phonemising to nothing. The phonemiser was fine; the data
+directory was not the one parity was measured against. A false alarm on the
+go/no-go evidence, and 95 KB to not have it. The set is now the catalog's voices
+**union P1's corpus**, and the spike reports 327/327 against exactly what ships,
+with all five of its own sabotages caught first.
+
+<a name="p5-open"></a>
+
+#### What P5 leaves open
+
+| Open | Owner | Why it is not a blocker |
+| --- | --- | --- |
+| ⚠ **The Voices tab has still never been looked at**, carried from [P4](#p4-open) and now one release closer to shipping | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`; what is unproven is layout |
+| ⚠ **The Windows build has still never been run**, also from P4 | Whoever ships next | Nothing Windows-side changed; `pack-zip.ps1` ships no catalog and no phonemiser, which is correct — Piper on Windows is not this round |
+| **There is no CLI way to choose a voice.** `vst-ctl voice install` downloads one and nothing selects it; the window is the only writer of `VoiceId` | Later | Deliberate — one writer for that choice, decided 2026-08-25. But `INSTALL.txt` says vst-ctl can do "anything the window can do", and that is now false |
+| **The catalog is pinned to `v1.0.0` and nothing watches upstream** | Later | Regenerating is one command and the tests assert the result |
+| **The Piper session is still always CPU** | Later | Unchanged from P3; `config` says so when it applies |
+| **`ru_dict` is 4.9 MB of a 7.1 MB payload** | Later, if ever | `EXTRA_ru=ON` is what makes it large, and piper's own CMakeLists passes it. Dropping it buys 4.9 MB and changes Russian stress placement away from what the model was trained against |
 
 ---
 

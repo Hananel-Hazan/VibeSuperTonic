@@ -84,6 +84,12 @@ step() { printf '\n\033[36m>>> %s\033[0m\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 die()  { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# The espeak-ng export that separates a usable phonemiser from one that compiles,
+# links, phonemises and gets the prosody wrong. It does not exist at the 1.52.0
+# tag; it exists at the commit piper pins. Kept beside
+# EspeakLibrary.TerminatorExport, which is the same string asked at runtime.
+ESPEAK_TERMINATOR="espeak_TextToPhonemesWithTerminator"
+
 # ------------------------------------------------------------------ version
 #
 # Defaults to <VstVersion> in Directory.Build.props — the single source of truth
@@ -206,6 +212,29 @@ for helper in vst-gpu-guard.sh vst-autotune.sh; do
     chmod 755 "$staging/$helper"
 done
 
+# --- the phonemiser (P5) ----------------------------------------------------
+#
+# espeak-ng, built by build/build-espeak.sh from a pinned commit, in the layout
+# EspeakLibrary.Probe looks for: the library and espeak-ng-data side by side in
+# espeak/ beside the executable.
+#
+# NOT OPTIONAL, and not a dependency in the sense that word usually means. Every
+# Piper voice is TRAINED on espeak's phoneme inventory, so a different phonemiser
+# is not a degraded result — it is confident nonsense. Bundling it is also what
+# the GPL-3.0 decision of 2026-08-24 bought: no apt package, no version to
+# detect, no distro variation, and an archive that speaks Piper out of the box.
+#
+# Built separately rather than here because it clones a repository and compiles
+# 30 dictionaries — two minutes that have nothing to do with this run, and a
+# network fetch a release should not depend on. The pin check below is what
+# stops that separation from letting a stale payload ship.
+espeak_payload="${VST_ESPEAK_PAYLOAD:-$root/build/espeak-out/espeak}"
+[[ -d "$espeak_payload" ]] || die "no espeak-ng payload at $espeak_payload.
+       Piper voices cannot be spoken without it. Build it first:
+           bash build/build-espeak.sh
+       (about two minutes; it clones espeak-ng at the commit piper pins)"
+cp -a "$espeak_payload" "$staging/espeak"
+
 [[ -f "$root/README.md" ]] && cp "$root/README.md" "$staging/README.md"
 [[ -f "$root/LICENSE" ]]   && cp "$root/LICENSE"   "$staging/LICENSE.txt"
 
@@ -309,6 +338,113 @@ _assert_catalog() {
 }
 _assert_catalog
 
+# --- 3c. the phonemiser is the one we built, and it works (P5) ---------------
+#
+# THREE FAILURES, ALL SILENT, ALL IN THE SAME DIRECTORY.
+#
+#   The revision.   The pin lives in build/build-espeak.sh. Nothing rebuilds the
+#                   payload when it moves, so an espeak-out/ from last month
+#                   composes into this archive without complaint — a library from
+#                   a revision nobody chose, possibly one without the terminator
+#                   function, and the symptom is prosody rather than a failure.
+#
+#   The link line.  A build that quietly picked up libsonic or libpcaudio because
+#                   they were installed HERE produces an archive that works on
+#                   this machine and nowhere else. `file` cannot see it and the
+#                   daemon only discovers it at the first press.
+#
+#   The data.       A missing dictionary makes espeak-ng exit 0, print one line
+#                   to stderr that nothing reads, and return NO phonemes. That
+#                   reaches a user as a voice they downloaded, accepted a licence
+#                   for, installed, selected — and which then says nothing at all.
+#                   So this is behavioural: every espeak voice the catalog names
+#                   phonemises a probe sentence against the SHIPPED data, and
+#                   exit code, stdout and stderr all have to be right. The three
+#                   names disagree in ways no rule predicts (no_NO -> nb ->
+#                   no_dict), which is also why nothing here maps between them.
+_assert_espeak() {
+    local dir="$staging/espeak"
+    local info="$dir/BUILD-INFO"
+    [[ -f "$info" ]] || die "espeak/BUILD-INFO is missing — the payload was not composed by build/build-espeak.sh"
+
+    local pin_script pin_payload
+    pin_script="$(awk -F= '/^PIN=/ { print $2; exit }' "$root/build/build-espeak.sh" | awk '{print $1}')"
+    pin_payload="$(awk '/^pin / { print $2; exit }' "$info")"
+    [[ -n "$pin_script" ]] || die "could not read PIN from build/build-espeak.sh"
+    [[ "$pin_script" == "$pin_payload" ]] || die "the espeak payload was built at $pin_payload but build-espeak.sh pins $pin_script.
+       Rebuild it: bash build/build-espeak.sh --clean"
+
+    local lib
+    lib="$(ls "$dir"/libespeak-ng.so* 2>/dev/null | head -1)"
+    [[ -n "$lib" ]] || die "no libespeak-ng.so* in $dir"
+
+    nm -D "$lib" 2>/dev/null | grep -q "$ESPEAK_TERMINATOR" \
+        || die "the shipped libespeak-ng has no $ESPEAK_TERMINATOR.
+       It is newer than the 1.52.0 release and older builds do not have it. Without
+       it there is no way to tell a clause that ends a sentence from one that does
+       not, so every input collapses to one sentence and the punctuation the model
+       was trained on is absent — working-looking audio with wrong prosody."
+
+    local needed
+    needed="$(objdump -p "$lib" | awk '/NEEDED/ {print $2}' | sort | tr '\n' ' ')"
+    [[ "$needed" == "libc.so.6 libm.so.6 " ]] \
+        || die "the shipped libespeak-ng links more than libc and libm: $needed
+       A build that picked up libsonic or libpcaudio from this machine works here
+       and nowhere else. build/build-espeak.sh turns both off."
+
+    [[ -d "$dir/espeak-ng-data" ]] || die "espeak/espeak-ng-data is missing.
+       A library with no data produces no phonemes, from an install that looks complete."
+
+    # The binary from the SAME build as the shipped library — same code, same
+    # revision — pointed at the data that is actually in the box.
+    local bin="$espeak_payload/../install/bin/espeak-ng"
+    [[ -x "$bin" ]] || die "no espeak-ng binary at $bin.
+       It is what checks that every catalog voice can phonemise against the shipped
+       data. Re-run: bash build/build-espeak.sh"
+
+    local probe="1 2 3, this is a test."
+    local voices bad=0
+    mapfile -t voices < <(python3 -c '
+import json, sys
+c = json.load(open(sys.argv[1]))
+v = sorted({e.get("espeakVoice", "") for e in c["voices"]} - {""})
+if not v:
+    sys.exit("the catalog names no espeakVoice")
+print("\n".join(v))
+' "$staging/piper-voices.json")
+
+    # mapfile's exit status is mapfile's, NOT the process substitution's, so a
+    # python that died leaves an EMPTY array and a `|| die` that never fires —
+    # and a loop over nothing is a check that passes without looking. That is the
+    # exact failure shape every assertion in this file exists to catch, so it is
+    # worth catching in the assertion itself.
+    (( ${#voices[@]} > 0 )) || die "no espeak voices came back from the shipped catalog.
+       Either piper-voices.json names none — regenerate it with
+       python3 build/gen-piper-catalog.py — or python3 failed to read it. Skipping
+       this check is not an option: it is the only thing that proves the shipped
+       dictionaries match the voices the catalog offers."
+
+    local v out err errfile="$staging/.espeak-probe.err"
+    for v in "${voices[@]}"; do
+        if ! out="$("$bin" --path="$dir" -v "$v" -q --ipa -- "$probe" 2>"$errfile")"; then
+            echo "       $v: espeak-ng exited $?" >&2; bad=1; continue
+        fi
+        err="$(cat "$errfile")"
+        if [[ -n "$err" ]]; then
+            echo "       $v: $err" >&2; bad=1
+        elif [[ -z "${out//[[:space:]]/}" ]]; then
+            echo "       $v: produced no phonemes" >&2; bad=1
+        fi
+    done
+    rm -f "$errfile"
+    (( bad == 0 )) || die "one or more espeak voices the catalog offers cannot be phonemised by the
+       shipped data. Every one of them is a voice a user can download, accept a
+       licence for, install and select, which then produces silence."
+
+    info "espeak-ng $(awk '/^described/ {print $2}' "$info"), ${#voices[@]} voices phonemise, $(ls "$dir"/espeak-ng-data/*_dict | wc -l) dictionaries"
+}
+_assert_espeak
+
 # --- 4. the GPU provider is NOT in the archive, and its installer agrees ------
 #
 # libonnxruntime_providers_cuda.so is 330 MB against a 51 MB archive, and it
@@ -398,7 +534,10 @@ info "glibc floor $glibc_max (${glibc_worst#$staging/}) — Ubuntu 22.04+, Debia
 step "Writing INSTALL.txt and LICENSE-MODELS.txt…"
 
 cat > "$staging/LICENSE-MODELS.txt" <<'EOF'
-The VibeSuperTonic code is MIT licensed.
+The VibeSuperTonic code is MIT licensed. This file is about the SUPERTONIC
+VOICE MODELS, which are a separate matter — see also LICENSE-PHONEMIZER.txt for
+espeak-ng, which is GPL-3.0-or-later and IS in this archive, and the Voices tab
+for the Piper voices, each of which carries its own terms.
 
 The neural voice models are NOT included in this archive. They are downloaded on
 first run, directly from Hugging Face, and are distributed by Supertone, Inc.
@@ -412,6 +551,58 @@ models-manifest.json are verified after download, which is what prevents
 tampering in transit.
 EOF
 
+# The phonemiser's licence and the source offer (P5). A SEPARATE FILE from
+# LICENSE-MODELS.txt on purpose: they are three different licence axes and
+# collapsing them into one page is how a reader concludes the wrong thing about
+# all three. The code is MIT, the voices are per-voice terms from their own
+# MODEL_CARDs, and the phonemiser is GPL-3.0-or-later.
+espeak_commit="$(awk '/^commit / { print $2; exit }' "$staging/espeak/BUILD-INFO")"
+espeak_described="$(awk '/^described / { print $2; exit }' "$staging/espeak/BUILD-INFO")"
+cat > "$staging/LICENSE-PHONEMIZER.txt" <<EOF
+espeak-ng — GPL-3.0-or-later
+============================
+
+This archive INCLUDES espeak-ng, in espeak/. It is what turns text into the
+phonemes the Piper neural voices were trained on; without it those voices cannot
+speak. It is not used by the Supertonic voices.
+
+  version   $espeak_described
+  commit    $espeak_commit
+  source    https://github.com/espeak-ng/espeak-ng/tree/$espeak_commit
+  terms     GNU General Public License v3.0 or later — the full text is in
+            espeak/COPYING, and espeak/BUILD-INFO records exactly how it was
+            configured.
+
+WHAT THIS MEANS FOR THIS ARCHIVE. espeak-ng is GPL-3.0-or-later, and this
+archive distributes it as part of a combined work, so THE ARCHIVE AS A WHOLE is
+distributed under GPL-3.0-or-later. VibeSuperTonic's own source code remains
+MIT licensed and is unchanged by this — MIT is GPL-compatible, and every source
+file keeps its own licence and header. See LICENSE.txt.
+
+Earlier releases — up to and including 0.2.10 — contain no espeak-ng and are
+not affected. This applies from the release that first shipped a Piper voice.
+
+THE SOURCE, which is the obligation this file discharges. The library here was
+built from that commit UNMODIFIED — build/build-espeak.sh refuses to build a
+checkout with local changes, so "the exact source we built" is exactly what the
+commit names — and it can be obtained from either of two places, for as long as
+this release is offered:
+
+  * the upstream URL above, which resolves to that precise tree, and
+  * espeak-ng-$espeak_commit-src.tar.gz, published as an asset on the same
+    release page as this archive:
+    https://github.com/Hananel-Hazan/VibeSuperTonic/releases
+
+If neither is reachable, open an issue at
+https://github.com/Hananel-Hazan/VibeSuperTonic/issues and a copy will be
+provided. There is nothing to reproduce beyond that tree: espeak/BUILD-INFO
+lists the complete set of configure flags used.
+
+THE VOICES ARE A DIFFERENT QUESTION AGAIN. Neither this licence nor MIT says
+anything about them — each Piper voice carries its own terms, shown in the
+Voices tab before anything downloads. See LICENSE-MODELS.txt.
+EOF
+
 cat > "$staging/INSTALL.txt" <<'EOF'
 VibeSuperTonic for Linux — Setup
 ================================
@@ -423,6 +614,18 @@ No runtime to install. All three binaries carry what they need.
                       hotkey press. Nothing autostarts it.
   vibesupertonic-ui   the window: Reader, Tune, Pronunciations, Status.
   vst-ctl             the command-line client. Anything the window can do.
+  espeak/             the phonemiser the Piper voices need. Not something you
+                      install — it is here, and nothing needs configuring.
+
+
+LICENSING, IN ONE PARAGRAPH
+---------------------------
+VibeSuperTonic's own code is MIT. This archive also contains espeak-ng, which is
+GPL-3.0-or-later, so the archive AS A WHOLE is under those terms — see
+LICENSE-PHONEMIZER.txt, which also says where to get its source. No voice models
+are in here at all: the Supertonic voices download on first run under Supertone's
+OpenRAIL-M terms (LICENSE-MODELS.txt), and each Piper voice carries its own
+licence, shown in the Voices tab before anything is downloaded.
 
 
 UPGRADING? STOP THE DAEMON FIRST
@@ -480,6 +683,27 @@ Checking it works
 If a hotkey does nothing, the daemon's log is the place to look:
 
     tail -f data/logs/daemon.log
+
+
+Other voices, other languages
+-----------------------------
+The ten Supertonic voices are English. For anything else there are 43 Piper
+voices across 35 languages, 60 to 115 MB each, downloaded on request.
+
+    ./vst-ctl voices                what is installed, and what is offered
+    ./vst-ctl voice install <id>    download one and calibrate it
+    ./vst-ctl voice remove <id>     delete one
+
+Or use the Voices tab in the window, which is those same verbs with the licence
+in front of them — and which is where you CHOOSE the voice to speak with, since
+the window is the only thing that writes that setting.
+
+Each Piper voice states its own terms — most are CC0, some require attribution,
+three are NonCommercial — and you accept them before any bytes arrive. They are
+not the same terms as the Supertonic models and not the same as this program's.
+
+The phonemiser they need is already in this folder (espeak/). Nothing to install,
+and no distro package to match.
 
 
 Optional: use an NVIDIA GPU
