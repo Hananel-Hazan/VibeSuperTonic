@@ -3182,7 +3182,7 @@ went in that way and neither cost Phase 6 anything.
   front-end later at low cost. Building it first would serve a narrower audience
   for more work.
 
-  > **Taken up 2026-08-27 as `0.2.12` — [SPEECHD-PLAN.md](SPEECHD-PLAN.md).** The
+  > **Taken up 2026-08-27 as `0.2.13` — [SPEECHD-PLAN.md](SPEECHD-PLAN.md).** The
   > prediction held: it is one new `vst-ctl` verb and a config file, driving the
   > `sd_generic` module the distro already ships. That plan also inherits three
   > of [the open decisions below](#open-decisions) — the daemon's idle-timeout

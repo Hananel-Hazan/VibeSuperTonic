@@ -1,6 +1,6 @@
 # Speech Dispatcher — SAPI's equivalent on the Debian family
 
-Status: **planned 2026-08-27, nothing built.** Target `0.2.12`. Every fact below
+Status: **planned 2026-08-27, nothing built.** Target `0.2.13`. Every fact below
 was measured on this machine on the day it was written, and the measurements are
 what the plan is made of — the [traps](#traps) in particular were found by
 running things, not by reading about them.
@@ -17,7 +17,7 @@ talks to it, and applications that speak at all speak through it. Right now
 VibeSuperTonic on Linux is reachable only through its own hotkey, its own window
 and its own `vst-ctl`. **Nothing that already speaks on this machine can use it.**
 
-`0.2.12` is that: a Speech Dispatcher **output module**, so `spd-say -o
+`0.2.13` is that: a Speech Dispatcher **output module**, so `spd-say -o
 vibesupertonic`, Orca's voice list, and anything else that speaks, can reach
 these voices.
 
@@ -62,21 +62,21 @@ down that this release is the first to actually need.
 
 ### Deferrals that become decisions here
 
-| Deferred | Where from | Why 0.2.12 is where it lands |
+| Deferred | Where from | Why 0.2.13 is where it lands |
 | --- | --- | --- |
-| **Should the daemon release its session after an idle timeout?** ~830 MB resident, and 0.43 s to warm back up — "probably yes" was the note | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | **0.2.12 changes the answer to no, or to something cleverer.** A hotkey user pays 0.43 s once in a while and never notices. Orca speaks on every keystroke, so an idle release means the next keypress after a pause is 430 ms late — the worst possible moment. Whatever this becomes, it can no longer be "a timer". |
-| **A lower `totalStep` for the opening chunk only.** First speech is ~750 ms, ~600 of it the model's fixed cost; halving it for the first short sentence roughly halves the wait, at an audible quality step | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) — *"the only lever left"* | [Trap 4](#t4) is exactly this question with a user attached. A screen reader's utterances are almost all short and almost all first. This is the lever, and 0.2.12 is where trying it is justified — the quality step nobody wanted for prose is much easier to accept for "Control_L". |
+| **Should the daemon release its session after an idle timeout?** ~830 MB resident, and 0.43 s to warm back up — "probably yes" was the note | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | **0.2.13 changes the answer to no, or to something cleverer.** A hotkey user pays 0.43 s once in a while and never notices. Orca speaks on every keystroke, so an idle release means the next keypress after a pause is 430 ms late — the worst possible moment. Whatever this becomes, it can no longer be "a timer". |
+| **A lower `totalStep` for the opening chunk only.** First speech is ~750 ms, ~600 of it the model's fixed cost; halving it for the first short sentence roughly halves the wait, at an audible quality step | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) — *"the only lever left"* | [Trap 4](#t4) is exactly this question with a user attached. A screen reader's utterances are almost all short and almost all first. This is the lever, and 0.2.13 is where trying it is justified — the quality step nobody wanted for prose is much easier to accept for "Control_L". |
 | **Does `install.sh` launch the first-run window, or does the user?** An installer over `ssh` must not try to open a window | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | `speechd-install.sh` inherits it **and is worse**: the person configuring a screen reader is disproportionately likely to be in a TTY or over ssh, and disproportionately unable to see a window that did open. It must never require one. |
 | **The Piper session is always CPU**, and `vst-ctl benchmark` measures Supertonic only | [P3](PIPER-PLAN.md#p3-open), [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | Still not a blocker, and now it has a number attached: whatever [trap 4](#t4) measures is measured on the CPU path, so a "too slow" verdict may be a provider verdict rather than a product one. Say which was measured. |
 | **There is no CLI way to choose a voice** — the window is the only writer of `VoiceId` | [P5](PIPER-PLAN.md#p5-open) | `render --voice` settles the per-utterance half, because speechd sends `$VOICE` on every call and never touches a setting. The *default* stays the window's, and that is now a defensible line rather than an omission. |
-| ⚠ **The Voices tab has never been looked at** | [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | [S3](#s3) generates the module's voice list from the same installed-voice state the tab shows, so they are one surface. The tab is owed a human eye before the 0.2.12 pack regardless — it has been owed for two releases. |
-| **`ru_dict` is 4.9 MB of a 7.1 MB espeak payload** | [P5](PIPER-PLAN.md#p5-open) | Not this release. Recorded here only because 0.2.12 is the first release where "slim" is a stated goal — see [TESTING-PLAN.md](TESTING-PLAN.md#slim), which gives the archive a budget rather than an opinion. |
+| ⚠ **The Voices tab has never been looked at** | [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | [S3](#s3) generates the module's voice list from the same installed-voice state the tab shows, so they are one surface. The tab is owed a human eye before the 0.2.13 pack regardless — it has been owed for two releases. |
+| **`ru_dict` is 4.9 MB of a 7.1 MB espeak payload** | [P5](PIPER-PLAN.md#p5-open) | Not this release. Recorded here only because 0.2.13 is the first release where "slim" is a stated goal — see [TESTING-PLAN.md](TESTING-PLAN.md#slim), which gives the archive a budget rather than an opinion. |
 
 ### Deferrals that stay deferred, and why
 
 - **Everything Windows.** The Windows convergence, the Way 3 gate, `pack-zip.ps1`
   shipping a catalog, `Onnx.DirectML`, and the owed TestHarness run. Windows
-  advances later; **0.2.12 is Linux only**, and nothing here touches a Windows
+  advances later; **0.2.13 is Linux only**, and nothing here touches a Windows
   path. The one thing to preserve is that Core stays platform-neutral, which the
   CI's Windows job already enforces by running `Core.Tests` on both runners.
 - **`linux-arm64`.** Named a plausible later target in the port plan's non-goals.
@@ -107,12 +107,94 @@ highlighting the word being read), and lower per-utterance overhead. Costs a
 binary that must live in a root-owned directory to be auto-detected, or an
 explicit `AddModule` either way — so it does not even buy a simpler install.
 
-**Route A, and B is not scheduled.** The thing B buys that A cannot fake is
+> **REVERSED 2026-08-27, after probing rather than reading. Route B.**
+>
+> A was chosen on the belief that B bought only index marks and six milliseconds.
+> Then [trap 15](#t15) measured what a generic module actually receives: `SPEAK`,
+> `CHAR` and `KEY` all arrive as bare `$DATA`, indistinguishable. Route A can only
+> route echo by guessing from the text's shape — and after [S0](#s0-result),
+> routing echo correctly is the difference between a module Orca can use and one
+> it cannot.
+>
+> **B also turned out to be cheaper than assumed**, which is the other half of the
+> reversal. See [what a native module actually is](#route-b), below: a line
+> protocol on stdin/stdout, and — since speech-dispatcher 0.12 — the option of
+> handing audio *back* to the server rather than playing it. No linking against
+> speechd, no audio device, no `$PLAY_COMMAND`.
+>
+> **What A got right and B keeps**: `vst-ctl render` is unchanged. B calls the
+> same verb over the same transport. S0's prototype is not wasted.
+
+Kept below because the reasoning for A is still the reasoning for most of the
+design, and because whoever revisits this should see what changed rather than
+only the conclusion:
+
+~~**Route A, and B is not scheduled.**~~ The thing B buys that A cannot fake is
 **index marks**, and nothing in this product produces them today: the daemon
 renders a chunk at a time and the word boundaries are not carried out of the
 model. That is its own piece of work, it is not what makes these voices reachable,
 and it can be added later without throwing A away — the `vst-ctl` verb A needs is
 also what B would call.
+
+<a name="route-b"></a>
+
+### What a native module actually is — measured 2026-08-27
+
+The word "native" suggests linking `libspeechd_module`, needing speechd's headers
+at build time, and inheriting an ABI that varies by distro. **None of that is
+required.** The shipped modules link it because they are C programs upstream
+maintains; a module is a *process speechd spawns and talks to over stdin and
+stdout*, and the protocol is text.
+
+Read out of `libspeechd_module.so.0` on this machine:
+
+| | |
+| --- | --- |
+| Commands in | `INIT`, `SET`, `AUDIO`, `SPEAK`, `CHAR`, `KEY`, `SOUND_ICON`, `STOP`, `PAUSE`, `QUIT`, `LIST VOICES`, `LOGLEVEL`, `DEBUG` |
+| Replies out | `299 OK LOADED SUCCESSFULLY`, `200 OK SPEAKING`, `202 OK RECEIVING MESSAGE`, `203 OK SETTINGS RECEIVED`, `203 OK AUDIO INITIALIZED`, `301 ERROR CANT SPEAK`, `302 ERROR BAD SYNTAX`, `304 CANT LIST VOICES`, `401 ERROR INTERNAL` |
+| Events out | `700 INDEX MARK`, `701 BEGIN`, `702 END`, `703 STOP`, `704 PAUSE`, `705 AUDIO`, `706 ICON` |
+
+**`705 AUDIO` is the find.** speech-dispatcher 0.12 supports *server-side audio*:
+the module describes a block and hands it back, and the server plays it.
+
+```
+705-bits=16
+705-num_channels=1
+705-sample_rate=44100
+705-num_samples=<n>
+705-big_endian=0
+705-AUDIO
+<the samples>
+705 AUDIO
+```
+
+So our module **never opens an audio device**, never picks between PulseAudio and
+PipeWire and ALSA, and never owns a `$PLAY_COMMAND`. It receives `SPEAK`/`CHAR`/
+`KEY` distinctly, calls `vst-ctl render` or our espeak accordingly, and returns
+blocks. `STOP` is an explicit command rather than a killed pipe — which is
+strictly better than route A on the one thing [trap 3](#t3) was worried about.
+
+<a name="b-gate"></a>
+
+#### The one thing that must be checked before S1 — and it is a gate
+
+**Server-side audio is not in every speech-dispatcher.** It is in 0.12.1, which
+is what this machine runs. The archive claims Ubuntu 22.04+, and 22.04 ships an
+older speech-dispatcher. **If 0.11 has no `705 AUDIO`, the module must play audio
+itself on that distro**, which means an audio backend inside the module and a
+choice between PulseAudio, PipeWire and ALSA — the complication route B was just
+praised for avoiding.
+
+Three possible answers, and the check is cheap because
+[the smoke container is already `ubuntu:22.04`](TESTING-PLAN.md#what-2-found):
+
+1. **0.11 has it** — nothing to do.
+2. **0.11 lacks it** — the module negotiates: server-side audio when the `AUDIO`
+   command offers it, otherwise pipe to a player, as route A would have.
+3. **It is messier than either** — then route A with [trap 15](#t15)'s shape
+   heuristic is the fallback, and S0's prototype already implements most of it.
+
+**Do this first in S1. Do not write the module before knowing which.**
 
 ### What Route A actually needs
 
@@ -183,7 +265,7 @@ serializer unchanged.
 ## Why two daemons, and why neither replaces the other
 
 Asked 2026-08-27, and worth settling in writing because it looks like
-duplication and is not. After 0.2.12 a machine runs **`vibesupertonicd`** and
+duplication and is not. After 0.2.13 a machine runs **`vibesupertonicd`** and
 **`speech-dispatcher`**, and the honest framing is: **ours is the engine, theirs
 is the distribution channel.**
 
@@ -405,7 +487,7 @@ Three consequences, none of which the current product is shaped for:
 - **Chunking is wrong here.** `SentenceChunker` exists to split prose; a
   one-character utterance must skip it entirely.
 - **It may simply be the wrong tool for echo.** A perfectly good outcome for
-  0.2.12 is: excellent for reading a document or a web page, and a user who
+  0.2.13 is: excellent for reading a document or a web page, and a user who
   leaves espeak-ng as the echo voice. speechd supports different modules per
   message type, so that is a configuration, not a failure — and saying so in
   `INSTALL.txt` is more honest than pretending otherwise.
@@ -478,7 +560,7 @@ it. `GenericPunctNone/Some/Most/All` map a level onto a command-line flag we do
 not have.
 
 **Decide both explicitly rather than by omission.** The cheap, honest answer for
-0.2.12 is: `render` strips SSML tags (and says it does), and all four punctuation
+0.2.13 is: `render` strips SSML tags (and says it does), and all four punctuation
 levels map to nothing, with `INSTALL.txt` saying the module ignores punctuation
 verbosity. The expensive answer is implementing them; neither is as bad as
 shipping the tags into the audio.
@@ -547,8 +629,14 @@ and here it has a screen-reader user on the other end of it.
 
 ## Phases
 
-Deliberately small, and in this order because each one can fail the next. **S0 is
-a gate**: it is allowed to end this plan.
+Deliberately small, and in this order because each one can fail the next.
+**S0 was a gate and it ran** — [its numbers are below](#s0-result). **S1 opens
+with a second gate**, [the server-side audio question](#b-gate), which decides
+the module's shape.
+
+Route B costs about **two days more than route A** — five to seven rather than
+three — and buys correct echo routing, an explicit `STOP`, no audio backend, and
+a voice list that cannot go stale. Decided 2026-08-27.
 
 ### What is a human's, and cannot be handed to anyone else
 
@@ -559,9 +647,9 @@ as implementation produces a confident wrong answer:
    whether they are good enough to keep building. That is a product judgement
    about who this feature is for, not a threshold in a script. S0 *reports*; a
    person *decides*.
-2. **The Voices tab's first human eye.** Owed since P4, and [S3](#s3) generates
-   the module's voice list from the same state. Nothing automated can tell you a
-   layout is wrong.
+2. **The Voices tab's first human eye.** Owed since P4, and [S3](#s3) answers
+   `LIST VOICES` from the same installed-voice state. Nothing automated can tell
+   you a layout is wrong.
 3. **Whether the honest sentence goes in `INSTALL.txt`** — [trap 10](#t10)'s
    "excellent for reading, leave espeak-ng for keystroke echo". That is a claim
    about the product, and it depends on 1.
@@ -666,7 +754,7 @@ module would reintroduce exactly the sidecar this project's
 [GPL-3.0 decision](PIPER-PLAN.md#gpl) was made to remove — *"no apt package, no
 version to detect, no distro variation"* — for a component we already carry, and
 it would put our installer's [trap 1](#t1) mistake in front of the user's echo
-as well as their reading. **0.2.12 should ship both voices: neural for reading,
+as well as their reading. **0.2.13 should ship both voices: neural for reading,
 our own espeak for echo, nothing installed.**
 
 <a name="echo-cache"></a>
@@ -693,7 +781,7 @@ enumerable, so a miss is either a 383 ms stall or a voice that changes
 mid-stream. Both are worse than a user who deliberately chose a fast flat voice
 for echo, which is what many screen-reader users do already.
 
-**Recommendation: not in 0.2.12.** Ship our espeak for echo, and keep this
+**Recommendation: not in 0.2.13.** Ship our espeak for echo, and keep this
 section so that whoever wants one voice everywhere has the measurements rather
 than the argument.
 
@@ -703,76 +791,94 @@ ships the 31 KB binary and its `INSTALL.txt` sentence says what each voice is
 for.
 
 <a name="s1"></a>
-### S1 · The `render` verb, properly · one to two days
+### S1 · Settle the audio path, then the `render` verb · one to two days
+
+**Starts with [the gate above](#b-gate)**: does the oldest supported distro's
+speech-dispatcher accept `705 AUDIO`? Everything else in this phase is written
+assuming yes, and the answer changes the module's shape if it is no.
+
+Then `render` properly, which route B calls unchanged from
+[S0's prototype](#s0-result):
 
 - **Streaming, not buffered**, over [the transport decided above](#transport):
-  base64 PCM chunks as multi-reply lines, bounded per chunk. A long document must
-  not be one allocation and one silence. The WAV header takes the voice's real
-  rate from the first reply — [P3](PIPER-PLAN.md#p3) made the sink follow the
-  voice, and this must too.
+  base64 PCM chunks as multi-reply lines, bounded per chunk. The WAV header takes
+  the voice's real rate from the first reply — [P3](PIPER-PLAN.md#p3) made the
+  sink follow the voice, and this must too.
 - **`--voice` takes the qualified id**, so `piper:de_DE-thorsten-medium` works,
   and `#12` speaker selection comes along for free.
-- **Cancellation on SIGTERM and on a closed stdout.** That is what `spd-say -C`
-  becomes; a render that keeps going after its reader is gone is a CPU leak once
-  per interruption, and Orca interrupts constantly.
+- **Cancellation on SIGTERM and on a closed stdout.** Under route B this is what
+  a `STOP` command becomes, and Orca sends them constantly.
 - **Concurrency policy, decided and tested** — [trap 12](#t12).
 - **SSML stripped, punctuation levels mapped to nothing, both documented** —
   [trap 11](#t11).
 - **Never exit 0 with no audio** — [trap 14](#t14).
-- Tests, per [TESTING-PLAN.md](TESTING-PLAN.md).
+- Tests, per [TESTING-PLAN.md](TESTING-PLAN.md). S0's prototype has none.
 
 <a name="s2"></a>
-### S2 · The installer, and trap 1 · one day
+### S2 · The module · two to three days
 
-`speechd-install.sh` in the archive beside `install.sh`. **The enumerate-then
-re-declare dance is most of it** ([trap 1](#t1)): read what `spd-say -O` offers
-now, copy the system `speechd.conf` if the user has none, re-declare every
-existing module explicitly, add ours, write the module conf with absolute paths
-and correct quoting ([trap 9](#t9)), restart speechd ([trap 7](#t7)).
+`vst-speechd`, a process speechd spawns, speaking [the line protocol](#route-b)
+on stdin and stdout. **It links nothing** — not `libspeechd_module`, not an audio
+library, not speechd's headers.
 
-Also: `--remove` that restores what was there; refusal when no voice is installed
-([trap 14](#t14)); and **no window, ever** — the inherited ssh/TTY constraint,
-which for this installer is not a nicety.
+What it does, in the order the failures matter:
 
-The test that matters is not that ours works. **It is that espeak-ng still
-answers afterwards, and again after `--remove`.**
+1. **Routes on message type**, which is the whole reason for route B:
+   `CHAR` and `KEY` → our espeak (3.3 ms); `SPEAK` → `vst-ctl render` (718 ms to
+   first word). No heuristic, no guessing from the text's shape.
+2. **Falls back to espeak rather than to silence**, decided 2026-08-27 —
+   [trap 16](#t16). A daemon that is missing, still loading its model, or
+   erroring must produce the espeak voice, not nothing. **A screen reader that
+   goes silent is worse than one that sounds wrong**, and we now ship a voice
+   that cannot fail.
+3. **Returns audio with `705 AUDIO`** and never opens a device.
+4. **Answers `STOP` immediately** — stop rendering, stop returning blocks, emit
+   `703 STOP`. This is the operation Orca performs most.
+5. **`LIST VOICES`** from what is installed, which is where [S3](#s3) plugs in.
 
 <a name="s3"></a>
 ### S3 · The voice list · half a day
 
-Generate `AddVoice` lines from installed voices, mapping 43 Piper voices and ten
-Supertonic styles onto speechd's `language + MALE1..3 / FEMALE1..3` vocabulary —
-[trap 8](#t8). Only what is installed appears.
-
-This is the first thing in the product that must be **regenerated on a state
-change**, so decide the trigger: a `vst-ctl speechd-sync` verb that
-`voice install` / `voice remove` and the Voices tab all call, or regeneration
-inside the installer only, with a documented "re-run it after adding a voice".
-The first is better and is not much more work.
+`LIST VOICES` answered from installed voices, mapped onto speechd's
+`language + MALE1..3 / FEMALE1..3` vocabulary — [trap 8](#t8). Only what is
+installed appears. Under route B this is a protocol reply computed at runtime
+rather than a config file generated at install time, **which removes the
+regeneration problem route A had**: nothing is stale because nothing is written
+down. That is the second thing B turned out to buy.
 
 <a name="s4"></a>
-### S4 · Packaging · half a day
+### S4 · The installer and packaging · one to one and a half days
 
-The script into the tarball, a section in `INSTALL.txt` — including the honest
-sentence [trap 10](#t10) may require — and packer assertions in the shape of the
-nine that exist:
+`speechd-install.sh` in the archive beside `install.sh`. **The enumerate-then
+re-declare dance is most of it** ([trap 1](#t1)): read what `spd-say -O` offers
+now, copy the system `speechd.conf` if the user has none, re-declare every
+existing module explicitly, add ours, restart speechd ([trap 7](#t7)).
 
-- the generated config names a `vst-ctl` (or AppImage) path **that exists**;
-- `$DATA` and `$VOICE` are single-quoted in it ([trap 9](#t9) — this one is a
-  security check, not a tidiness one);
-- `speechd-install.sh` is executable and shellcheck-clean.
+`AddModule "vibesupertonic" "<abs path>/vst-speechd" ""` — and **the absolute
+path is the AppImage trap** ([trap 13](#t13)) in a new place: an AppImage's
+contents are a temporary mount, so the config must name the AppImage file itself,
+which does not move. If the user renames or moves it, echo goes silent with no
+error a blind user can see — so `--check` should exist and the installer should
+say what it wrote.
 
-The failure being guarded is a module that registers, appears in Orca's voice
-list, and says nothing.
+Also: `--remove` that restores what was there; refusal when no voice is installed
+([trap 14](#t14)); **no window, ever**; the module and the 27 KB espeak binary
+into the tarball; and packer assertions in the shape of the nine that exist —
+the module is executable, it answers `INIT` with `299`, and the config names a
+path that exists.
+
+The test that matters is not that ours works. **It is that espeak-ng still
+answers afterwards, and again after `--remove`.**
 
 <a name="s5"></a>
 ### S5 · The safety net · one day
 
-New in this revision of the plan, and it is the half that keeps 0.2.12 from
+New in this revision of the plan, and it is the half that keeps 0.2.13 from
 being the release that broke somebody's screen reader. Everything in
 [TESTING-PLAN.md](TESTING-PLAN.md) that this feature is the reason for:
 
-- the **restore test** (S2's, automated),
+- the **restore test** (S4's, automated — espeak-ng still answers after an
+  install and again after `--remove`),
 - the **first-word latency budget** as a checked number rather than a memory,
 - the **archive size budget**,
 - the **no-audio-with-exit-0 test**,
@@ -780,10 +886,12 @@ being the release that broke somebody's screen reader. Everything in
 
 ---
 
-## Non-goals for 0.2.12
+## Non-goals for 0.2.13
 
-- **Index marks and word highlighting.** Route B territory, and the model does
-  not emit word boundaries today.
+- **Index marks and word highlighting.** The protocol reserves `700 INDEX MARK`
+  and route B could carry it — but the model does not emit word boundaries, so
+  there is nothing to mark. Doing route B does not make this free; it makes it
+  *possible later*, which is a different sentence.
 - **A `.deb`.** "The Debian family" here means Speech Dispatcher, which is what
   Debian-family desktops actually speak through. The product stays portable;
   packaging it as a `.deb` is a separate argument with a separate answer.
@@ -791,7 +899,7 @@ being the release that broke somebody's screen reader. Everything in
   it default is the user's choice and `spd-conf`'s job — and [trap 4](#t4) may
   well say it should not be.
 - **Windows.** SAPI is already done there and this changes nothing about it, and
-  **Windows advances later** — 0.2.12 is a Linux-family release. The constraint
+  **Windows advances later** — 0.2.13 is a Linux-family release. The constraint
   that survives is that Core stays platform-neutral, which CI enforces by running
   `Core.Tests` on both runners.
 - **The daemon's idle-timeout question**, [inherited from the port
