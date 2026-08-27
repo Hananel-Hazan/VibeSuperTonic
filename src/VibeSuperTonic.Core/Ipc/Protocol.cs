@@ -148,6 +148,30 @@ public enum RequestVerb
     VoiceRemove,
 
     /// <summary>
+    /// Synthesise text and hand the audio back instead of playing it.
+    ///
+    /// <para><b>The only verb that returns samples</b>, and it exists because
+    /// something else needs to own playback. A Speech Dispatcher module is the
+    /// first customer: speechd starts an utterance and must be able to stop it
+    /// on the next keystroke, which it can only do to a process it owns. If this
+    /// daemon played, <c>spd-say -C</c> would kill a pipe that is not the daemon
+    /// and the speech would carry on — see docs/SPEECHD-PLAN.md, trap 3.</para>
+    ///
+    /// <para><b>Multi-reply, like <see cref="Benchmark"/> and
+    /// <see cref="VoiceInstall"/>.</b> The first reply carries
+    /// <see cref="Response.Audio"/> with the format and no samples, because the
+    /// caller needs the rate to write a WAV header before any audio arrives.
+    /// Every reply after it carries one chunk, and the last carries none. The
+    /// samples are base64 in JSON: 33% over a unix socket, which is not a number
+    /// anyone can measure against a neural render, and it keeps the protocol one
+    /// thing rather than two.</para>
+    ///
+    /// <para><b>It does not touch the session.</b> No sink, no playback clock, no
+    /// tray state — a render is not speech and must not interrupt any.</para>
+    /// </summary>
+    Render,
+
+    /// <summary>
     /// Stop the daemon: stop any speech, close the socket, exit 0.
     ///
     /// <para><b>This is not "quit the application".</b> R-5 brings the daemon
@@ -337,6 +361,12 @@ public sealed record Response
     /// streams one verb streams the other with the same loop.
     /// </summary>
     public VoiceProgress? VoiceProgress { get; init; }
+
+    /// <summary>
+    /// Present on every reply to <see cref="RequestVerb.Render"/>. The first has
+    /// a format and no <see cref="AudioChunk.Pcm"/>; the rest have samples.
+    /// </summary>
+    public AudioChunk? Audio { get; init; }
 
     /// <summary>Present on the final reply to an install or a remove.</summary>
     public VoiceActionPayload? Voice { get; init; }
@@ -589,6 +619,31 @@ public sealed record VoicesPayload(
 /// <param name="BytesReceived">Bytes written so far.</param>
 /// <param name="BytesTotal">The size the catalog pinned, known before the first byte arrives.</param>
 /// <param name="Message">A line for a log, when there is one instead of a number.</param>
+/// <summary>
+/// One piece of a <see cref="RequestVerb.Render"/> reply.
+///
+/// <para><b>Why the rate is on every chunk and not just the first.</b> It costs
+/// eight bytes and it makes a chunk self-describing, which matters because the
+/// sink follows the voice ([P3](../../../docs/PIPER-PLAN.md#p3)): a render that
+/// switched engines mid-stream would otherwise hand the caller samples at a rate
+/// it had already committed to a WAV header. The daemon refuses that switch, and
+/// a reader that checks this field will see the refusal rather than a chipmunk.
+/// </para>
+/// </summary>
+/// <param name="SampleRate">Hz. 44100 for Supertonic, 16000 or 22050 for Piper.</param>
+/// <param name="Channels">Always 1. Present so a WAV header can be written from this record alone.</param>
+/// <param name="Pcm">
+/// Base64 of little-endian 16-bit mono samples, or null on the opening reply and
+/// on the final one. Null is not the same as empty: empty would be a chunk that
+/// rendered to silence, which is a thing that can legitimately happen.
+/// </param>
+/// <param name="Final">True on the last reply, so a reader stops without guessing.</param>
+public sealed record AudioChunk(
+    [property: JsonPropertyName("sampleRate")] int SampleRate,
+    [property: JsonPropertyName("channels")]   int Channels,
+    [property: JsonPropertyName("pcm")]        string? Pcm,
+    [property: JsonPropertyName("final")]      bool Final);
+
 public sealed record VoiceProgress(
     string VoiceId,
     string? File = null,
@@ -733,6 +788,7 @@ public static class Protocol
 [JsonSerializable(typeof(VoicesPayload))]
 [JsonSerializable(typeof(VoiceEntry))]
 [JsonSerializable(typeof(VoiceProgress))]
+[JsonSerializable(typeof(AudioChunk))]
 [JsonSerializable(typeof(VoiceActionPayload))]
 public sealed partial class ProtocolJson : JsonSerializerContext
 {

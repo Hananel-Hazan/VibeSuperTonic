@@ -18,6 +18,7 @@ using VibeSuperTonic.Core.Synthesis;
 //   vst-ctl reload              re-read settings.json and pronunciations.json
 //   vst-ctl config              where config was read from, and what it made of it
 //   vst-ctl benchmark           measure this machine and record its thread count
+//   vst-ctl render "text"       synthesise to a WAV on stdout, playing nothing
 //   vst-ctl voices              what is installed, and what the catalog offers
 //   vst-ctl voice install ID    download a catalog voice and calibrate it
 //   vst-ctl voice remove ID     delete an installed Piper voice
@@ -84,12 +85,29 @@ if (voiceAt >= 0)
     voice = args[voiceAt + 1];
 }
 
+// render's destination. "-" is stdout, which is what a Speech Dispatcher module
+// asks for: the module's whole job is `... | $PLAY_COMMAND`, and a temp file in
+// the middle of that is latency a screen reader pays on every utterance.
+string outPath = "-";
+int outAt = Array.IndexOf(args, "--out");
+if (outAt >= 0)
+{
+    if (outAt + 1 >= args.Length || args[outAt + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("--out needs a path, or - for stdout");
+        return 2;
+    }
+    outPath = args[outAt + 1];
+}
+
 // -1 for "no --voice", and the guard matters: without it the excluded index is
 // 0, which is the VERB, and every command without --voice fails as "unknown
 // verb: <the text>".
 int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
+int outValueAt = outAt >= 0 ? outAt + 1 : -1;
 var positional = args
-    .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal) && i != voiceValueAt)
+    .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
+                     && i != voiceValueAt && i != outValueAt)
     .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
@@ -258,6 +276,9 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     // The second streaming verb, and it reads by the same rule: lines until one
     // arrives without a progress field.
     if (verb == RequestVerb.VoiceInstall) return RunVoiceInstall(reader);
+
+    // The third, and the only one whose payload is bytes rather than text.
+    if (verb == RequestVerb.Render) return RunRender(reader, outPath);
 
     string? line = reader.ReadLine();
     if (line is null)
@@ -755,6 +776,151 @@ static void PrintVoices(VoicesPayload list)
 /// return when stderr is a terminal, and printed as ordinary lines when it is
 /// not: a log file full of \r is worse than no bar at all.</para>
 /// </summary>
+/// <summary>
+/// Read a render's replies and write a WAV.
+///
+/// <para><b>The header is written first, with a length nobody knows yet.</b>
+/// This streams to stdout, which is a pipe: it cannot be seeked, so the two size
+/// fields in a WAV header cannot be filled in at the end. They are written as
+/// 0xFFFFFFFF, which is what every streaming WAV writer does and what every
+/// player this will meet — <c>paplay</c>, <c>aplay</c>, speech-dispatcher's own
+/// output — already handles, because it is how a WAV arriving over a pipe has
+/// always looked. Writing a real length would mean buffering the whole
+/// utterance, which is the latency this verb exists to avoid.</para>
+///
+/// <para>When <paramref name="outPath"/> is a real file the same header is
+/// written, for one reason: a file and a pipe should not differ in a way that
+/// only shows up when someone switches between them while debugging.</para>
+/// </summary>
+static int RunRender(StreamReader reader, string outPath)
+{
+    Stream output;
+    try
+    {
+        output = outPath == "-"
+            ? Console.OpenStandardOutput()
+            : File.Create(outPath);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"cannot write to {outPath}: {ex.Message}");
+        return 1;
+    }
+
+    using var _ = output;
+    bool wroteHeader = false;
+    long samples = 0;
+
+    while (true)
+    {
+        string? line = reader.ReadLine();
+        if (line is null)
+        {
+            // A truncated render is a failure even if we already wrote audio:
+            // NEVER EXIT 0 HAVING PRODUCED NO AUDIO, and never exit 0 having
+            // produced half of it either. speechd logs stderr.
+            Console.Error.WriteLine("the daemon closed the connection mid-render");
+            return 1;
+        }
+
+        var reply = Protocol.TryDecode<Response>(line);
+        if (reply is null)
+        {
+            Console.Error.WriteLine($"unparseable reply: {line}");
+            return 1;
+        }
+
+        if (!reply.Ok)
+        {
+            Console.Error.WriteLine(reply.Error ?? "render failed");
+            return 1;
+        }
+
+        if (reply.Audio is not { } audio)
+        {
+            Console.Error.WriteLine("a render reply carried no audio field");
+            return 1;
+        }
+
+        if (!wroteHeader)
+        {
+            if (audio.SampleRate <= 0)
+            {
+                // The empty-text case: the daemon rendered nothing and said so.
+                // Not an error, and not a WAV either — a zero-byte stdout is
+                // what $PLAY_COMMAND handles best.
+                return 0;
+            }
+
+            WriteWavHeader(output, audio.SampleRate, audio.Channels);
+            wroteHeader = true;
+        }
+
+        if (audio.Pcm is { Length: > 0 } encoded)
+        {
+            byte[] pcm;
+            try { pcm = Convert.FromBase64String(encoded); }
+            catch (FormatException)
+            {
+                Console.Error.WriteLine("a render reply carried unreadable audio");
+                return 1;
+            }
+
+            try
+            {
+                output.Write(pcm, 0, pcm.Length);
+                samples += pcm.Length / 2;
+            }
+            catch (IOException)
+            {
+                // The reader went away — for a speechd module this IS the stop,
+                // and it is the normal end of most utterances a screen reader
+                // starts. Not a failure.
+                return 0;
+            }
+        }
+
+        if (audio.Final)
+        {
+            output.Flush();
+            if (samples == 0)
+            {
+                Console.Error.WriteLine("the render produced no audio");
+                return 1;
+            }
+            return 0;
+        }
+    }
+}
+
+/// <summary>
+/// A 44-byte canonical WAV header for 16-bit PCM, with both size fields left at
+/// 0xFFFFFFFF because this is a stream. See <see cref="RunRender"/>.
+/// </summary>
+static void WriteWavHeader(Stream output, int sampleRate, int channels)
+{
+    const int BitsPerSample = 16;
+    int blockAlign = channels * BitsPerSample / 8;
+    int byteRate = sampleRate * blockAlign;
+
+    Span<byte> header = stackalloc byte[44];
+    "RIFF"u8.CopyTo(header[..4]);
+    BitConverter.TryWriteBytes(header[4..8], uint.MaxValue);          // RIFF size: unknown
+    "WAVE"u8.CopyTo(header[8..12]);
+    "fmt "u8.CopyTo(header[12..16]);
+    BitConverter.TryWriteBytes(header[16..20], 16);                   // fmt chunk size
+    BitConverter.TryWriteBytes(header[20..22], (short)1);             // PCM
+    BitConverter.TryWriteBytes(header[22..24], (short)channels);
+    BitConverter.TryWriteBytes(header[24..28], sampleRate);
+    BitConverter.TryWriteBytes(header[28..32], byteRate);
+    BitConverter.TryWriteBytes(header[32..34], (short)blockAlign);
+    BitConverter.TryWriteBytes(header[34..36], (short)BitsPerSample);
+    "data"u8.CopyTo(header[36..40]);
+    BitConverter.TryWriteBytes(header[40..44], uint.MaxValue);        // data size: unknown
+
+    output.Write(header);
+}
+
 static int RunVoiceInstall(StreamReader reader)
 {
     bool tty = !Console.IsErrorRedirected;

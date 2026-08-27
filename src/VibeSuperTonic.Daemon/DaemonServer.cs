@@ -414,6 +414,15 @@ public sealed partial class DaemonServer : IDisposable
                     continue;
                 }
 
+                if (request.Verb == RequestVerb.Render)
+                {
+                    // The third multi-reply verb. Same contract: replies until
+                    // one carries Audio.Final, and the writer belongs to it for
+                    // the duration.
+                    await RenderAsync(writer, request, token);
+                    continue;
+                }
+
                 if (request.Verb == RequestVerb.VoiceInstall)
                 {
                     // The second multi-reply verb, and it follows the first's
@@ -508,6 +517,9 @@ public sealed partial class DaemonServer : IDisposable
 
             case RequestVerb.VoiceRemove:
                 return VoiceRemove(request);
+
+            case RequestVerb.Render:
+                return Response.Fail("render streams audio and must be sent over a connection");
 
             case RequestVerb.VoiceInstall:
                 // Handled in the connection loop, which owns the writer for the

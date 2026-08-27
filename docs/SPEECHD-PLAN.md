@@ -464,6 +464,57 @@ hopeless on the CPU path, the honest outcomes are (a) ship it for document
 reading and say so, (b) spend the [deferred `totalStep` lever](#inherited)
 first, or (c) stop. Do not build S1–S5 to find out.
 
+<a name="s0-result"></a>
+
+#### S0 ran, 2026-08-27. The gate's numbers
+
+`vst-ctl render --out -` is built and works: a warm daemon, CPU, Supertonic
+`M1`, streaming a WAV to stdout. Median of seven runs each, wall time from
+process spawn to the first PCM byte past the header, against the same machine's
+`espeak-ng --stdout`:
+
+| Utterance | VibeSuperTonic | espeak-ng | |
+| --- | --- | --- | --- |
+| `The quick brown fox jumps over the lazy dog.` | **718 ms** | 4 ms | 174× |
+| `a` | **383 ms** | 5 ms | 71× |
+| `Control_L` | **396 ms** | 4 ms | 99× |
+
+**And the decomposition, which is what makes the verdict safe:**
+
+| | |
+| --- | --- |
+| `vst-ctl --version` — process spawn alone | **2 ms** |
+| `vst-ctl status` — spawn + connect + round trip | **6 ms** |
+| So of the 383 ms for one letter, inference is | **~377 ms** |
+| AppImage `ctl --version` — the same, through a FUSE mount | 22 ms |
+
+**Four things follow, and three of them close open questions.**
+
+1. **The pipeline is free and the model is everything.** 6 ms of 383. That
+   settles [the route](#decide) beyond argument: a native module
+   (route B) would save six milliseconds out of three hundred and eighty. It
+   also means no amount of engineering on this side moves the number.
+2. **[Open question 4](#open) is answered: the AppImage costs 20 ms**, which is
+   5% of one inference. No extracted launcher is needed.
+3. **[Trap 10](#t10) was right, and it is now measured.** 383 ms for a single
+   character is not a keystroke echo. Orca users type at speed; the echo would
+   fall behind within a sentence and never catch up.
+4. **The deferred `totalStep` lever is the only lever left**, and it is not
+   enough on its own. The port plan estimated halving it roughly halves the
+   ~600 ms fixed cost, which would put a letter near 190 ms — still 40× espeak-ng.
+   Worth trying for the reading case; it does not rescue echo.
+
+**The verdict, which is a product judgement and not a threshold:** ship it for
+**reading**, and say plainly that echo should stay on espeak-ng. speech-dispatcher
+selects a module per message type, so that is a configuration a user makes once,
+not a limitation they have to work around. 718 ms before the first word of a
+paragraph is the same order as the hotkey path this product already ships and
+that people already use by choice.
+
+**What that changes below**: [S3](#s3) should set the module up for the message
+types it is good at rather than claiming all of them, and [S4](#s4)'s
+`INSTALL.txt` section carries the honest sentence rather than burying it.
+
 <a name="s1"></a>
 ### S1 · The `render` verb, properly · one to two days
 
