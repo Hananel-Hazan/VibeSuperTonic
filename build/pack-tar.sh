@@ -580,7 +580,8 @@ MIT licensed and is unchanged by this — MIT is GPL-compatible, and every sourc
 file keeps its own licence and header. See LICENSE.txt.
 
 Earlier releases — up to and including 0.2.10 — contain no espeak-ng and are
-not affected. This applies from the release that first shipped a Piper voice.
+not affected. These terms apply from 0.2.12 onward, the first release to
+include it.
 
 THE SOURCE, which is the obligation this file discharges. The library here was
 built from that commit UNMODIFIED — build/build-espeak.sh refuses to build a

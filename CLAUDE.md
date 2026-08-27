@@ -46,9 +46,9 @@ nothing to do with a release run, and that only matter when the pin moves.
 it distributes espeak-ng. The repository's own source stays MIT — MIT is
 GPL-compatible and no `.cs` file changes — and `LICENSE-PHONEMIZER.txt`, written
 by the packer, is where the terms and the source offer live. Releases up to and
-including 0.2.11 contain no espeak-ng and are unaffected; that is worth saying in
-their release notes, because "the project became GPL" is what a reader will
-otherwise conclude retroactively.
+including 0.2.10 — the newest one that was ever published — contain no espeak-ng
+and are unaffected; that is worth saying in 0.2.12's notes, because "the project
+became GPL" is what a reader will otherwise conclude retroactively.
 
 ### What the tests defend, and what they do not
 
@@ -206,44 +206,55 @@ Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
-**The three-release sequence settled on 2026-08-24 is spent**, and it has grown
-twice since. `<VstVersion>` is `0.2.11`.
+**The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
+`0.2.12`, which is the version **under development** rather than the last one
+shipped — see the note below, which changed on 2026-08-27.
 
 | Version | What it is | State |
 | --- | --- | --- |
 | `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
 | `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
-| `0.2.10` | A portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **shipped 2026-08-25** |
-| `0.2.11` | A GPU that failed while reporting itself healthy. Only the number: the tree is `7ed7a67` exactly | **shipped 2026-08-27** |
-| `0.2.12` | A Speech Dispatcher module — SAPI's equivalent on the Debian family, so any screen reader can use these voices — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) | next |
+| `0.2.10` | A portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **shipped 2026-08-25**, and the newest release that actually works |
+| `0.2.11` | The GPU fix, cut from the pre-P5 tree | **withdrawn 2026-08-27, never published** |
+| `0.2.12` | The GPU fix, the fresh-install fix, all of P5, and a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) | next |
 | `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md). **P0–P5 are done and in the tree** | after |
 
-**`0.2.11` was cut from the pre-P5 tree on purpose** and that reasoning is worth
-keeping. The GPU fix landed on 2026-08-26, after 0.2.10's artifacts were packed
-on the 25th, so the two files named 0.2.10 do not contain it. But by then P5 had
-put espeak-ng in the archive and moved the whole thing to GPL-3.0-or-later, and a
-patch release is not where a user should discover new licence terms. So the fix
-was given a number of its own and packed from `7ed7a67`. **The same question now
-applies to `0.2.12`**: it will be built from a tree that contains P5, so it will
-ship espeak-ng and it will be the release where those terms first apply — say so
-in its notes, or hold P5 back deliberately.
+**`0.2.11` was packed and then withdrawn the same day**, and the reasoning on
+both sides is worth keeping. It was cut from `7ed7a67` on purpose: the GPU fix
+landed after 0.2.10's artifacts were packed, and by then P5 had put espeak-ng in
+the archive and moved the whole thing to GPL-3.0-or-later — which is not
+something a user should discover in a patch release. Then
+[the new smoke test](build/smoke-test.sh) found that **the daemon could not start
+on a fresh install** in that same tree, and the fix for it lives in a tree that
+also contains P5. Re-cutting a no-espeak 0.2.11 meant a second branch and a
+second pack run to ship a patch that had already been overtaken. Nothing was
+published, so it was deleted instead.
+
+**So `0.2.12` carries all of it**: the GPU fallback, the fresh-install fix, P5's
+phonemiser, and the Speech Dispatcher module. It is the release where
+GPL-3.0-or-later first applies — say so in its notes. Everything up to and
+including the shipped `0.2.10` contains no espeak-ng.
 
 `0.2.12` and `0.3` are the next two numbers. **Everything after them is a
 decision to ask about** — propose a bump from what changed, and use
 `AskUserQuestion`.
 
-After a release ships, update `<VstVersion>` in
-[Directory.Build.props](Directory.Build.props) to the version just shipped, so
-the default stays truthful for the next run and the Linux packer agrees. `0.2.10`
-is the one exception on record and it was the user's call: the bump was committed
-with the work rather than after the pack, so that one commit *is* the release.
-The rule still holds for everything after it — a release run passes `-v`
-explicitly either way, so the default is a safety net rather than an input.
+**`<VstVersion>` names the version being built, not the last one shipped**, and
+that rule changed on 2026-08-27 when CI started packing. It was "the version just
+shipped", which was fine while the packer only ran by hand — but the `pack` job
+runs `pack-tar.sh` with no `-v` on every push, so the default is now a name
+applied to real artifacts continuously. Two things follow:
 
-**The safety net has a hole worth knowing about**: the default names the *last
-shipped* version, so a `pack-tar.sh` run with no `-v` overwrites the artifact
-that is already in `dist/` — and from this tree that artifact would gain
-espeak-ng and lose its licence description. Pass `-v`.
+- A default naming the *last shipped* version would have CI produce a tarball
+  named after a release that already exists, and a local run with no `-v` would
+  overwrite the genuine artifact in `dist/`.
+- Bumping it at the *start* of a version's work rather than after its pack means
+  every CI artifact is honestly named a pre-release build of the thing being
+  built.
+
+So: **bump `<VstVersion>` when a version's work begins**, and a release run still
+passes `-v` explicitly. `0.2.10` shipped under the older rule with the bump
+committed alongside the work, which is the same thing by accident.
 
 Use `AskUserQuestion` to confirm the version — do not silently pick one. The
 version is durable: it embeds in the ZIP filename and is what the user will
