@@ -29,7 +29,7 @@
       user makes, never something the build infers, so a release run passes
       -Version explicitly and this value is updated to match afterwards.
     -->
-    <VstVersion>0.2.10</VstVersion>
+    <VstVersion>0.2.11</VstVersion>
 
     <!--
       And every assembly in the tree carries it. Set here rather than per-project
