@@ -63,10 +63,24 @@ public sealed class PiperVoiceInstaller
     /// <summary>Where voices live, whether or not the directory exists.</summary>
     public string StoreRoot => Path.Combine(_modelsRoot, StoreFolderName);
 
-    /// <summary>This voice's directory, whether or not it exists.</summary>
+    /// <summary>
+    /// This voice's directory, whether or not it exists.
+    ///
+    /// <para>Throws on an id that is not a directory name. That is not
+    /// defensiveness about a typo: <see cref="Remove"/> hands this path to
+    /// <see cref="Directory.Delete(string, bool)"/> with <c>recursive: true</c>,
+    /// and an id of <c>..</c> resolves to the store root. The id reaches here
+    /// from a catalog file anyone can edit and from <c>vst-ctl voice remove</c>
+    /// directly. See <see cref="StorePath.IsSafeVoiceId"/>.</para>
+    /// </summary>
     public string DirectoryFor(string voiceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(voiceId);
+        if (!StorePath.IsSafeVoiceId(voiceId))
+            throw new ArgumentException(
+                $"'{voiceId}' is not a voice id — a voice id names a directory, and this one " +
+                "contains a path separator or is a relative-path token. Nothing was touched.",
+                nameof(voiceId));
         return Path.Combine(StoreRoot, voiceId.Trim());
     }
 
@@ -78,7 +92,10 @@ public sealed class PiperVoiceInstaller
     /// </summary>
     public bool IsInstalled(string voiceId)
     {
-        if (string.IsNullOrWhiteSpace(voiceId)) return false;
+        // A question rather than a command, and it is asked while enumerating —
+        // so an id that is not a directory name is "no", not an exception out of
+        // the middle of a voice list.
+        if (!StorePath.IsSafeVoiceId(voiceId)) return false;
         string dir = DirectoryFor(voiceId);
         string model = Path.Combine(dir, voiceId.Trim() + ".onnx");
         return File.Exists(model) && File.Exists(model + ".json");
@@ -134,6 +151,14 @@ public sealed class PiperVoiceInstaller
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(voice);
+
+        // The catalog is a file beside the binaries that anything can edit, and
+        // this is where an id from it first becomes a path.
+        if (!StorePath.IsSafeVoiceId(voice.Id))
+            return new VoiceInstallResult(false, voice.Id ?? "",
+                $"the catalog entry '{voice.Id}' is not a voice id — it names a directory, " +
+                "and this is a path. Nothing was downloaded.");
+
         string dir = DirectoryFor(voice.Id);
 
         try
@@ -195,6 +220,15 @@ public sealed class PiperVoiceInstaller
         if (string.IsNullOrWhiteSpace(voiceId))
             return new VoiceInstallResult(false, voiceId ?? "", "no voice named");
 
+        // Before DirectoryFor, so the refusal is a sentence rather than an
+        // ArgumentException crossing the IPC boundary. This is the path that
+        // ends in Directory.Delete(recursive: true), and `vst-ctl voice remove`
+        // hands it whatever was typed.
+        if (!StorePath.IsSafeVoiceId(voiceId))
+            return new VoiceInstallResult(false, voiceId.Trim(),
+                $"'{voiceId.Trim()}' is not a voice id — it names a directory, and this is a path. " +
+                "Nothing was removed.");
+
         string id = voiceId.Trim();
         string dir = DirectoryFor(id);
 
@@ -243,7 +277,11 @@ public sealed class PiperVoiceInstaller
         {
             foreach (var entry in manifest.Files)
             {
-                string full = Path.Combine(_modelsRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+                // Resolved rather than combined: this loop DELETES, so a manifest
+                // path that escapes the store would delete a file outside it —
+                // and an entry whose hash cannot match is precisely how a crafted
+                // catalog would reach this line. See StorePath.
+                if (StorePath.Under(_modelsRoot, entry.Path) is not { } full) continue;
                 if (!File.Exists(full)) continue;
                 if (await ModelDownloader.VerifyAsync(full, entry, ct)) continue;
                 try { File.Delete(full); } catch { }

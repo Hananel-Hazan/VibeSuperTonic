@@ -22,6 +22,11 @@ Voices tab renders happily, and the product is wrong:
     because it looks like consent was obtained.
   * A duplicate id means two catalog rows share one directory, and whichever was
     installed second wins with the first one's name still on screen.
+  * AN ID THAT IS A PATH is the one entry here that is a security problem rather
+    than a defect. The id names a directory under the store, and removing a voice
+    hands that directory to a recursive delete. Core refuses these at runtime
+    (StorePath.IsSafeVoiceId), and this is the same rule applied at pack time so
+    a generator change cannot ship one.
   * A voice naming no espeakVoice cannot be phonemised, and nothing downstream
     can tell which dictionary it needs. The packer runs every one of these
     against the espeak data it is about to ship — a missing dictionary makes
@@ -60,6 +65,17 @@ def main():
     seen = {}
     for v in voices:
         vid = v.get("id") or "(no id)"
+
+        # Same rule as StorePath.IsSafeVoiceId, and it must stay the same rule:
+        # letters (Unicode — pt_PT-tugão-medium is real), digits, and the three
+        # separators upstream uses. No path separator, no leading dot.
+        if vid != "(no id)" and (
+            vid.startswith(".")
+            or not all(c.isalnum() or c in "_-." for c in vid)
+        ):
+            problems.append(
+                f"{vid!r}: is not a voice id — it names a directory under the store, "
+                "and `voice remove` deletes that directory recursively")
 
         if vid in seen:
             problems.append(f"{vid}: appears twice; two rows would share one directory")

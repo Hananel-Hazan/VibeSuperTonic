@@ -50,6 +50,26 @@ including 0.2.11 contain no espeak-ng and are unaffected; that is worth saying i
 their release notes, because "the project became GPL" is what a reader will
 otherwise conclude retroactively.
 
+### What the tests defend, and what they do not
+
+[docs/TESTING-PLAN.md](docs/TESTING-PLAN.md), written 2026-08-27, audits the
+checks against four properties — **safe, slim, fast, valid** — and is worth
+reading before adding a test, because it says where a check belongs and why.
+
+Two things from it that change how a release run should be read:
+
+- **CI runs none of the packer's assertions**, never builds espeak-ng, and never
+  runs the parity spike. Every check that defends the *artifact* runs only on the
+  machine that packs it. Until that changes, "CI is green" says nothing about the
+  archive.
+- **Nothing smoke-tests the finished archive** on a machine that is not this one.
+  The glibc-floor assertion makes a claim about Ubuntu 22.04 that nothing
+  verifies by running there.
+
+The rule the existing checks are built on, and the one to keep: **a check that
+has never been observed failing is not evidence.** Every packer assertion was
+sabotaged on the day it was written. Do that for the next one too.
+
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:
 
@@ -83,7 +103,9 @@ each exists because the failure it catches is silent:
   *byte-identical* output for both — verified — so the check is the absence of a
   companion `vst-ctl.dll` plus a size floor. A managed apphost is ~78 KB and
   works perfectly while costing ~100 ms on every hotkey press; the AOT binary is
-  ~4 MB. A `grep ELF` check (which is what CI does) cannot tell them apart.
+  ~4 MB. A `grep ELF` check cannot tell them apart. CI checks the `.dll` too, but
+  not the size floor — and it checks its own publish output, never the composed
+  tree, which is the difference this assertion exists for.
 - **No models in the archive.** They download on first run behind the
   OpenRAIL-M acceptance; shipping them would make that screen a lie.
 - **No `libonnxruntime_providers_cuda.so` in the archive** (Phase 8b). It is

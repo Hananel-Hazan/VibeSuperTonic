@@ -1,0 +1,262 @@
+# Testing — safe, slim, fast, valid
+
+Written 2026-08-27, alongside [SPEECHD-PLAN.md](SPEECHD-PLAN.md). Linux only:
+Windows advances later and nothing here changes a Windows path.
+
+**This is not a proposal to write more tests.** It is an audit of which of four
+properties the existing checks actually defend, and it finds that one of them is
+defended very well, one is defended by accident, and two are not defended at all.
+
+---
+
+## What exists today, honestly
+
+| Layer | What it is | What it catches |
+| --- | --- | --- |
+| **Unit tests** | 1159, ~0.8 s, no network, no models, no native libraries | Logic. The bulk of the product's behaviour |
+| **Packer assertions** | 9 in [pack-tar.sh](../build/pack-tar.sh), run against the *composed tree* | Silent packaging defects — a stale binary, a managed apphost, 330 MB of CUDA, a missing dictionary |
+| **The parity spike** | [spike/piper-phonemes](../spike/piper-phonemes) — 327 sentences against piper's own output, with five deliberate sabotages that must all be caught | Phoneme divergence, which is wrong audio rather than a failure |
+| **CI** | [build.yml](../.github/workflows/build.yml): a Windows job and a Linux job | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed |
+
+**The gap in one sentence: CI runs none of the packer's nine assertions, never
+builds espeak-ng, and never runs the parity spike** — so every check that
+defends the *artifact* runs only on the one machine that packs it, and only when
+a human runs the packer.
+
+---
+
+<a name="safe"></a>
+
+## Safe
+
+**What it means here.** Data the product reads must not be able to write,
+delete, or execute outside the places it owns; downloaded bytes must be what
+they claim; and nothing may widen what a local process can already do.
+
+The product reads three kinds of untrusted-ish input: **files beside the
+binaries** (`models-manifest.json`, `piper-voices.json` — ours, but in a
+user-writable portable install), **bytes from the network**, and **strings from
+a command line**.
+
+### What is defended
+
+| Surface | Defence | Tested |
+| --- | --- | --- |
+| Model and voice downloads | SHA-256 pinned in the manifest, re-verified after *each* mirror | Yes — a mirror serving a truncated file must fall through, not leave it on disk |
+| The daemon's socket | `0600` inside a `0700` directory, so no other local user can speak or read your selection | **No** — add one |
+| Catalog → disk path | `StorePath.Under` + `IsSafeVoiceId`, at every point a string becomes a path | Yes, as of today — 39 tests, plus the same rule in [check-piper-catalog.py](../build/check-piper-catalog.py) |
+| `vst-ctl voice remove <id>` | Same guard. The path that ends in `Directory.Delete(recursive: true)` | Yes |
+| Archive extraction | Nothing extracts archives. `tar` is the user's | n/a |
+
+**The catalog guard was added on 2026-08-27 because this audit found it
+missing.** `Path.Combine(root, entry.Path)` had no traversal check, in two
+places — one that writes and one that *deletes* — and `Path.Combine` discards
+the base entirely when the second argument is rooted, so `/etc/cron.d/x` was
+never a traversal to catch, just an instruction to obey. See
+[StorePath](../src/VibeSuperTonic.Core/Models/StorePath.cs).
+
+### What is not defended, and what to do
+
+1. **`install-gpu.sh` fetches ~3.1 GB with no hash pin.** The ORT provider comes
+   from nuget.org by version, and CUDA/cuDNN come from PyPI through `pip`. TLS
+   and the registries' own integrity are the whole defence — which is the same
+   trust model as `dotnet restore`, so it is not unreasonable, but it is the one
+   download path in this product that does not follow its own rule. These
+   libraries are `dlopen`ed into the daemon.
+
+   **Do**: pin the nupkg's SHA-256 and check it, in the shape assertion 5 already
+   has (it compares the *version* in that script against the csproj, so both
+   numbers are already visible in one place). `pip --require-hashes` for the
+   wheels is the same idea and more work; decide it separately.
+
+2. **The speechd module puts arbitrary desktop text into a shell command.**
+   [Trap 9](SPEECHD-PLAN.md#t9). `sd_generic` escapes `$DATA` correctly *only if
+   the config wraps it in single quotes*. **Do**: a packer assertion on the
+   generated config's quoting — a security check, not a tidiness one.
+
+3. **Nothing asserts the socket's mode.** **Do**: a daemon test that creates the
+   listener and asserts `0600` on the socket and `0700` on its directory. Cheap,
+   and the failure mode — a mode that widens under a refactor — is invisible.
+
+### The test to write first
+
+A **hostile-input suite** that treats `piper-voices.json` as attacker-controlled
+and asserts the product refuses rather than obeys. It exists now for paths; it
+should grow an entry every time a new field of that file reaches a syscall.
+
+---
+
+<a name="slim"></a>
+
+## Slim
+
+**What it means here.** The archive is downloaded by people on domestic
+connections, and the daemon is resident for a login session. Both have budgets;
+neither has a check.
+
+### The numbers, measured 2026-08-27
+
+| | Now | Note |
+| --- | --- | --- |
+| Tarball, 0.2.11 (no espeak) | **54.1 MB** | |
+| Tarball with the P5 phonemiser | **59 MB** | +7.1 MB compressed, of which `ru_dict` is 4.9 |
+| AppImage | **47 MB** | |
+| Composed tree, uncompressed | **140 MB** | |
+| Warm daemon RSS | **~830 MB** | Measured in Phase 0; a Piper `high` session adds ~350 MB on GPU |
+
+Biggest files in the tree: `libonnxruntime.so` 22 MB, `System.Private.CoreLib.dll`
+15 MB, `libSkiaSharp.so` 8.9 MB, `ru_dict` 8.7 MB.
+
+### What is defended
+
+Assertions 3 and 4 catch **two named files** — any `.onnx`, and
+`libonnxruntime_providers_cuda.so`. Both exist because those two specific things
+once appeared. **Nothing catches growth in general**, which is the shape most
+size regressions actually have: a package reference that drags in a native blob,
+a publish that stops trimming, a payload that quietly ships `--full-data`.
+
+### What to do
+
+1. **A total-size budget in the packer.** One number, stated with a date and a
+   reason, checked against the finished tarball; on failure, print the ten
+   biggest files so the answer is in the error rather than in a follow-up
+   investigation. Set it with headroom (say 70 MB against today's 59) so it
+   catches a doubling and not a drift.
+2. **A per-payload budget for `espeak/`**, because it has an easy accident: a
+   `--full-data` build is 25 MB of dictionaries and passes every existing check.
+3. **An RSS budget**, which is the harder one because it needs a model. Put it in
+   [spike/daemon-stress](../spike/daemon-stress) rather than in CI, and record
+   the number in the release notes the way P2's table does.
+
+**And the honest note**: `ru_dict` is 4.9 MB of a 7.1 MB payload, and dropping
+`EXTRA_ru` would recover it at the cost of Russian stress placement diverging
+from what the model was trained against. That is a budget decision with a real
+price, which is exactly why it should be visible as a number rather than left
+implicit.
+
+---
+
+<a name="fast"></a>
+
+## Fast
+
+**What it means here.** Four numbers, three of which have budgets already
+written down somewhere and none of which is checked automatically.
+
+| Number | Budget | Where it came from | Checked? |
+| --- | --- | --- | --- |
+| `vst-ctl` startup | 6 ms AOT vs 107 ms managed | Phase 7 | **By proxy** — the packer and CI assert the binary is *native*, not that it is *fast* |
+| Hotkey → acknowledgement | 150 ms | The port plan | No |
+| First word, Supertonic, warm | ~750 ms, ~600 of it one inference | Phase 3 | No |
+| First word, Piper | 802 ms CPU / 77 ms GPU | P2 | No — `vst-ctl benchmark` measures it on demand, by hand |
+
+### The insight that makes this testable
+
+**Separate pipeline latency from model latency.** The model's cost needs
+hardware, models on disk, and an idle machine — it belongs in a benchmark a
+human runs. What creeps is everything *around* it: a chunker that got quadratic,
+a settings reload on every utterance, an extra IPC round trip.
+
+That part can be measured with a **synthetic `ISynthesizer`** that returns
+silence in a fixed 1 ms — the interface is already small enough
+([`Synthesize` returns `short[]`](../src/VibeSuperTonic.Core/Synthesis/ISynthesizer.cs)),
+and `Fakes.cs` in the test project already does this shape. Then "time from
+request to first sample" is a pure-code number, stable in CI, and a regression in
+it is a regression the model would otherwise hide.
+
+### What to do
+
+1. **A pipeline-latency test** with the synthetic synthesizer and a budget,
+   in `Core.Tests`. Runs in CI, no models, no audio device.
+2. **Measure `vst-ctl` startup for real** in CI — run it 20 times, take the
+   median, fail over a budget. The nativeness assertion is a proxy for this and
+   proxies drift.
+3. **[SPEECHD-PLAN.md's S0](SPEECHD-PLAN.md#s0) is the first place a real
+   first-word budget gets written down**, because it is the first feature where
+   the number decides whether to ship. Whatever it measures should become the
+   recorded baseline.
+
+---
+
+<a name="valid"></a>
+
+## Valid
+
+**What it means here.** Correct output for correct input — and, in this product
+specifically, *refusal* rather than plausible-wrong output. Almost every bug this
+codebase has found was a thing that worked and was wrong.
+
+**This is the strongest axis and it is worth saying why**, because the method is
+reusable: every check is *behavioural* and every check has been **seen to fail**.
+The parity spike runs five deliberate sabotages before it reports a pass. The
+nine packer assertions were each sabotaged on the day they were written, and P5's
+three again on 2026-08-27 — a removed dictionary, a wrong pin, the distro
+library, missing data, no payload, a library without the export. Six sabotages,
+six refusals.
+
+**The rule, stated so it survives: a check that has never been observed failing
+is not evidence. Sabotage it once, at the time you write it.**
+
+### The gap
+
+The artifact-level checks only ever run on the machine that packs. Concretely:
+
+- CI does not run `pack-tar.sh`, so **none of the nine assertions run in CI**.
+- CI never builds espeak-ng, so P5's payload is unverified until a release run.
+- CI never runs the parity spike, so a phonemiser regression is invisible until
+  someone re-runs it by hand.
+- **Nothing smoke-tests the finished archive.** No check anywhere proves the
+  composed tree runs on a machine that is not this one — which is precisely the
+  claim the glibc-floor assertion is trying to make on paper.
+
+### What to do
+
+1. **A CI job that packs.** Build espeak-ng once and cache it on the pin (it is a
+   fixed commit, so the cache key is exact and it rebuilds only when the pin
+   moves), then run `pack-tar.sh`. This turns nine hand-run assertions into nine
+   continuous ones and is the single highest-value item in this document.
+2. **A smoke test in a clean container**, on the tarball that job produces:
+   extract it into `ubuntu:22.04` (the glibc floor's own claim — 2.34), and run
+   `vst-ctl --version`, `vibesupertonicd --version`, and one espeak phonemisation
+   through the shipped library. No models, no audio device, no GPU. It answers
+   "does this run on a supported distro", which nothing answers today.
+3. **The parity spike in CI**, using the payload the pack job already built. It
+   is 327 sentences and needs no network.
+4. **Keep the sabotage discipline** for everything above: each new check gets
+   broken once, deliberately, and the breakage recorded in the commit.
+
+---
+
+## Where a check belongs
+
+| If it… | Put it in | Because |
+| --- | --- | --- |
+| is about logic, and needs no model, network or device | `Core.Tests` / `Daemon.Tests` | 1159 of them run in 0.8 s; that is the budget being protected |
+| is about what is **in the box** | a packer assertion | The composed tree is the thing that ships, and it differs from the build output |
+| is about **generated data** | a checker script the packer calls | [check-piper-catalog.py](../build/check-piper-catalog.py) is the pattern: runnable by hand at the moment of regeneration |
+| is about **agreeing with an external implementation** | a spike with a committed corpus | The parity spike needs neither Python nor network, which is what makes it re-checkable |
+| needs a GPU, an audio device, or a human ear | a spike or a documented manual step | Say it is manual rather than pretending; P2's table is the format |
+
+---
+
+## The order to do it in
+
+Ranked by defect-caught per hour, not by axis.
+
+| # | Item | Axis | Cost |
+| --- | --- | --- | --- |
+| 1 | **CI runs `pack-tar.sh`** with a cached espeak build | valid | half a day |
+| 2 | **Clean-container smoke test** of the tarball on Ubuntu 22.04 | valid | half a day |
+| 3 | **Archive size budget** with a ten-biggest-files report on failure | slim | an hour |
+| 4 | **Socket mode test** | safe | an hour |
+| 5 | **Pin the ORT nupkg hash** in `install-gpu.sh` | safe | an hour |
+| 6 | **Pipeline-latency test** with a synthetic synthesizer | fast | half a day |
+| 7 | **`vst-ctl` startup measured**, not inferred | fast | an hour |
+| 8 | **Parity spike in CI** | valid | an hour, once 1 exists |
+| 9 | **espeak payload size budget** | slim | 15 minutes |
+| 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
+
+Items 1 and 2 are worth more than the other eight together: they take every
+artifact-level check that exists and make it continuous, and they answer the one
+question nothing currently answers — *does the thing we ship run somewhere that
+is not this laptop?*

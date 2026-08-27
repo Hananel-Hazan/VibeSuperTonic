@@ -1411,11 +1411,11 @@ with all five of its own sabotages caught first.
 
 | Open | Owner | Why it is not a blocker |
 | --- | --- | --- |
-| ⚠ **The Voices tab has still never been looked at**, carried from [P4](#p4-open) and now one release closer to shipping | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`; what is unproven is layout |
+| ⚠ **The Voices tab has still never been looked at**, carried from [P4](#p4-open) and now one release closer to shipping | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`; what is unproven is layout. [0.2.12](SPEECHD-PLAN.md#s3) generates the speech-dispatcher voice list from the same installed-voice state, so the two are one surface |
 | ⚠ **The Windows build has still never been run**, also from P4 | Whoever ships next | Nothing Windows-side changed; `pack-zip.ps1` ships no catalog and no phonemiser, which is correct — Piper on Windows is not this round |
-| **There is no CLI way to choose a voice.** `vst-ctl voice install` downloads one and nothing selects it; the window is the only writer of `VoiceId` | Later | Deliberate — one writer for that choice, decided 2026-08-25. But `INSTALL.txt` says vst-ctl can do "anything the window can do", and that is now false |
+| **There is no CLI way to choose a voice.** `vst-ctl voice install` downloads one and nothing selects it; the window is the only writer of `VoiceId` | [0.2.12](SPEECHD-PLAN.md#inherited) | Deliberate — one writer for that choice, decided 2026-08-25. But `INSTALL.txt` says vst-ctl can do "anything the window can do", and that is now false. 0.2.12's `render --voice` settles the per-utterance half, since speechd sends a voice on every call and never touches a setting |
 | **The catalog is pinned to `v1.0.0` and nothing watches upstream** | Later | Regenerating is one command and the tests assert the result |
-| **The Piper session is still always CPU** | Later | Unchanged from P3; `config` says so when it applies |
+| **The Piper session is still always CPU** | Later, and [0.2.12 gives it a number](SPEECHD-PLAN.md#inherited) | Unchanged from P3; `config` says so when it applies. A screen reader measures first-word latency on whatever provider is in force, so a "too slow" verdict there may be a provider verdict rather than a product one |
 | **`ru_dict` is 4.9 MB of a 7.1 MB payload** | Later, if ever | `EXTRA_ru=ON` is what makes it large, and piper's own CMakeLists passes it. Dropping it buys 4.9 MB and changes Russian stress placement away from what the model was trained against |
 
 ---

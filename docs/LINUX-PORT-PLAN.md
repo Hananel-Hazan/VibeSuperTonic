@@ -3181,6 +3181,14 @@ went in that way and neither cost Phase 6 anything.
   needs the same warm-model daemon this plan builds, so it becomes a thin
   front-end later at low cost. Building it first would serve a narrower audience
   for more work.
+
+  > **Taken up 2026-08-27 as `0.2.12` — [SPEECHD-PLAN.md](SPEECHD-PLAN.md).** The
+  > prediction held: it is one new `vst-ctl` verb and a config file, driving the
+  > `sd_generic` module the distro already ships. That plan also inherits three
+  > of [the open decisions below](#open-decisions) — the daemon's idle-timeout
+  > question, the opening-chunk `totalStep` lever, and whether an installer may
+  > assume a graphical session — because a screen reader is what turns each of
+  > them from a preference into a number.
 - **Wayland.** X11 is Mint's default and will stay so for a while. Every
   interface here is shaped so Wayland is an implementation swap, not a redesign.
 - **GPU.** No DirectML equivalent exists. CUDA is possible for NVIDIA users but

@@ -42,6 +42,52 @@ nothing there. `sd_generic` is already installed and is what we drive.
 
 ---
 
+<a name="inherited"></a>
+
+## What earlier plans deferred into this one
+
+**This feature was analysed and deferred once already**, in
+[LINUX-PORT-PLAN.md's non-goals for v1](LINUX-PORT-PLAN.md#non-goals-for-v1), and
+the reason it gave is the reason it is cheap now:
+
+> *A speech-dispatcher module. Deferred, not rejected. It is what Orca and
+> Firefox talk to, so it is the right way to serve screen-reader users — but it
+> needs the same warm-model daemon this plan builds, so it becomes a thin
+> front-end later at low cost. Building it first would serve a narrower audience
+> for more work.*
+
+That daemon exists. **The prediction holds and this plan is the thin front-end** —
+one verb and a config file. What follows is everything else the earlier plans put
+down that this release is the first to actually need.
+
+### Deferrals that become decisions here
+
+| Deferred | Where from | Why 0.2.12 is where it lands |
+| --- | --- | --- |
+| **Should the daemon release its session after an idle timeout?** ~830 MB resident, and 0.43 s to warm back up — "probably yes" was the note | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | **0.2.12 changes the answer to no, or to something cleverer.** A hotkey user pays 0.43 s once in a while and never notices. Orca speaks on every keystroke, so an idle release means the next keypress after a pause is 430 ms late — the worst possible moment. Whatever this becomes, it can no longer be "a timer". |
+| **A lower `totalStep` for the opening chunk only.** First speech is ~750 ms, ~600 of it the model's fixed cost; halving it for the first short sentence roughly halves the wait, at an audible quality step | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) — *"the only lever left"* | [Trap 4](#t4) is exactly this question with a user attached. A screen reader's utterances are almost all short and almost all first. This is the lever, and 0.2.12 is where trying it is justified — the quality step nobody wanted for prose is much easier to accept for "Control_L". |
+| **Does `install.sh` launch the first-run window, or does the user?** An installer over `ssh` must not try to open a window | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | `speechd-install.sh` inherits it **and is worse**: the person configuring a screen reader is disproportionately likely to be in a TTY or over ssh, and disproportionately unable to see a window that did open. It must never require one. |
+| **The Piper session is always CPU**, and `vst-ctl benchmark` measures Supertonic only | [P3](PIPER-PLAN.md#p3-open), [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | Still not a blocker, and now it has a number attached: whatever [trap 4](#t4) measures is measured on the CPU path, so a "too slow" verdict may be a provider verdict rather than a product one. Say which was measured. |
+| **There is no CLI way to choose a voice** — the window is the only writer of `VoiceId` | [P5](PIPER-PLAN.md#p5-open) | `render --voice` settles the per-utterance half, because speechd sends `$VOICE` on every call and never touches a setting. The *default* stays the window's, and that is now a defensible line rather than an omission. |
+| ⚠ **The Voices tab has never been looked at** | [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | [S3](#s3) generates the module's voice list from the same installed-voice state the tab shows, so they are one surface. The tab is owed a human eye before the 0.2.12 pack regardless — it has been owed for two releases. |
+| **`ru_dict` is 4.9 MB of a 7.1 MB espeak payload** | [P5](PIPER-PLAN.md#p5-open) | Not this release. Recorded here only because 0.2.12 is the first release where "slim" is a stated goal — see [TESTING-PLAN.md](TESTING-PLAN.md#slim), which gives the archive a budget rather than an opinion. |
+
+### Deferrals that stay deferred, and why
+
+- **Everything Windows.** The Windows convergence, the Way 3 gate, `pack-zip.ps1`
+  shipping a catalog, `Onnx.DirectML`, and the owed TestHarness run. Windows
+  advances later; **0.2.12 is Linux only**, and nothing here touches a Windows
+  path. The one thing to preserve is that Core stays platform-neutral, which the
+  CI's Windows job already enforces by running `Core.Tests` on both runners.
+- **`linux-arm64`.** Named a plausible later target in the port plan's non-goals.
+  Speech Dispatcher is on ARM desktops too, so this feature would be wanted
+  there — but the blocker is ONNX Runtime's ARM performance, which nobody has
+  measured, and that is not this release's question.
+- **Index marks and word highlighting.** See [the route decision](#decide).
+- **32-bit.** No.
+
+---
+
 <a name="decide"></a>
 
 ## The decision: drive `sd_generic`, do not write a module binary
@@ -216,53 +262,225 @@ So the module config is **generated from what is installed**, at install time an
 again when a voice is added or removed, which makes it the first thing in this
 product that has to be regenerated on a state change.
 
+<a name="t9"></a>
+### 9. `$DATA` must be inside single quotes, and that is a security rule
+
+`sd_generic` builds a shell command and hands it to `system()`. It escapes the
+utterance the standard way — `'` becomes `'\''`, confirmed in the binary's
+strings along with its `child: escaped text is |%s|` log line — and **that
+escaping only works if the substitution sits inside single quotes.** Every
+shipped config writes `\'$DATA\'` for this reason; it looks like a style
+convention and it is not.
+
+A config that used double quotes, or none, would take **arbitrary text from any
+application on the desktop** — which is what speechd carries — and pass it to a
+shell. `$VOICE` is safer only because we generate it, and it should be quoted
+identically anyway.
+
+So: the generated config is generated by *us*, never hand-assembled from user
+input, and [S4](#s4)'s packer assertion checks the quoting. This is the one
+place in this feature where a mistake is a vulnerability rather than a defect.
+
+<a name="t10"></a>
+### 10. Orca's traffic is single characters, not sentences
+
+The mental model of "a screen reader reads a paragraph" is wrong and it is the
+one that would size this feature incorrectly. Orca's dominant traffic is **key
+echo and character echo**: `a`, `Control_L`, `space`, one utterance per
+keystroke, dozens per minute, each expected to start in tens of milliseconds and
+to be interrupted by the next one before it finishes.
+
+Three consequences, none of which the current product is shaped for:
+
+- **A neural voice rendering the single letter "a" is the worst case for its
+  fixed cost** — [trap 4](#t4), and the deferred `totalStep` lever is aimed at
+  exactly this.
+- **Chunking is wrong here.** `SentenceChunker` exists to split prose; a
+  one-character utterance must skip it entirely.
+- **It may simply be the wrong tool for echo.** A perfectly good outcome for
+  0.2.12 is: excellent for reading a document or a web page, and a user who
+  leaves espeak-ng as the echo voice. speechd supports different modules per
+  message type, so that is a configuration, not a failure — and saying so in
+  `INSTALL.txt` is more honest than pretending otherwise.
+
+<a name="t11"></a>
+### 11. SSML and punctuation modes arrive whether we handle them or not
+
+speechd clients can set SSML mode, and `sd_generic` passes `$DATA` through
+untouched. Fed to the model, `<speak>` and `<mark/>` are **spoken aloud** —
+which is not a crash, is not a log line, and is unmistakably broken.
+
+`$PUNCT` is the same shape from the other direction: speechd's four punctuation
+levels mean "say the punctuation out loud", and this product has no concept of
+it. `GenericPunctNone/Some/Most/All` map a level onto a command-line flag we do
+not have.
+
+**Decide both explicitly rather than by omission.** The cheap, honest answer for
+0.2.12 is: `render` strips SSML tags (and says it does), and all four punctuation
+levels map to nothing, with `INSTALL.txt` saying the module ignores punctuation
+verbosity. The expensive answer is implementing them; neither is as bad as
+shipping the tags into the audio.
+
+<a name="t12"></a>
+### 12. `render` and the hotkey share one synthesizer
+
+`EngineRoutingSynthesizer` holds a single current `ISynthesizer`, and
+[`EspeakPhonemizer` serialises every call on an instance lock](../src/VibeSuperTonic.Piper/EspeakPhonemizer.cs)
+because espeak-ng keeps its voice and clause cursor in process-global state. So a
+`render` arriving while the daemon is speaking does not race — it **queues**, and
+the thing it delays is the hotkey the user just pressed.
+
+Worse in the other direction: speechd calls `render` dozens of times a minute, so
+a hotkey press can land behind a queue of key echoes.
+
+This has to be a decided policy, not an emergent one. Options, cheapest first:
+refuse `render` while a session is speaking (speechd sees an error, which it
+handles); render on a second synthesizer instance (memory, and espeak is still
+process-global); or a priority queue. **Whichever it is, `vst-ctl benchmark`
+already sets the precedent** — it refuses concurrent runs with an `Interlocked`
+compare-exchange and says so.
+
+<a name="t13"></a>
+### 13. The AppImage has no stable `vst-ctl` path — but it does have a verb
+
+A module config names an absolute command. An AppImage's contents live in a
+FUSE mount whose path changes every run, so `/tmp/.mount_XXXX/vst-ctl` is a
+config that works once.
+
+**Already solved by the AppImage's own dispatch**, which is worth knowing before
+anyone designs around it:
+[`pack-appimage.sh`](../build/pack-appimage.sh) makes `AppImage ctl …` exec
+`vst-ctl`, and also dispatches on `ARGV0` so a symlink named `vst-ctl` pointing
+at the AppImage works directly. So the config names the AppImage file, which is
+where the user put it and does not move.
+
+The cost is real and must be measured: **every utterance pays a FUSE mount**.
+For a hotkey that is invisible; at Orca's utterance rate it may dominate
+[trap 4](#t4)'s budget. If it does, the answer is a tiny extracted launcher, not
+a redesign — but measure before writing one.
+
+<a name="t14"></a>
+### 14. A module that registers with nothing to say
+
+Three states where the module installs perfectly and produces silence, all of
+them likely on the machine of someone setting this up for the first time:
+
+- **No models downloaded.** The first-run screen has not been accepted, so there
+  is no voice at all. The installer must refuse, loudly, rather than write a
+  config that cannot work.
+- **`DefaultVoice` names a voice that is not installed.** [S3](#s3) generates the
+  voice list, so this is a generation bug — and the failure is at speechd's
+  `INIT`, which the user sees as the module missing from `spd-say -O`.
+- **The daemon is not running and cannot start.** `render` autostarts it like the
+  other verbs, but if that fails the module must exit non-zero with a message on
+  stderr, because speechd logs stderr and a silent success is indistinguishable
+  from a broken audio device.
+
+**The general rule for this feature: never exit 0 having produced no audio.**
+That is the same failure espeak-ng's missing dictionary has
+([P5](PIPER-PLAN.md#p5-landed)), it is the failure this project keeps finding,
+and here it has a screen-reader user on the other end of it.
+
 ---
 
 ## Phases
 
-Deliberately small, and in this order because each one can fail the next.
+Deliberately small, and in this order because each one can fail the next. **S0 is
+a gate**: it is allowed to end this plan.
 
-### S0 · Prove the pipe · half a day
+<a name="s0"></a>
+### S0 · Prove the pipe, and measure it · half a day · **GATE**
 
-`vst-ctl render --out -` producing a WAV that `paplay` plays, driven by a hand
-written module config. **Exit criterion**: `spd-say -o vibesupertonic "hello"`
-speaks in a Supertonic voice, and `spd-say -C` stops it. No installer, no voice
-list, nothing generated.
+`vst-ctl render --out -` producing a WAV that plays, driven by a hand-written
+module config. Then, before anything else is built, **the number**:
 
-If this is not achievable in a day the route is wrong and B needs revisiting
-before anything else is built.
+| Measure | Against | Why it gates |
+| --- | --- | --- |
+| First-word latency, warm, CPU | espeak-ng on the same machine | [Trap 4](#t4). If this is seconds, the feature is for reading and not for echo, and the rest of the plan changes shape |
+| The same, with the utterance being `"a"` | espeak-ng | [Trap 10](#t10). The dominant traffic |
+| The same again, invoked through the AppImage | The tarball's `vst-ctl` | [Trap 13](#t13). Isolates the FUSE mount cost |
 
-### S1 · The `render` verb, properly · one day
+**Exit criterion**: `spd-say -o vibesupertonic "hello"` speaks in a Supertonic
+voice, `spd-say -C` stops it, and the three numbers above are written down.
 
-Streaming rather than buffered — a long document must not be one allocation and
-one silence. WAV header with the voice's real rate ([P3](PIPER-PLAN.md#p3): the
-sink follows the voice, and so must this). `--voice` accepting the qualified id,
-so `piper:de_DE-thorsten-medium` works. Cancellation on SIGTERM and on a closed
-stdout, which is what `spd-say -C` becomes. Tests.
+**This gate can fail, and failing is a result.** If short-utterance latency is
+hopeless on the CPU path, the honest outcomes are (a) ship it for document
+reading and say so, (b) spend the [deferred `totalStep` lever](#inherited)
+first, or (c) stop. Do not build S1–S5 to find out.
 
+<a name="s1"></a>
+### S1 · The `render` verb, properly · one to two days
+
+- **Streaming, not buffered.** A long document must not be one allocation and one
+  silence. WAV header with the voice's real rate — [P3](PIPER-PLAN.md#p3) made
+  the sink follow the voice, and this must too.
+- **`--voice` takes the qualified id**, so `piper:de_DE-thorsten-medium` works,
+  and `#12` speaker selection comes along for free.
+- **Cancellation on SIGTERM and on a closed stdout.** That is what `spd-say -C`
+  becomes; a render that keeps going after its reader is gone is a CPU leak once
+  per interruption, and Orca interrupts constantly.
+- **Concurrency policy, decided and tested** — [trap 12](#t12).
+- **SSML stripped, punctuation levels mapped to nothing, both documented** —
+  [trap 11](#t11).
+- **Never exit 0 with no audio** — [trap 14](#t14).
+- Tests, per [TESTING-PLAN.md](TESTING-PLAN.md).
+
+<a name="s2"></a>
 ### S2 · The installer, and trap 1 · one day
 
-`speechd-install.sh` in the archive beside `install.sh`, and **the enumerate-then
-re-declare dance is most of it**. Reads what `spd-say -O` currently offers,
-copies the system `speechd.conf` if the user has none, re-declares every existing
-module explicitly, adds ours, writes the module conf with absolute paths, and
-restarts speechd. Plus `--remove`, which must put the file back the way it was —
-and a test that proves espeak-ng still answers afterwards, because that is the
-failure that matters.
+`speechd-install.sh` in the archive beside `install.sh`. **The enumerate-then
+re-declare dance is most of it** ([trap 1](#t1)): read what `spd-say -O` offers
+now, copy the system `speechd.conf` if the user has none, re-declare every
+existing module explicitly, add ours, write the module conf with absolute paths
+and correct quoting ([trap 9](#t9)), restart speechd ([trap 7](#t7)).
 
+Also: `--remove` that restores what was there; refusal when no voice is installed
+([trap 14](#t14)); and **no window, ever** — the inherited ssh/TTY constraint,
+which for this installer is not a nicety.
+
+The test that matters is not that ours works. **It is that espeak-ng still
+answers afterwards, and again after `--remove`.**
+
+<a name="s3"></a>
 ### S3 · The voice list · half a day
 
-Generate `AddVoice` lines from installed voices. Decide the mapping onto
-speechd's MALE1/FEMALE1 vocabulary, and decide what happens when a voice is
-installed later — regenerate on `voice install`, or a `vst-ctl speechd-sync`
-verb the Voices tab calls.
+Generate `AddVoice` lines from installed voices, mapping 43 Piper voices and ten
+Supertonic styles onto speechd's `language + MALE1..3 / FEMALE1..3` vocabulary —
+[trap 8](#t8). Only what is installed appears.
 
+This is the first thing in the product that must be **regenerated on a state
+change**, so decide the trigger: a `vst-ctl speechd-sync` verb that
+`voice install` / `voice remove` and the Voices tab all call, or regeneration
+inside the installer only, with a documented "re-run it after adding a voice".
+The first is better and is not much more work.
+
+<a name="s4"></a>
 ### S4 · Packaging · half a day
 
-The script into the tarball, a section in `INSTALL.txt`, and an assertion in
-[pack-tar.sh](../build/pack-tar.sh) in the shape of the nine that exist: the
-generated config must name a `vst-ctl` path that exists, since the failure is a
-module that registers, appears in Orca's voice list, and says nothing.
+The script into the tarball, a section in `INSTALL.txt` — including the honest
+sentence [trap 10](#t10) may require — and packer assertions in the shape of the
+nine that exist:
+
+- the generated config names a `vst-ctl` (or AppImage) path **that exists**;
+- `$DATA` and `$VOICE` are single-quoted in it ([trap 9](#t9) — this one is a
+  security check, not a tidiness one);
+- `speechd-install.sh` is executable and shellcheck-clean.
+
+The failure being guarded is a module that registers, appears in Orca's voice
+list, and says nothing.
+
+<a name="s5"></a>
+### S5 · The safety net · one day
+
+New in this revision of the plan, and it is the half that keeps 0.2.12 from
+being the release that broke somebody's screen reader. Everything in
+[TESTING-PLAN.md](TESTING-PLAN.md) that this feature is the reason for:
+
+- the **restore test** (S2's, automated),
+- the **first-word latency budget** as a checked number rather than a memory,
+- the **archive size budget**,
+- the **no-audio-with-exit-0 test**,
+- and CI actually running the Linux packer, which today it does not.
 
 ---
 
@@ -276,7 +494,14 @@ module that registers, appears in Orca's voice list, and says nothing.
 - **Replacing espeak-ng as the system default.** Ours becomes *available*. Making
   it default is the user's choice and `spd-conf`'s job — and [trap 4](#t4) may
   well say it should not be.
-- **Windows.** SAPI is already done there and this changes nothing about it.
+- **Windows.** SAPI is already done there and this changes nothing about it, and
+  **Windows advances later** — 0.2.12 is a Linux-family release. The constraint
+  that survives is that Core stays platform-neutral, which CI enforces by running
+  `Core.Tests` on both runners.
+- **The daemon's idle-timeout question**, [inherited from the port
+  plan](#inherited), is *answered* here (no timer) but the machinery is not
+  built. Answering it is a sentence in a decision table; building an
+  activity-aware release policy is its own piece of work.
 
 ---
 
@@ -291,3 +516,25 @@ module that registers, appears in Orca's voice list, and says nothing.
 3. **Does the Piper path hold up under a screen reader's utterance rate** —
    dozens of short utterances a minute, each one a process spawn? Route B exists
    for this answer being no.
+4. **What does the FUSE mount cost per utterance** when the module is driven
+   through the AppImage rather than the tarball? [Trap 13](#t13). If it is tens
+   of milliseconds it is noise; if it is hundreds it decides that AppImage users
+   need an extracted launcher.
+5. **Does the deferred `totalStep` lever actually halve the first word**, and is
+   the quality step audible on a one-word utterance? [Inherited](#inherited).
+   Cheap to try, and it is the only lever left on the number [S0](#s0) gates on.
+6. **Is concurrent `render` refused, queued, or given its own session?**
+   [Trap 12](#t12). The answer is a measurement of how often a hotkey press
+   actually lands behind key echo, and `vst-ctl benchmark`'s refusal is the
+   precedent for the cheapest answer.
+
+---
+
+## How this gets verified
+
+[TESTING-PLAN.md](TESTING-PLAN.md) is the companion to this document and was
+written with it. Four properties, and this feature is the reason three of them
+now have budgets rather than opinions: **safe** ([trap 9](#t9) is a shell
+injection surface, and the daemon gains a second caller), **fast**
+([trap 4](#t4) and [trap 10](#t10) are latency budgets S0 gates on), and
+**valid** ([trap 14](#t14) — never exit 0 having produced no audio).

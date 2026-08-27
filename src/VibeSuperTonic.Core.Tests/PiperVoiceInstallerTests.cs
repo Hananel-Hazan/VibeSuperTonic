@@ -125,6 +125,66 @@ public class PiperVoiceInstallerTests : IDisposable
 
     private PiperVoiceInstaller NewInstaller() => new(_root);
 
+    // --------------------------------------------------- what a catalog may do
+    //
+    // A catalog is a file beside the binaries that anything can edit, and these
+    // are the two places where a string in it becomes a path on disk. Neither is
+    // covered by the hash pin: a hash says the bytes are the ones the manifest
+    // named, not that the manifest named a sane place to put them.
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData("../..")]
+    [InlineData("../../../etc")]
+    [InlineData("piper/nested")]
+    [InlineData("/tmp")]
+    public void An_id_that_is_a_path_removes_nothing(string hostile)
+    {
+        // The path that ends in Directory.Delete(recursive: true), reached from
+        // `vst-ctl voice remove` with whatever was typed. The assertion is not
+        // that it returns false — it is that the directory it would have deleted
+        // is still there afterwards.
+        string sentinel = Path.Combine(_root, "piper", "en_US-ljspeech-high");
+        Directory.CreateDirectory(sentinel);
+        File.WriteAllText(Path.Combine(sentinel, "en_US-ljspeech-high.onnx"), "weights");
+
+        var result = NewInstaller().Remove(hostile);
+
+        Assert.False(result.Ok);
+        Assert.Contains("not a voice id", result.Message);
+        Assert.True(Directory.Exists(sentinel), "the store was deleted by an id that is a path");
+        Assert.True(Directory.Exists(_root));
+    }
+
+    [Fact]
+    public async Task A_catalog_entry_whose_id_is_a_path_downloads_nothing()
+    {
+        // Shaped like a real id on purpose. A catalog somebody would actually
+        // paste in does not announce itself with a bare "../.." — it looks like
+        // every other row and carries the traversal in front of a plausible name.
+        var voice = Voice("../../../en_US-escaped-high",
+                          "https://example/a.onnx", new byte[] { 1 },
+                          "https://example/a.onnx.json", new byte[] { 2 });
+
+        var result = await NewInstaller().InstallAsync(voice, null, null, CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Contains("not a voice id", result.Message);
+        // Nothing created anywhere — not the escaped path, and not a stray root.
+        Assert.False(Directory.Exists(
+            Path.GetFullPath(Path.Combine(_root, "..", "..", "..", "en_US-escaped-high"))));
+    }
+
+    [Fact]
+    public void A_voice_id_that_is_a_path_is_never_reported_as_installed()
+    {
+        // IsInstalled is asked while enumerating, so it answers rather than
+        // throwing — and it must answer "no" rather than probing outside.
+        Assert.False(NewInstaller().IsInstalled("../.."));
+        Assert.False(NewInstaller().IsInstalled("/etc"));
+    }
+
+
     // ------------------------------------------------------------- happy path
 
     [Fact]

@@ -67,6 +67,14 @@ public sealed class ModelDownloader
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibeSuperTonic/1.0");
     }
 
+    /// <summary>
+    /// A manifest path resolved under <see cref="_baseDir"/>, or null when it
+    /// escapes — in which case nothing is written and the caller reports it.
+    /// See <see cref="StorePath"/> for why a manifest path needs checking at all.
+    /// </summary>
+    internal string? ResolveInsideBase(string relativePath) =>
+        StorePath.Under(_baseDir, relativePath);
+
     /// <inheritdoc cref="EnsureAllAsync(IProgress{string}?, IProgress{DownloadProgress}?, CancellationToken)"/>
     public Task<bool> EnsureAllAsync(IProgress<string>? log, CancellationToken ct) =>
         EnsureAllAsync(log, null, ct);
@@ -84,7 +92,13 @@ public sealed class ModelDownloader
         bool anyEmptyUrl = false;
         foreach (var f in _manifest.Files)
         {
-            string fullPath = Path.Combine(_baseDir, f.Path);
+            if (ResolveInsideBase(f.Path) is not { } fullPath)
+            {
+                log?.Report($"SKIP {f.Path} — escapes the models directory");
+                allOk = false;
+                continue;
+            }
+
             if (await VerifyAsync(fullPath, f, ct))
             {
                 log?.Report($"OK   {f.Path}");
