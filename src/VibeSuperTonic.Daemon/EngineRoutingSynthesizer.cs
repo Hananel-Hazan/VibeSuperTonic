@@ -115,6 +115,46 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
 
         lock (_gate)
         {
+            try
+            {
+                return SelectLocked(requestedId, voiceId, modelPath);
+            }
+            catch (Exception ex)
+            {
+                // READING SampleRate CAN LOAD A MODEL, and on a fresh install
+                // there is no model to load.
+                //
+                // The fast path below says it is "cheap — one directory stat and
+                // a dictionary lookup", and it is, except that `_current.SampleRate`
+                // asks the Supertonic engine its rate and the engine answers by
+                // loading. With models/onnx absent that throws
+                // DirectoryNotFoundException, and because the daemon's STARTUP
+                // calls Select to point itself at the default voice, the throw
+                // left no handler between here and Main: the daemon logged "no
+                // onnx/ — starting anyway; speech will fail until the models are
+                // downloaded" and then died. A fresh install could not start its
+                // own daemon, which is the one it needs in order to stop being a
+                // fresh install.
+                //
+                // Found 2026-08-27 by build/smoke-test.sh on its first run, in
+                // the 0.2.11 tarball packed the same day. 0.2.10 predates it; the
+                // startup call arrived with P3. Nothing caught it because every
+                // machine that has ever run this has models on it.
+                //
+                // A routing decision is now allowed to FAIL but never to throw:
+                // the press path already refuses on Error before it touches the
+                // rate, and the startup call already logs it.
+                string why = $"{ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}";
+                _log($"engine: could not select '{requestedId ?? "(default)"}' ({why})");
+                return new Selection(false, 0, $"the voice '{requestedId ?? "(default)"}' is not ready — {why}");
+            }
+        }
+    }
+
+    /// <summary>The body of <see cref="Select"/>, under <c>_gate</c>.</summary>
+    private Selection SelectLocked(string? requestedId, string? voiceId, string? modelPath)
+    {
+        {
             // Already there. Cheap and by far the common case — one directory
             // stat and a dictionary lookup.
             if (modelPath is null && _currentPiperVoice is null)

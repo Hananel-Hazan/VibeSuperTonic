@@ -16,12 +16,16 @@ defended very well, one is defended by accident, and two are not defended at all
 | **Unit tests** | 1159, ~0.8 s, no network, no models, no native libraries | Logic. The bulk of the product's behaviour |
 | **Packer assertions** | 9 in [pack-tar.sh](../build/pack-tar.sh), run against the *composed tree* | Silent packaging defects — a stale binary, a managed apphost, 330 MB of CUDA, a missing dictionary |
 | **The parity spike** | [spike/piper-phonemes](../spike/piper-phonemes) — 327 sentences against piper's own output, with five deliberate sabotages that must all be caught | Phoneme divergence, which is wrong audio rather than a failure |
-| **CI** | [build.yml](../.github/workflows/build.yml): a Windows job and a Linux job | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed |
+| **CI** | [build.yml](../.github/workflows/build.yml): four jobs — `build` (Windows), `linux`, and, since 2026-08-27, `pack` and `smoke` | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **and now all nine packer assertions plus "does the archive run on Ubuntu 22.04"** |
 
-**The gap in one sentence: CI runs none of the packer's nine assertions, never
-builds espeak-ng, and never runs the parity spike** — so every check that
-defends the *artifact* runs only on the one machine that packs it, and only when
-a human runs the packer.
+**The gap this document opened with — *CI runs none of the packer's nine
+assertions, never builds espeak-ng, and never runs the parity spike* — is
+two-thirds closed as of 2026-08-27.** `pack` builds espeak-ng against a
+pin-keyed cache and runs the packer; `smoke` extracts the tarball it produced
+into a bare `ubuntu:22.04` container and starts the daemon there. The parity
+spike in CI is [item 8](#the-order-to-do-it-in) and still open.
+
+[What that cost, and what it caught on its first run](#what-2-found).
 
 ---
 
@@ -245,8 +249,8 @@ Ranked by defect-caught per hour, not by axis.
 
 | # | Item | Axis | Cost |
 | --- | --- | --- | --- |
-| 1 | **CI runs `pack-tar.sh`** with a cached espeak build | valid | half a day |
-| 2 | **Clean-container smoke test** of the tarball on Ubuntu 22.04 | valid | half a day |
+| 1 | ✅ **CI runs `pack-tar.sh`** with a cached espeak build — **done 2026-08-27** | valid | half a day |
+| 2 | ✅ **Clean-container smoke test** on Ubuntu 22.04 — **done 2026-08-27**, and it found a release blocker on its first run | valid | half a day |
 | 3 | **Archive size budget** with a ten-biggest-files report on failure | slim | an hour |
 | 4 | **Socket mode test** | safe | an hour |
 | 5 | **Pin the ORT nupkg hash** in `install-gpu.sh` | safe | an hour |
@@ -260,3 +264,44 @@ Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one
 question nothing currently answers — *does the thing we ship run somewhere that
 is not this laptop?*
+
+---
+
+<a name="what-2-found"></a>
+
+## What item 2 found, in its first run
+
+**The daemon could not start on a fresh install.** It logged, correctly, `no
+onnx/ under …/models — starting anyway; speech will fail until the models are
+downloaded`, and then died with an unhandled `DirectoryNotFoundException`.
+
+The mechanism is worth keeping, because it is a shape rather than an incident.
+`EngineRoutingSynthesizer.Select` has a fast path whose own comment reads
+*"cheap and by far the common case — one directory stat and a dictionary
+lookup"*. It reads `_current.SampleRate`. The Supertonic engine answers that
+question **by loading the model**. So a routing decision that changed nothing
+performed a model load, and with `models/onnx` absent it threw — from the
+daemon's *startup* call, where nothing stood between it and `Main`.
+
+A fresh install could not start the daemon it needs in order to stop being a
+fresh install.
+
+| Release | State |
+| --- | --- |
+| 0.2.10 | **Passes.** Predates the startup call |
+| 0.2.11 | **Fails.** Packed 2026-08-27, never published — the first artifact to carry it |
+| Introduced by | `3d5e8ff`, P3, *"A Piper voice speaks through the product"* |
+
+**Why nothing caught it for two phases**: every machine that has ever run this
+product has models on it. 1159 unit tests, nine packer assertions and a CI job
+all pass against a tree that cannot start. It took an empty directory on a
+machine that had never seen the product.
+
+Fixed by making a routing decision able to **fail but never throw** — the press
+path already refuses on `Selection.Error` before it touches the rate, and the
+startup call already logs it. Two regression tests, both observed failing
+against the unfixed code first.
+
+**This is the argument for items 1 and 2 in one paragraph.** They cost a day and
+the first run of one of them found a release blocker in an artifact that was
+already built.

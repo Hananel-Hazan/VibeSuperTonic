@@ -137,3 +137,96 @@ jobs:
             echo "vst-ctl is not a native ELF executable:"; file out/ctl/vst-ctl; exit 1
           }
           echo "OK: $(file -b out/ctl/vst-ctl | cut -d, -f1-2), $(du -h out/ctl/vst-ctl | cut -f1)"
+
+  # ------------------------------------------------------------------- pack
+  #
+  # WHY THIS JOB EXISTS. build/pack-tar.sh carries nine assertions, and until
+  # this job they ran ONLY on the machine that packed a release, only when a
+  # human ran the packer. Every one of them guards a failure that is silent — a
+  # stale binary, a managed apphost, 330 MB of CUDA provider, a missing espeak
+  # dictionary that makes a voice produce no sound while exiting 0. A green
+  # `build` job said nothing about any of them.
+  #
+  # It is also the only job that builds espeak-ng, so P5's payload is otherwise
+  # unverified between releases.
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      # The pin is a fixed commit, so the key is exact: the payload rebuilds only
+      # when the pin moves. piper-voices.json and P1's corpus are in the key too
+      # because they DECIDE WHICH DICTIONARIES the payload contains — a catalog
+      # that gained a language against a cached payload would fail the packer's
+      # behavioural check, which is the right outcome but a confusing way to
+      # learn it.
+      - name: Cache the espeak-ng payload
+        id: espeak-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/espeak-out/espeak
+            build/espeak-out/install
+          key: espeak-${{ runner.os }}-${{ hashFiles('build/build-espeak.sh', 'piper-voices.json', 'spike/piper-phonemes/corpus.json') }}
+
+      - name: Build espeak-ng
+        if: steps.espeak-cache.outputs.cache-hit != 'true'
+        run: bash build/build-espeak.sh
+
+      # No -v: the default is <VstVersion> from Directory.Build.props, which is
+      # what assertion 1 checks the binaries against. Passing a version here
+      # would test the flag rather than the agreement.
+      - name: Pack the Linux tarball, with its nine assertions
+        run: bash build/pack-tar.sh
+
+      # The script travels WITH the tarball rather than being checked out in the
+      # smoke job: that job runs in a bare ubuntu:22.04 container, which has no
+      # git, and actions/checkout without git falls back to a REST download —
+      # one more thing to fail for a reason unrelated to the archive.
+      - name: Upload the tarball and its smoke test
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: |
+            dist/*.tar.gz
+            build/smoke-test.sh
+          retention-days: 7
+
+  # ------------------------------------------------------------------ smoke
+  #
+  # DOES THE ARCHIVE OPEN SOMEWHERE ELSE. Every check above runs on a machine
+  # with the .NET SDK, a display, ICU, espeak-ng and every build dependency the
+  # product does not ship. The glibc-floor assertion measures ELF symbol
+  # versions and concludes "Ubuntu 22.04+"; this job is that claim's experiment,
+  # run on the oldest distro the floor says is supported.
+  #
+  # ubuntu:22.04 bare, with nothing installed into it beyond what tar needs.
+  smoke:
+    runs-on: ubuntu-latest
+    needs: pack
+    container: ubuntu:22.04
+    steps:
+      - name: Download the tarball and its smoke test
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      # NOTHING IS INSTALLED INTO THIS CONTAINER. That is the experiment: the
+      # product claims to bring its own runtime, and ubuntu:22.04 is the oldest
+      # distro the glibc floor says is supported. If this job ever needs libicu,
+      # openssl or libespeak-ng added to it, that is a FINDING ABOUT THE ARCHIVE
+      # and belongs in INSTALL.txt — it is not a fix to this file.
+      - name: Extract
+        run: |
+          mkdir -p /tmp/release
+          tar -xzf dist/VibeSuperTonic-*.tar.gz -C /tmp/release
+          ls -la /tmp/release/VibeSuperTonic | head
+
+      - name: Smoke test
+        run: bash build/smoke-test.sh /tmp/release/VibeSuperTonic

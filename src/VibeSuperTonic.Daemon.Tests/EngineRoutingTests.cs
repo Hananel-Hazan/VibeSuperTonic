@@ -59,6 +59,73 @@ public class EngineRoutingTests : IDisposable
         public void Dispose() { }
     }
 
+    /// <summary>
+    /// A synthesizer that cannot answer its own rate — which is what the
+    /// Supertonic engine IS on a machine with no models, because it answers
+    /// <c>SampleRate</c> by loading one.
+    /// </summary>
+    private sealed class UnloadableSynth : ISynthesizer
+    {
+        public int SampleRate =>
+            throw new DirectoryNotFoundException(
+                "ONNX model directory not found: /nope/models/onnx. Models download on first run.");
+
+        public short[] Synthesize(string text, SynthesisOptions options, CancellationToken cancellationToken = default) =>
+            throw new DirectoryNotFoundException("ONNX model directory not found");
+
+        public Task PreloadAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void A_fresh_install_with_no_models_can_still_start_its_daemon()
+    {
+        // THE 0.2.11 REGRESSION, and the reason build/smoke-test.sh exists.
+        //
+        // The daemon calls Select at STARTUP to point itself at the default
+        // voice. Select's fast path reads _current.SampleRate — described in its
+        // own comment as "cheap, one directory stat and a dictionary lookup" —
+        // and the Supertonic engine answers that question by loading the model.
+        // With models/onnx absent it throws, and at startup there is no handler
+        // between Select and Main: the daemon logged "starting anyway; speech
+        // will fail until the models are downloaded" and then died.
+        //
+        // A fresh install could not start the daemon it needs in order to stop
+        // being a fresh install. Every machine that had ever run this had models
+        // on it, so nothing saw it until an empty directory did.
+        //
+        // A routing decision may fail. It may not throw.
+        var log = new List<string>();
+        using var router = Router(new UnloadableSynth(),
+            _ => throw new Xunit.Sdk.XunitException("must not build Piper"),
+            () => SpeechStateProbe.Idle, log);
+
+        var selection = router.Select("M1");
+
+        Assert.NotNull(selection.Error);
+        Assert.Contains("not ready", selection.Error);
+        // The reason survives to the message, so a user is told what is missing
+        // rather than that something went wrong.
+        Assert.Contains("Models download on first run", selection.Error);
+        Assert.Contains(log, m => m.Contains("could not select"));
+    }
+
+    [Fact]
+    public void The_default_voice_at_startup_is_asked_for_by_a_null_id()
+    {
+        // Program.cs passes `voice ?? config.Settings.DefaultVoice`, which is
+        // null when neither is set — the exact shape of a fresh install. It must
+        // reach the same refusal rather than a NullReferenceException on the way.
+        using var router = Router(new UnloadableSynth(),
+            _ => throw new Xunit.Sdk.XunitException("must not build Piper"),
+            () => SpeechStateProbe.Idle);
+
+        var selection = router.Select(null);
+
+        Assert.NotNull(selection.Error);
+        Assert.Contains("(default)", selection.Error);
+    }
+
     private EngineRoutingSynthesizer Router(
         ISynthesizer supertonic,
         Func<string, ISynthesizer> buildPiper,

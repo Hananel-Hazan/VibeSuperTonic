@@ -56,15 +56,24 @@ otherwise conclude retroactively.
 checks against four properties — **safe, slim, fast, valid** — and is worth
 reading before adding a test, because it says where a check belongs and why.
 
-Two things from it that change how a release run should be read:
+**Since 2026-08-27 CI packs and smoke-tests**, which changes how a green run
+should be read. Two jobs were added to [build.yml](.github/workflows/build.yml):
 
-- **CI runs none of the packer's assertions**, never builds espeak-ng, and never
-  runs the parity spike. Every check that defends the *artifact* runs only on the
-  machine that packs it. Until that changes, "CI is green" says nothing about the
-  archive.
-- **Nothing smoke-tests the finished archive** on a machine that is not this one.
-  The glibc-floor assertion makes a claim about Ubuntu 22.04 that nothing
-  verifies by running there.
+- **`pack`** builds espeak-ng (cached on the pin) and runs `pack-tar.sh`, so all
+  nine assertions run on every push rather than only when a human packs.
+- **`smoke`** extracts that tarball into a bare `ubuntu:22.04` container — the
+  oldest distro the glibc floor claims — and starts the daemon there with no
+  .NET, no display, no audio device, no models and no espeak-ng installed.
+  [build/smoke-test.sh](build/smoke-test.sh) is the same script you can run
+  locally against any extracted release.
+
+**Nothing is installed into that container on purpose.** If the smoke job ever
+needs `libicu`, `openssl` or `libespeak-ng` added to it, that is a finding about
+the archive and belongs in `INSTALL.txt` — it is not a fix to the workflow.
+
+Its first run found that **the daemon could not start on a fresh install**: a
+routing decision read `SampleRate`, which loads the model, from the daemon's
+startup path with no models present. 0.2.10 was fine; 0.2.11 was not.
 
 The rule the existing checks are built on, and the one to keep: **a check that
 has never been observed failing is not evidence.** Every packer assertion was
