@@ -178,6 +178,75 @@ serializer unchanged.
 
 ---
 
+<a name="two-daemons"></a>
+
+## Why two daemons, and why neither replaces the other
+
+Asked 2026-08-27, and worth settling in writing because it looks like
+duplication and is not. After 0.2.12 a machine runs **`vibesupertonicd`** and
+**`speech-dispatcher`**, and the honest framing is: **ours is the engine, theirs
+is the distribution channel.**
+
+### What each one can do that the other cannot
+
+| | `vibesupertonicd` | `speech-dispatcher` |
+| --- | --- | --- |
+| Holds the warm ONNX session (~830 MB) | **yes** | no — modules are slaves it starts and stops |
+| Global hotkey, selection capture, tray, UI | **yes** | no concept of any of it |
+| Reachable by Orca and other applications | no, and never will be | **yes** — that is the whole point |
+| Routes per message type (echo vs reading) | no | **yes** |
+| Works on a machine that has the other | **yes** | yes |
+
+### Why we cannot drop ours and simply be a module
+
+1. **A module cannot own a hotkey, a tray, or the selection.** speechd spawns
+   modules, tells them to speak, and stops them. Press-a-key-and-read-what-is-
+   selected has no speechd equivalent — it is not a TTS operation.
+2. **A module's lifecycle belongs to speechd.** It restarts them on config
+   reload, on error, on `spd-conf`. An 830 MB session reloading on someone
+   else's schedule is a 0.43 s stall at a moment we do not choose, in a process
+   we do not control.
+3. **Portability, directly.** On a machine with no speech-dispatcher — a minimal
+   WM, a container, a live USB — the product would be dead. Today it works
+   there. Speech Dispatcher must stay something the product *offers*, never
+   something it *needs*.
+4. **Safety.** speechd's own socket here is `srw-rw-rw-` — mode 0666, gated only
+   by its parent directory being 0700. Ours is 0600 **inside** a 0700 directory,
+   and [`Protocol.SocketPath`](../src/VibeSuperTonic.Core/Ipc/Protocol.cs) sets
+   both explicitly rather than inheriting them, because the `$XDG_RUNTIME_DIR`
+   fallback is a shared `/tmp`. speechd can also be put on a TCP port — not the
+   default, `LocalhostAccessOnly` on when it is, but one config line away.
+   Keeping the model behind *our* socket means speechd's configuration cannot
+   widen who reaches it: the module is just another local client with no more
+   access than the user already has.
+
+### Why we cannot drop theirs either
+
+Nothing else on the system can reach our voices. Orca does not know our socket
+exists and never will. That is the entire reason this plan exists.
+
+### What the second daemon actually costs
+
+Close to nothing, and much less than it looks:
+
+- **We are not adding a daemon.** speech-dispatcher already runs for anyone with
+  a screen reader — it is how they hear anything at all. Measured here:
+  `speech-dispatcher` 15 MB, `sd_espeak-ng` 10 MB, `sd_dummy` 7 MB.
+- **A user with no screen reader pays nothing.** speechd is not running, so our
+  module is never loaded.
+- **One copy of the model, in our process.** The module holds no model; it spawns
+  `vst-ctl` (4 MB, 2 ms) per utterance and streams. ~40 MB of speechd stack
+  against our 830 MB is noise.
+
+**So the shape is settled**: our daemon stays the only thing that loads a model,
+speechd stays optional, and the module between them is a thin adapter that holds
+no state. That is the same conclusion
+[the port plan reached in 2026](LINUX-PORT-PLAN.md#non-goals-for-v1) when it
+deferred this — *"it needs the same warm-model daemon this plan builds, so it
+becomes a thin front-end later at low cost"* — now with the numbers attached.
+
+---
+
 <a name="traps"></a>
 
 ## Traps
