@@ -410,6 +410,61 @@ Three consequences, none of which the current product is shaped for:
   message type, so that is a configuration, not a failure — and saying so in
   `INSTALL.txt` is more honest than pretending otherwise.
 
+<a name="t15"></a>
+### 15. A generic module cannot tell a keystroke from a sentence
+
+**Measured 2026-08-27, and it decides how echo is routed.** speech-dispatcher's
+protocol has distinct message types — `SPEAK`, `CHAR`, `KEY`, `SOUND_ICON` — and
+`spd-say` exposes them as `-c` and `-k`. A probe module was given all three:
+
+| Sent | What `sd_generic` handed the command |
+| --- | --- |
+| `spd-say "hello world"` | `hello world` |
+| `spd-say -c a` | `a` |
+| `spd-say -k Control_L` | `Control_L` |
+
+**All three arrive as bare `$DATA`, with nothing marking which was which.**
+`sd_generic` has one `module_speak` and one `GenericExecuteSynth`; the type does
+not survive. So the plan's "neural for reading, espeak for echo" cannot be driven
+by message type on [route A](#decide).
+
+**It can be driven by shape, and nearly exactly.** A `CHAR` is always one
+character. A `KEY` is always a keysym name, and those are enumerable. Everything
+else is `SPEAK`. So the wrapper routes on the text it was given:
+
+    one character            -> espeak      (3.3 ms)
+    a known keysym name      -> espeak      (3.3 ms)
+    anything else            -> neural      (718 ms to first word)
+
+The only case it gets "wrong" is someone asking to *read* a single letter, which
+espeak answers instantly and correctly — a better outcome than 383 ms of waiting.
+
+**This is also the first real argument for [route B](#decide).** A native module
+receives `SPDMessageType` in `module_speak` and would not need a heuristic. S0
+showed route B saves six milliseconds of latency, which was not worth a binary;
+*correct echo routing* is a better reason, and if the heuristic ever proves wrong
+in the field, that is the upgrade path rather than a redesign.
+
+<a name="t16"></a>
+### 16. A screen reader that goes silent is worse than one that sounds wrong
+
+Every other trap here is about correctness. This one is about what happens when
+something breaks for a user who cannot see the error.
+
+The daemon can be missing, un-startable, or still loading its model. Under
+[trap 14](#t14) the module exits non-zero and speechd logs it — correct, and the
+user hears **nothing**, which for someone navigating by ear is indistinguishable
+from the machine having died.
+
+**We now ship a voice that cannot fail**: 27 KB, no model, no daemon, 3.3 ms.
+So the module should fall back to it rather than to silence — degraded, obviously
+different, and still speaking. That turns the worst failure in this feature from
+"my screen reader stopped" into "my screen reader sounds like espeak again", which
+is a thing a user can notice, describe, and work around.
+
+**Decide this before S1**, because it shapes the wrapper: the fallback is either
+the wrapper's job or nobody's.
+
 <a name="t11"></a>
 ### 11. SSML and punctuation modes arrive whether we handle them or not
 
