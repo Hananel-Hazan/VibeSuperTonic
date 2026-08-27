@@ -338,6 +338,28 @@ _assert_catalog() {
 }
 _assert_catalog
 
+# --- 3d. nothing in the archive needs ICU ------------------------------------
+#
+# .NET probes for libicuuc/libicudata at PROCESS START unless the app declares
+# invariant globalization, and ABORTS if it finds none — before Main, so there is
+# no message from the program, only the runtime's. Every desktop has ICU, so this
+# is invisible until the first machine that has not got one, and INSTALL.txt
+# promises "No runtime to install. All three binaries carry what they need."
+#
+# vibesupertonic-ui was that binary. Measured 2026-08-27: it probed libicuuc.so
+# .78, .79, .80 and .81 in turn, and CI's bare ubuntu:22.04 container had none.
+# vst-ctl is NativeAOT and ships no runtimeconfig.json, so it is covered by its
+# csproj and by the smoke test rather than here.
+for cfg in "$staging"/*.runtimeconfig.json; do
+    [[ -e "$cfg" ]] || continue
+    grep -q '"System.Globalization.Invariant": *true' "$cfg" \
+        || die "$(basename "$cfg") does not declare invariant globalization.
+       That binary probes for libicu at startup and aborts if the machine has
+       none — which every desktop does have, so this fails only for the users
+       least able to diagnose it. Set <InvariantGlobalization>true in its csproj."
+done
+info "no binary in the archive needs ICU"
+
 # --- 3c. the phonemiser is the one we built, and it works (P5) ---------------
 #
 # THREE FAILURES, ALL SILENT, ALL IN THE SAME DIRECTORY.

@@ -28,6 +28,29 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>vibesupertonic-ui</AssemblyName>
+
+    <!--
+      NO ICU, matching the daemon and vst-ctl — and this was the ONE binary that
+      did not, which is a thing nobody would find on a desktop.
+
+      Without it .NET probes for libicuuc/libicudata at process start and ABORTS
+      if none is there, before Main runs. Measured 2026-08-27: the shipped UI
+      probed for libicuuc.so.78, .79, .80 and .81 in turn. Every desktop has one,
+      so it works everywhere a person would look — and it made
+      this binary fail to start at all in a bare ubuntu:22.04, which is the
+      first machine that ever ran it without a desktop already installed.
+
+      That mattered because INSTALL.txt promises "No runtime to install. All
+      three binaries carry what they need", and for this one that was false.
+      Found by build/smoke-test.sh in CI, which is exactly the kind of
+      finding about the archive that job exists to produce.
+
+      What it costs: culture-aware collation and formatting become invariant.
+      The UI sorts language names that are ASCII English and formats sizes and
+      rates, so nothing here changes; text rendering is HarfBuzz and never
+      touched ICU.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <RootNamespace>VibeSuperTonic.Ui</RootNamespace>
     <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
     <VstPortable>false</VstPortable>

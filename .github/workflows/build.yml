@@ -105,7 +105,40 @@ jobs:
       # when Phase 1 landed Core.Tests. It has: the guard is now permanently true
       # and only obscures a failure to restore.
       - name: Test platform-neutral code
-        run: dotnet test VibeSuperTonic.linux.slnx -c Release --nologo
+        run: >
+          dotnet test VibeSuperTonic.linux.slnx -c Release --nologo
+          --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      # WHY THIS EXISTS. A failing test step reports "Process completed with exit
+      # code 1" and nothing else to anyone without admin rights on the repository
+      # — the job log needs them, and the check-run annotations carry only that
+      # one line. The step summary does NOT: it comes back in the check-run's
+      # `output.summary`, readable by anybody. So the names of the failing tests
+      # go there, and a red run becomes diagnosable from outside.
+      - name: Which tests failed
+        if: failure()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          print("## Failing tests\n")
+          found = False
+          for f in glob.glob("TestResults/**/*.trx", recursive=True):
+              for r in ET.parse(f).getroot().iterfind(".//t:UnitTestResult", ns):
+                  if r.get("outcome") != "Failed":
+                      continue
+                  found = True
+                  print(f"### {r.get('testName')}\n")
+                  msg = r.find(".//t:Message", ns)
+                  tr = r.find(".//t:StackTrace", ns)
+                  print("```")
+                  if msg is not None and msg.text: print(msg.text.strip()[:1500])
+                  if tr is not None and tr.text: print(tr.text.strip()[:1500])
+                  print("```\n")
+          if not found:
+              print("No failed test was recorded — the step failed before or "
+                    "outside the test run. Check the build output.")
+          PY
 
       # PublishAot only takes effect on `dotnet publish`, so the step above
       # compiles vst-ctl without ever exercising the native toolchain — and the
@@ -229,4 +262,20 @@ jobs:
           ls -la /tmp/release/VibeSuperTonic | head
 
       - name: Smoke test
-        run: bash build/smoke-test.sh /tmp/release/VibeSuperTonic
+        run: |
+          set -o pipefail
+          bash build/smoke-test.sh /tmp/release/VibeSuperTonic 2>&1 | tee /tmp/smoke.log
+
+      # Same reasoning as the linux job's: the smoke script says exactly which
+      # check failed and why, and that text is unreadable without admin rights
+      # unless it is put in the step summary.
+      - name: What the smoke test said
+        if: failure()
+        run: |
+          {
+            echo '## Smoke test failed'
+            echo
+            echo '```'
+            tail -60 /tmp/smoke.log 2>/dev/null || echo "(no output captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

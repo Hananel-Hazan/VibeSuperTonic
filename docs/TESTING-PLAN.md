@@ -305,3 +305,24 @@ against the unfixed code first.
 **This is the argument for items 1 and 2 in one paragraph.** They cost a day and
 the first run of one of them found a release blocker in an artifact that was
 already built.
+
+### And what the first run *in CI* found
+
+The local run found the fresh-install crash. The first run in a real
+`ubuntu:22.04` container found a second thing, of exactly the shape the job was
+built to catch: **`vibesupertonic-ui` could not start at all.**
+
+It was the one binary without `<InvariantGlobalization>`, so .NET probed for
+`libicuuc.so.78`, `.79`, `.80` and `.81` at process start and aborted when the
+container had none — before `Main`, so the program itself said nothing. Every
+desktop has ICU, which is why it had never been seen; `INSTALL.txt` promises
+*"No runtime to install. All three binaries carry what they need"*, and for that
+one it was false.
+
+Fixed by matching the daemon and `vst-ctl`, plus **assertion 3d**: every
+`*.runtimeconfig.json` in the archive must declare invariant globalization. The
+smoke test is what found it, and the packer assertion is what makes it a
+five-second failure on any machine instead of a container-only one.
+
+**Both findings are the same lesson.** A check that only ever runs where the
+product already works cannot find what the product needs.
