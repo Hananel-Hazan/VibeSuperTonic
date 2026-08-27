@@ -505,15 +505,78 @@ process spawn to the first PCM byte past the header, against the same machine's
    Worth trying for the reading case; it does not rescue echo.
 
 **The verdict, which is a product judgement and not a threshold:** ship it for
-**reading**, and say plainly that echo should stay on espeak-ng. speech-dispatcher
-selects a module per message type, so that is a configuration a user makes once,
-not a limitation they have to work around. 718 ms before the first word of a
+**reading**, and let echo be handled by espeak. 718 ms before the first word of a
 paragraph is the same order as the hotkey path this product already ships and
-that people already use by choice.
+that people already use by choice; 383 ms per keystroke is not an echo.
 
-**What that changes below**: [S3](#s3) should set the module up for the message
-types it is good at rather than claiming all of them, and [S4](#s4)'s
-`INSTALL.txt` section carries the honest sentence rather than burying it.
+<a name="whose-espeak"></a>
+
+#### "Echo stays on espeak" — but *whose* espeak? Measured 2026-08-27
+
+The first version of that sentence said "leave echo on espeak-ng" and meant the
+distro's module, which would have been a mistake worth naming, because **we
+already ship a complete espeak-ng and it is faster than the distro's.**
+
+`build/build-espeak.sh` turns off `USE_LIBPCAUDIO`, `USE_KLATT` and
+`USE_SPEECHPLAYER`, which reads like "no synthesis". It is not: those remove the
+audio *device* backend and two optional synthesisers. eSpeak's own formant
+synthesiser is the core of the library and is untouched, so `--stdout` produces
+a WAV exactly as upstream does — checked, and it is what the numbers below were
+taken from.
+
+| First audio, median of nine | Ours (bundled) | The distro's |
+| --- | --- | --- |
+| `a` | **3.3 ms** | 6.6 ms |
+| `Control_L` | **3.7 ms** | 5.0 ms |
+| A sentence | **3.2 ms** | 4.0 ms |
+
+**Ours wins because of the flags, not despite them** — there is no audio device
+to open, so there is nothing to initialise before the first sample.
+
+And the binary that drives it is **31 KB**, 27 KB stripped, 9 KB in the archive,
+linking nothing but our own `libespeak-ng.so.1` and libc. We ship the library
+already; shipping the binary beside it rounds to nothing.
+
+**So the dependency question answers itself.** Routing echo to the distro's
+module would reintroduce exactly the sidecar this project's
+[GPL-3.0 decision](PIPER-PLAN.md#gpl) was made to remove — *"no apt package, no
+version to detect, no distro variation"* — for a component we already carry, and
+it would put our installer's [trap 1](#t1) mistake in front of the user's echo
+as well as their reading. **0.2.12 should ship both voices: neural for reading,
+our own espeak for echo, nothing installed.**
+
+<a name="echo-cache"></a>
+
+#### Could the neural voice do echo after all? A cache, measured
+
+Worth answering with numbers rather than an opinion, because the appeal is real:
+one voice for everything.
+
+| | |
+| --- | --- |
+| `render` with empty text — the verb's floor, no synthesis | **4.6 ms** |
+| A cache hit ≈ that floor + a 114 KB read and its base64 | **~6 ms, estimated** |
+| A 56-entry echo vocabulary, rendered | 6.2 MB, 114 KB each, 21.7 s to build |
+| Extrapolated to 500 entries | ~56 MB |
+
+So **yes, it works**: the echo vocabulary is small and enumerable — letters,
+digits, key names — and serving it from disk lands in espeak's own territory.
+
+**But notice what it buys.** It is not speed: our espeak is already 3.3 ms. It is
+**voice consistency**, and it costs 6–56 MB, a rebuild on every voice change
+(~0.4 s per entry), and a miss policy for the unbounded case — word echo is not
+enumerable, so a miss is either a 383 ms stall or a voice that changes
+mid-stream. Both are worse than a user who deliberately chose a fast flat voice
+for echo, which is what many screen-reader users do already.
+
+**Recommendation: not in 0.2.12.** Ship our espeak for echo, and keep this
+section so that whoever wants one voice everywhere has the measurements rather
+than the argument.
+
+**What all this changes below**: [S3](#s3) sets the module up for the message
+types it is good at and declares an espeak-backed one for the rest, [S4](#s4)
+ships the 31 KB binary and its `INSTALL.txt` sentence says what each voice is
+for.
 
 <a name="s1"></a>
 ### S1 · The `render` verb, properly · one to two days
@@ -613,6 +676,8 @@ being the release that broke somebody's screen reader. Everything in
   activity-aware release policy is its own piece of work.
 
 ---
+
+<a name="open"></a>
 
 ## Open questions, to answer with a measurement rather than a preference
 
