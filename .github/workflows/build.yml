@@ -261,10 +261,19 @@ jobs:
           tar -xzf dist/VibeSuperTonic-*.tar.gz -C /tmp/release
           ls -la /tmp/release/VibeSuperTonic | head
 
+      # NO BASHISMS IN THIS JOB. A container job runs its steps with `sh -e`, not
+      # `bash -e` — so `set -o pipefail` here failed with "Illegal option" under
+      # dash before the script was ever reached. Redirect and re-read rather than
+      # pipe through tee: it needs no pipefail, and it does not assume the shell
+      # wrapping the step is the same one that runs the script.
       - name: Smoke test
         run: |
-          set -o pipefail
-          bash build/smoke-test.sh /tmp/release/VibeSuperTonic 2>&1 | tee /tmp/smoke.log
+          if bash build/smoke-test.sh /tmp/release/VibeSuperTonic > /tmp/smoke.log 2>&1; then
+            cat /tmp/smoke.log
+          else
+            cat /tmp/smoke.log
+            exit 1
+          fi
 
       # Same reasoning as the linux job's: the smoke script says exactly which
       # check failed and why, and that text is unreadable without admin rights
@@ -272,10 +281,9 @@ jobs:
       - name: What the smoke test said
         if: failure()
         run: |
-          {
-            echo '## Smoke test failed'
-            echo
-            echo '```'
-            tail -60 /tmp/smoke.log 2>/dev/null || echo "(no output captured)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo '## Smoke test failed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/smoke.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
