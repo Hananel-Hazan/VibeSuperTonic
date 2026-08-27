@@ -138,6 +138,44 @@ GenericExecuteSynth "printf %s \'$DATA\' | $HOMEDIR/vst-ctl render --out - --voi
 it is [trap 3](#t3): if our daemon played, speechd would lose the ability to stop
 what it started, which is the single thing a screen reader needs most.
 
+<a name="transport"></a>
+
+### How the audio crosses the socket — decided, because it is a protocol change
+
+**The control socket is line-delimited JSON**, source-generated for NativeAOT
+([Protocol.cs](../src/VibeSuperTonic.Core/Ipc/Protocol.cs)). There is no binary
+frame and there must not be an accidental one, so this is settled here rather
+than by whoever reaches it first.
+
+| Option | Why not |
+| --- | --- |
+| A temp WAV the daemon writes and `vst-ctl` cats | **Not streaming.** speechd would wait for the whole render before the first sample. `swift-generic.conf` does this and it is why swift feels slow; `mimic3-generic.conf` pipes `--stdout` instead |
+| A second socket, or fd passing, for audio | A new IPC surface, new lifetime and cleanup rules, and a second thing to get wrong on every code path — for a saving that does not exist on a unix socket |
+| `vst-ctl` loads the model itself | A cold load per utterance. This is the thing the daemon exists to avoid |
+
+**Chosen: base64 PCM chunks as multi-reply JSON lines**, which is not a new
+pattern — it is the one `benchmark` and `voice install` already use. A client
+reads lines until one arrives without the progress field set
+([`RequestVerb.VoiceInstall`](../src/VibeSuperTonic.Core/Ipc/Protocol.cs) states
+the contract), and 43 voices of catalog already cross this socket as one ~40 KB
+line, so a large line is precedented in kind.
+
+What it costs and why that is acceptable: **33% encoding overhead on a local
+unix socket**, which is not a number anyone can measure against a neural render.
+What it buys: streaming from the first chunk, cancellation for free (the daemon
+stops writing when the peer goes away), no new IPC surface, and the AOT
+serializer unchanged.
+
+**Two rules that come with it**, both of which are how this goes wrong:
+
+- **Chunk, and bound the chunk.** `StreamReader.ReadLineAsync` has no length cap
+  in either direction, so "one line per utterance" is unbounded memory driven by
+  whatever a client sends. One chunk per rendered segment, and a stated ceiling.
+- **`vst-ctl render` writes the WAV header itself**, then streams decoded chunks
+  to stdout. The header needs the voice's real sample rate, which is in the first
+  reply — so the first reply carries the format and no audio, exactly as the
+  multi-reply pattern already does for a byte count.
+
 ---
 
 <a name="traps"></a>
@@ -388,6 +426,24 @@ and here it has a screen-reader user on the other end of it.
 Deliberately small, and in this order because each one can fail the next. **S0 is
 a gate**: it is allowed to end this plan.
 
+### What is a human's, and cannot be handed to anyone else
+
+Three items in this plan are **not** implementation, and a run that treats them
+as implementation produces a confident wrong answer:
+
+1. **S0's verdict.** The gate measures three numbers and then someone decides
+   whether they are good enough to keep building. That is a product judgement
+   about who this feature is for, not a threshold in a script. S0 *reports*; a
+   person *decides*.
+2. **The Voices tab's first human eye.** Owed since P4, and [S3](#s3) generates
+   the module's voice list from the same state. Nothing automated can tell you a
+   layout is wrong.
+3. **Whether the honest sentence goes in `INSTALL.txt`** — [trap 10](#t10)'s
+   "excellent for reading, leave espeak-ng for keystroke echo". That is a claim
+   about the product, and it depends on 1.
+
+Everything else in S1–S5 is ordinary work with testable exits.
+
 <a name="s0"></a>
 ### S0 · Prove the pipe, and measure it · half a day · **GATE**
 
@@ -411,9 +467,11 @@ first, or (c) stop. Do not build S1–S5 to find out.
 <a name="s1"></a>
 ### S1 · The `render` verb, properly · one to two days
 
-- **Streaming, not buffered.** A long document must not be one allocation and one
-  silence. WAV header with the voice's real rate — [P3](PIPER-PLAN.md#p3) made
-  the sink follow the voice, and this must too.
+- **Streaming, not buffered**, over [the transport decided above](#transport):
+  base64 PCM chunks as multi-reply lines, bounded per chunk. A long document must
+  not be one allocation and one silence. The WAV header takes the voice's real
+  rate from the first reply — [P3](PIPER-PLAN.md#p3) made the sink follow the
+  voice, and this must too.
 - **`--voice` takes the qualified id**, so `piper:de_DE-thorsten-medium` works,
   and `#12` speaker selection comes along for free.
 - **Cancellation on SIGTERM and on a closed stdout.** That is what `spd-say -C`
