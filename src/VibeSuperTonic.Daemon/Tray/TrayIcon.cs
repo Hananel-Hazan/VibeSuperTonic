@@ -50,12 +50,25 @@ internal sealed class TrayIcon : IDisposable
     private string _notice = "";
     private int _sentences;
 
-    public TrayIcon(Func<Request, Response> invoke, Func<bool> uiAttached, Action<string> log)
+    /// <param name="raiseWindow">
+    /// Ask the open window to come to the front. A separate action rather than
+    /// another <see cref="Request"/> because there is no window on the other end
+    /// of a socket to answer one: this reaches the UI through the event stream
+    /// it is already subscribed to.
+    /// </param>
+    public TrayIcon(
+        Func<Request, Response> invoke,
+        Func<bool> uiAttached,
+        Action<string> log,
+        Action? raiseWindow = null)
     {
         _invoke = invoke;
         _uiAttached = uiAttached;
         _log = log;
+        _raiseWindow = raiseWindow ?? (() => { });
     }
+
+    private readonly Action _raiseWindow;
 
     /// <summary>
     /// What <c>status</c> reports. Never "fine" by default: until
@@ -283,6 +296,11 @@ internal sealed class TrayIcon : IDisposable
         // WindowLaunchGate: two activations inside that gap opened two windows.
         if (_launchGate.Refuse(_uiAttached(), DateTime.UtcNow) is { } why)
         {
+            // A window that is already open is RAISED, not ignored. The user
+            // clicked the tray because they could not see it — under three other
+            // windows, or on another desktop — and an icon that answers a click
+            // with nothing is one they stop trusting.
+            if (_uiAttached()) _raiseWindow();
             _log($"tray: {why}");
             return;
         }

@@ -23,6 +23,17 @@ public enum SessionEventKind
 
     /// <summary>Something failed. <c>Message</c> says what.</summary>
     Error,
+
+    /// <summary>
+    /// The window should come to the front. Not a speech event, and it travels
+    /// this channel because this is the only stream the window is listening on.
+    ///
+    /// <para>Sent when the tray icon is clicked while a window is already open.
+    /// Doing nothing there was the old behaviour and it reads as a broken icon:
+    /// the window IS open, buried under three others, and the user clicks the
+    /// tray precisely because they cannot see it.</para>
+    /// </summary>
+    WindowRequested,
 }
 
 /// <summary>

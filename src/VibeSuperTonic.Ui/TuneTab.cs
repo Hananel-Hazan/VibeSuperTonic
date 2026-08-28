@@ -120,6 +120,7 @@ public sealed class TuneTab : UserControl
 
         var language = new TextBox { Width = 120 };
         _fields["Language"] = language;
+        language.TextChanged += (_, _) => { if (!_loading) _fieldsTouched = true; };
 
         // Each level rebuilds the ones below it. Guarded by _loading so filling
         // the controls during a refresh does not look like a user choosing.
@@ -191,6 +192,7 @@ public sealed class TuneTab : UserControl
         foreach (var (key, label, hint) in Numbers)
         {
             var box = new TextBox { Width = 120 };
+            box.TextChanged += (_, _) => { if (!_loading) _fieldsTouched = true; };
             _fields[key] = box;
             grid.Children.Add(Row(label, box, hint));
         }
@@ -205,7 +207,10 @@ public sealed class TuneTab : UserControl
         save.Click += async (_, _) => await SaveAsync();
 
         var revert = new Button { Content = "Revert", HorizontalAlignment = HorizontalAlignment.Left };
-        revert.Click += async (_, _) => await RefreshAsync();
+        // The one button that discards on purpose, so it clears the flag first —
+        // otherwise the refresh it triggers would politely keep the very edits
+        // the user just asked to throw away.
+        revert.Click += async (_, _) => { _fieldsTouched = false; await RefreshAsync(); };
 
         // WIRED IN PHASE 8B, and it was an exit criterion: parity does not
         // permit a dead control to reach v1. It calls the same verb `vst-ctl
@@ -302,11 +307,18 @@ public sealed class TuneTab : UserControl
         // Blank means "not set in the file", and the placeholder shows what the
         // daemon is using instead. An empty box that silently means 8 would make
         // "clear it to get the default" indistinguishable from "it is 8".
-        _fields["Language"].Text = root.String("Language") ?? "";
         _fields["Language"].Watermark = c.Language;
 
-        foreach (var (key, _, _) in Numbers)
-            _fields[key].Text = root.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
+        // Only when there is nothing to lose. The two round trips above take
+        // long enough for a person to have typed a rate already.
+        if (!_fieldsTouched)
+        {
+            _loading = true;
+            _fields["Language"].Text = root.String("Language") ?? "";
+            foreach (var (key, _, _) in Numbers)
+                _fields[key].Text = root.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
+            _loading = false;
+        }
 
         _fields["TotalStep"].Watermark = c.TotalStep.ToString(CultureInfo.InvariantCulture);
         _fields["MaxChunkChars"].Watermark = c.MaxChunkChars.ToString(CultureInfo.InvariantCulture);
@@ -388,6 +400,22 @@ public sealed class TuneTab : UserControl
     /// fields were filled from.
     /// </summary>
     private JsonObject? _file;
+
+    /// <summary>
+    /// Whether any field has been typed in since the last load.
+    ///
+    /// <para><b>A refresh must never silently discard what somebody typed.</b>
+    /// Two paths fill these boxes — the read from disk and the scope selector —
+    /// and both used to overwrite unconditionally. The read is asynchronous and
+    /// makes two round trips to the daemon before it fills anything, so typing a
+    /// rate the moment the tab opens and pressing Save wrote the OLD rate: the
+    /// fill landed in between, and the box the save read from no longer held
+    /// what the user had put in it. Reported as "changing speed and saving
+    /// reverts it", 2026-08-28.</para>
+    ///
+    /// <para>Revert is the button that discards on purpose, and it says so.</para>
+    /// </summary>
+    private bool _fieldsTouched;
 
     private void RebuildLanguages()
     {
@@ -474,15 +502,30 @@ public sealed class TuneTab : UserControl
             ? _file
             : SettingsScope.Merge(_file, engine, voiceKey);
 
-        _loading = true;
-        _fields["Language"].Text = source.String("Language") ?? "";
-        foreach (var (key, _, _) in Numbers)
-            _fields[key].Text = source.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
-        _loading = false;
+        // Switching scope SHOULD change these boxes — each scope has its own
+        // values — but not at the cost of throwing away an edit in progress. The
+        // note below says which of the two is on screen, so neither is a
+        // surprise.
+        if (!_fieldsTouched)
+        {
+            _loading = true;
+            _fields["Language"].Text = source.String("Language") ?? "";
+            foreach (var (key, _, _) in Numbers)
+                _fields[key].Text = source.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
+            _loading = false;
+        }
 
         bool has = SettingsScope.Has(_file, kind, engine, voiceKey);
         _clearScope.IsVisible = kind != SettingsScopeKind.All;
         _clearScope.IsEnabled = has;
+
+        if (_fieldsTouched)
+        {
+            _scopeNote.Text = "The boxes still show YOUR unsaved values, not this scope's. "
+                            + "Save writes them here; Revert discards them and shows what is on disk.";
+            return;
+        }
+
         _scopeNote.Text = kind == SettingsScopeKind.All
             ? "The values every voice starts from."
             : has
@@ -647,6 +690,7 @@ public sealed class TuneTab : UserControl
         try { SettingsFile.Write(_settingsPath, root); }
         catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
 
+        _fieldsTouched = false;
         _status.Text = "saved — waiting for the daemon to pick it up…";
 
         // Ask the daemon rather than asserting. `reload` is a verb vst-ctl has,

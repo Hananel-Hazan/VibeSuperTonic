@@ -419,7 +419,8 @@ foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGINT, PosixSig
 // StartAsync never throws. A tray that cannot be built is a cosmetic loss; a
 // daemon that refuses to start is a hotkey that silently does nothing, and that
 // trade is the whole reason `status` carries a Tray field.
-using var tray = new TrayIcon(server.Invoke, () => server.UiAttached, DaemonLog.Write);
+using var tray = new TrayIcon(
+    server.Invoke, () => server.UiAttached, DaemonLog.Write, server.RaiseWindow);
 server.TrayStatus = () => tray.Status;
 session.Emitted += tray.OnSessionEvent;
 server.UiAttachedChanged += tray.OnUiAttachedChanged;

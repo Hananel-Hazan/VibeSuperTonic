@@ -1277,6 +1277,17 @@ public sealed partial class DaemonServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Ask an open window to come to the front.
+    ///
+    /// <para>Goes out on the event stream because that is the only channel the
+    /// window listens on — it subscribes, it does not serve. Nothing happens if
+    /// no window is attached, which is the case the tray handles by launching
+    /// one instead.</para>
+    /// </summary>
+    public void RaiseWindow() =>
+        OnSessionEvent(new SessionEvent { Kind = SessionEventKind.WindowRequested });
+
     /// <summary>Load the model now rather than on the first press.</summary>
     public async Task PreloadAsync(CancellationToken token)
     {

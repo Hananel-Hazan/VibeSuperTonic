@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Ipc;
 
 namespace VibeSuperTonic.Ui;
@@ -204,7 +205,23 @@ public sealed class MainWindow : Window
             await ShowFirstRunIfNeededAsync();
         });
 
-        client.Received += evt => Dispatcher.UIThread.Post(() => _reader.Apply(evt));
+        client.Received += evt => Dispatcher.UIThread.Post(() =>
+        {
+            // The tray was clicked while this window was already open — under
+            // other windows, or minimised, or on another desktop. Restore before
+            // activating: a minimised window that is only Activate()d comes back
+            // focused and still minimised on some compositors, which looks
+            // exactly like the click doing nothing.
+            if (evt.Kind == SessionEventKind.WindowRequested)
+            {
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                Show();
+                Activate();
+                return;
+            }
+
+            _reader.Apply(evt);
+        });
 
         client.ConnectedChanged += connected => Dispatcher.UIThread.Post(() =>
         {
