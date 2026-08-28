@@ -579,6 +579,47 @@ is a thing a user can notice, describe, and work around.
 **Decide this before S1**, because it shapes the wrapper: the fallback is either
 the wrapper's job or nobody's.
 
+<a name="t17"></a>
+### 17. The audio block is not text, and three details make it work
+
+Measured 2026-08-28 out of speech-dispatcher's own
+`module_tts_output_send_server` (`src/modules/module_process.c`) and then
+verified against a running server. **Identical in 0.11.1 and 0.12.1**, so there
+is no per-distro variant of any of this.
+
+```
+705-bits=16\n 705-num_channels=1\n 705-sample_rate=R\n
+705-num_samples=N\n 705-big_endian=0\n
+705-AUDIO<NUL>              <- a NUL byte, NOT a newline
+<HDLC-escaped PCM>
+\n705 AUDIO\n
+```
+
+1. **`705-AUDIO` is terminated by a NUL byte.** Everything else in this protocol
+   is newline-delimited, so this is the one place the obvious guess is wrong.
+2. **The samples are HDLC-escaped, and this is the one that fails silently.** The
+   block ends at a newline, so a newline *inside* the audio ends it early — and
+   `0x0A` appears in virtually any real audio within milliseconds. `0x0A` and the
+   escape byte `0x7D` are each sent as `0x7D` followed by the original with bit 5
+   inverted. A 300 ms sine needed 132 escapes in 13230 bytes. **Omitting this
+   does not produce an error**: the server reads a truncated block, plays it, and
+   waits forever for an end-of-utterance that has been desynchronised into the
+   sample data. That is precisely what the gate saw and misdiagnosed as the
+   terminator.
+3. **Chunk at 10000 bytes and read stdin between chunks.**
+   `module_tts_output_server` does exactly this, and it is how `STOP` interrupts
+   an utterance already in flight — a module that writes one large block cannot
+   be stopped until it has finished writing it. Orca stops constantly, so this is
+   not an optimisation.
+
+**And the trap underneath the trap: a container cannot check any of it.**
+`spike/speechd-705-gate/run.sh` proves the block is *accepted* on 22.04, but a
+bare container has no audio device, so `spd-say -w` times out there for the
+distro's own `sd_espeak-ng` too. Reading that timeout as a verdict on the module
+under test is what produced the wrong diagnosis in the first place. The rule:
+**always measure the system module beside ours, in the same run** — `run-local.sh`
+does, and "ours hung" only means something when theirs did not.
+
 <a name="t11"></a>
 ### 11. SSML and punctuation modes arrive whether we handle them or not
 
@@ -908,8 +949,12 @@ building a daemon with an engine, a session and a sink, which is to say not
 reachable from a test at all. They also then run on the Windows runner, which is
 the only guard shared code has against a Windows-motivated change.
 
-**Still not done, and it is [S2](#s2)'s:** the end-of-utterance handshake the
-gate left open.
+**And the handshake the gate left open is closed** — 2026-08-28, before S2 rather
+than during it, because it decided whether route B works at all. It was never the
+terminator: `705-AUDIO` is followed by a NUL, and the samples are HDLC-escaped.
+[Trap 17](#t17) has the details and the reason the first diagnosis was wrong.
+`spd-say -w` through the probe now returns in 415 ms against the machine's real
+speech-dispatcher, with the distro's own module measured beside it at 1413 ms.
 
 <a name="s2"></a>
 ### S2 · The module · two to three days

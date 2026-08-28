@@ -52,6 +52,31 @@ def send(text):
     OUT.flush()
 
 
+ESCAPE = 0x7D
+INVERT = 0x20
+
+
+def hdlc(pcm: bytes) -> bytes:
+    """Escape the two bytes that cannot appear raw in the audio block.
+
+    THIS IS WHY THE FIRST PROBE HUNG. The block is terminated by a newline, so a
+    newline inside the samples would end it early — and 0x0A turns up in
+    virtually any real audio within milliseconds. speech-dispatcher escapes both
+    it and the escape byte itself by emitting 0x7D followed by the original with
+    bit 5 inverted; the server undoes it on the way in. Read out of
+    module_tts_output_send_server in src/modules/module_process.c, identical in
+    0.11.1 and 0.12.1.
+    """
+    out = bytearray()
+    for b in pcm:
+        if b in (0x0A, ESCAPE):
+            out.append(ESCAPE)
+            out.append(b ^ INVERT)
+        else:
+            out.append(b)
+    return bytes(out)
+
+
 def audio_block(ms=300, freq=440):
     """The thing being tested: audio handed back instead of played."""
     n = int(SR * ms / 1000)
@@ -59,11 +84,16 @@ def audio_block(ms=300, freq=440):
         struct.pack("<h", int(8000 * math.sin(2 * math.pi * freq * i / SR)))
         for i in range(n))
     hdr = (f"705-bits=16\n705-num_channels=1\n705-sample_rate={SR}\n"
-           f"705-num_samples={n}\n705-big_endian=0\n705-AUDIO\n")
-    log(f"<< 705 block: {n} samples, {len(pcm)} bytes of PCM")
+           f"705-num_samples={n}\n705-big_endian=0\n705-AUDIO")
+    escaped = hdlc(pcm)
+    log(f"<< 705 block: {n} samples, {len(pcm)} bytes of PCM, "
+        f"{len(escaped)} escaped ({len(escaped) - len(pcm)} bytes added)")
     OUT.write(hdr.encode())
-    OUT.write(pcm)
-    OUT.write(b"\n705 AUDIO\n")
+    OUT.write(b"\x00")          # NUL, not a newline: the server reads it as the
+                                # separator between the header and the samples.
+    OUT.write(escaped)
+    OUT.write(b"\n")            # the unescaped newline that ends the block
+    OUT.write(b"705 AUDIO\n")
     OUT.flush()
 
 
