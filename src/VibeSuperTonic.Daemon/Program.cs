@@ -227,6 +227,19 @@ var startupDecision = ExecutionDecision.Decide(
 DaemonLog.Write($"version {version}, inference {startupDecision.Describe()} " +
                 $"of {Environment.ProcessorCount} logical processors, power {machineNow.PowerState}");
 
+// IS THIS INSTALL WHERE IT WAS LAST TIME? One small file read and eight string
+// comparisons on the ordinary start, which is the only cost that matters: this
+// daemon is frequently started BY a hotkey press and R-5 says a press must never
+// be silent, so nothing here may probe, block or repair. When something HAS
+// moved it says so precisely and names the script that fixes it — the hotkeys
+// and the desktop entry live in the desktop's own configuration, and this
+// project has already learned what happens when this program writes those
+// itself. The UI reads the result through `config` and puts it in a banner.
+var installCheck = InstallWatch.Run(dataDir, modelsRoot, version, storedProfile, machineNow);
+foreach (var change in installCheck.Changes) DaemonLog.Write($"install: {change.What}");
+foreach (string program in installCheck.BrokenLaunchers)
+    DaemonLog.Write($"install: a desktop shortcut runs {program}, which is not there");
+
 // The factory the benchmark verb sweeps with, and the one the provider switch
 // rebuilds through — the same constructor the daemon's own session uses, so a
 // row measures what the daemon would actually get.
@@ -354,7 +367,7 @@ DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1
 using var server = new DaemonServer(
     options, config, engines, session,
     selectionSource, sink,
-    synthesizerFor, switcher, engines);
+    synthesizerFor, switcher, engines, installCheck);
 
 // BEFORE the tray and before --preload. A daemon that has lost the race for the
 // socket must not register a tray icon on its way out, and a preloading daemon

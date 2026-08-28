@@ -379,6 +379,17 @@ public sealed class TuneTab : UserControl
     /// "benchmark failed" — the load guard in particular is one the user can
     /// answer, either by waiting or by insisting.</para>
     /// </summary>
+    /// <summary>
+    /// Run the sweep from outside this tab — the install banner's "Re-measure"
+    /// button, which fires when a move or a new machine invalidated the profile.
+    ///
+    /// <para>Routed through the tab's own method rather than sending the verb
+    /// directly, so the progress, the disabled button and the result all land in
+    /// the one place that already renders them. A second caller with its own
+    /// progress reporting would be a second opinion about the same sweep.</para>
+    /// </summary>
+    internal Task RunBenchmarkAsync() => BenchmarkAsync(force: false);
+
     private async Task BenchmarkAsync(bool force)
     {
         _benchmark.IsEnabled = false;

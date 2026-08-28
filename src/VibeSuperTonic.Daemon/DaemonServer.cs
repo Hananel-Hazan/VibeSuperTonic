@@ -48,6 +48,17 @@ public sealed partial class DaemonServer : IDisposable
     private readonly EngineRoutingSynthesizer? _engines;
 
     /// <summary>
+    /// What the startup check concluded about this install, computed once in
+    /// <c>Program</c> before the socket existed and reported by <c>config</c>.
+    ///
+    /// <para>Held rather than recomputed per request, because it is a statement
+    /// about a comparison that happened at startup: the fingerprint is rewritten
+    /// as soon as it is read, so asking again would compare now against now and
+    /// answer "nothing moved" no matter what.</para>
+    /// </summary>
+    private readonly VibeSuperTonic.Core.Install.InstallCheck? _installCheck;
+
+    /// <summary>
     /// What is in force right now — asked of the switch rather than remembered,
     /// because it changes between utterances as of Phase 8b. A field holding the
     /// startup answer would report "CUDA" for the rest of the session to a user
@@ -97,7 +108,8 @@ public sealed partial class DaemonServer : IDisposable
         SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null,
         Func<int, string, ISynthesizer>? synthesizerFor = null,
         ProviderSwitchingSynthesizer? providerSwitch = null,
-        EngineRoutingSynthesizer? engines = null)
+        EngineRoutingSynthesizer? engines = null,
+        VibeSuperTonic.Core.Install.InstallCheck? installCheck = null)
     {
         _options = options;
         _config = config;
@@ -108,6 +120,7 @@ public sealed partial class DaemonServer : IDisposable
         _synthesizerFor = synthesizerFor;
         _switch = providerSwitch;
         _engines = engines;
+        _installCheck = installCheck;
 
         _session.Emitted += OnSessionEvent;
     }
@@ -717,7 +730,8 @@ public sealed partial class DaemonServer : IDisposable
         Execution.Threads,
         Execution.Reason,
         BenchmarkSnapshot(),
-        LinuxDataPaths.StoreRoot);
+        LinuxDataPaths.StoreRoot,
+        _installCheck);
     }
 
     /// <summary>

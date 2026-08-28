@@ -491,7 +491,8 @@ public sealed record ConfigPayload(
     int IntraOpThreads = 0,
     string ThreadsReason = "",
     BenchmarkSummary? Benchmark = null,
-    string StoreRoot = "");
+    string StoreRoot = "",
+    VibeSuperTonic.Core.Install.InstallCheck? Install = null);
 
 /// <summary>
 /// The stored profile as <c>config</c> reports it — enough to judge it without
