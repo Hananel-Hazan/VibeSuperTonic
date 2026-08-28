@@ -440,9 +440,62 @@ _assert_espeak() {
        SONAME espeak-ng links against. It would load the machine's espeak-ng
        instead — working here, silent on a user's machine."
 
-    # Everything below runs the binary with the payload as its library path, which
-    # is exactly how the module config will invoke it.
-    export LD_LIBRARY_PATH="$dir"
+    # AND IT MUST FIND THAT LIBRARY WITH NO HELP FROM THE ENVIRONMENT. The check
+    # above proves the shipped library carries the name the binary asks for; it
+    # does NOT prove the loader will look in the directory they share. Nothing
+    # makes it look there except an $ORIGIN runpath, and until 2026-08-28 there
+    # was none — cmake had baked in the BUILD MACHINE's install prefix, because
+    # espeak-ng's own CMakeLists sets the target's INSTALL_RPATH and a target
+    # property beats -DCMAKE_INSTALL_RPATH.
+    #
+    # THE CHECKS BELOW USED TO EXPORT LD_LIBRARY_PATH="$dir", AND THAT IS WHAT
+    # HID IT — with the path exported, every probe passed while the binary
+    # shipped to users could not start at all:
+    #
+    #   error while loading shared libraries: libespeak-ng.so.1: cannot open ...
+    #
+    # on any machine without espeak-ng installed, and on a machine WITH it, the
+    # distro's library silently instead of ours. So nothing is exported here any
+    # more: the probes below run with the environment a user has, which is the
+    # only way they say anything about the archive.
+    local runpath
+    runpath="$(objdump -p "$bin" | awk '/RUNPATH|RPATH/ {print $2; exit}')"
+    [[ "$runpath" == "\$ORIGIN"* ]] || die "the shipped espeak-ng has runpath $(printf %q "$runpath").
+       It must begin with \$ORIGIN so the loader finds the libespeak-ng.so.1 sitting
+       beside it. Without that it resolves through the ordinary loader path: the
+       distro's library on a machine that has one, and nothing at all on a machine
+       that does not — which is every machine bundling exists to serve.
+       Fix is in build/build-espeak.sh: -DCMAKE_EXE_LINKER_FLAGS='-Wl,-rpath,\$ORIGIN'."
+
+    # WHICH LIBRARY THE LOADER ACTUALLY PICKS, which is the property itself
+    # rather than a proxy for it — and the only one of these three checks that
+    # catches the regression ON THE BUILD MACHINE. Found by sabotage: with the
+    # runpath assertion above disabled and a payload built without $ORIGIN, the
+    # bare-environment probe below still PASSED here, because the build machine
+    # is precisely the one place the baked-in absolute path exists. It would have
+    # gone red only on a user's machine, which is the failure mode this whole
+    # assertion is about.
+    local resolved
+    resolved="$(env -i LD_TRACE_LOADED_OBJECTS=1 "$bin" 2>/dev/null \
+                | awk '/libespeak-ng\.so\.1 =>/ {print $3; exit}')"
+    [[ "$resolved" == "$dir/"* ]] || die "the shipped espeak-ng loads libespeak-ng.so.1 from
+       $(printf %q "${resolved:-nowhere}")
+       rather than from the payload beside it ($dir).
+       It is running against the machine's espeak-ng, so the archive is being
+       checked against a library it does not ship — and on a machine with no
+       espeak-ng installed the binary would not start at all."
+
+    # A BARE ENVIRONMENT, because that is the one the user has. env -i drops
+    # LD_LIBRARY_PATH along with everything else, so this fails if the runpath
+    # above ever stops working, whatever the reason.
+    local bare
+    bare="$(env -i "$bin" --path="$dir" -v en --stdout "test" 2>"$staging/.espeak-bare.err" | head -c 4)"
+    [[ "$bare" == "RIFF" ]] || die "the shipped espeak-ng cannot render with an empty environment.
+       It returned $(printf %q "$bare") rather than a WAV. This is what a user's
+       machine looks like, and this binary is the voice that is supposed to be
+       unable to fail — docs/SPEECHD-PLAN.md trap 16.
+       $(cat "$staging/.espeak-bare.err" 2>/dev/null)"
+    rm -f "$staging/.espeak-bare.err"
 
     local probe="1 2 3, this is a test."
     local voices bad=0
@@ -490,12 +543,11 @@ print("\n".join(v))
        $(cat "$errfile")"
 
     rm -f "$errfile"
-    unset LD_LIBRARY_PATH
     (( bad == 0 )) || die "one or more espeak voices the catalog offers cannot be phonemised by the
        shipped data. Every one of them is a voice a user can download, accept a
        licence for, install and select, which then produces silence."
 
-    info "espeak-ng $(awk '/^described/ {print $2}' "$info"), ${#voices[@]} voices phonemise and it renders audio, $(ls "$dir"/espeak-ng-data/*_dict | wc -l) dictionaries"
+    info "espeak-ng $(awk '/^described/ {print $2}' "$info"), ${#voices[@]} voices phonemise and it renders audio in a bare environment, $(ls "$dir"/espeak-ng-data/*_dict | wc -l) dictionaries"
 }
 _assert_espeak
 

@@ -127,9 +127,34 @@ info "at $described ($full_sha)"
 
 # ------------------------------------------------------------------ build
 step "Configuring and building"
+#
+# THE $ORIGIN RPATH IS LOAD-BEARING, AND ITS ABSENCE WAS SILENT.
+# The binary links the SONAME libespeak-ng.so.1, and naming the shipped library
+# that was necessary but NOT sufficient: the loader does not search a binary's
+# own directory unless told to. Without this, cmake bakes in the RUNPATH of the
+# BUILD MACHINE's install prefix — a path that exists here and nowhere else — so
+# the shipped binary resolved the library through the ordinary loader path. On a
+# machine with espeak-ng installed that silently loads the DISTRO's library; on
+# one without, the binary does not start at all:
+#
+#   error while loading shared libraries: libespeak-ng.so.1: cannot open ...
+#
+# Which is every machine bundling exists to serve. Verified 2026-08-28 in a bare
+# ubuntu:22.04 with no libespeak-ng present. See docs/SPEECHD-PLAN.md trap 18.
+#
+# IT IS A LINKER FLAG RATHER THAN -DCMAKE_INSTALL_RPATH BECAUSE UPSTREAM WINS
+# THAT ARGUMENT: espeak-ng's own src/CMakeLists.txt sets the target property
+# INSTALL_RPATH to "${CMAKE_INSTALL_PREFIX}/lib", and a target property beats the
+# cache variable — which is why the first attempt at this changed nothing at all.
+# Patching upstream's CMakeLists instead would be worse than it looks: the GPL
+# source offer below is `git archive HEAD`, so a working-tree patch would ship a
+# tarball that does not correspond to the binary beside it. The flag adds $ORIGIN
+# ahead of the build machine's path, the loader tries it first, and the stale
+# absolute entry is simply a directory that does not exist on a user's machine.
 cmake -S "$src" -B "$src/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DCMAKE_EXE_LINKER_FLAGS='-Wl,-rpath,$ORIGIN' \
     -DCMAKE_C_FLAGS="-std=gnu17" \
     -DBUILD_SHARED_LIBS=ON \
     -DUSE_ASYNC=OFF -DUSE_MBROLA=OFF -DUSE_LIBSONIC=OFF \

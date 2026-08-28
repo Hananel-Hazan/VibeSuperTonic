@@ -579,6 +579,55 @@ is a thing a user can notice, describe, and work around.
 **Decide this before S1**, because it shapes the wrapper: the fallback is either
 the wrapper's job or nobody's.
 
+<a name="t18"></a>
+### 18. The bundled espeak-ng could not find the library shipped beside it
+
+Found 2026-08-28 while starting S2, and it was **a release blocker for 0.2.13**:
+the voice [trap 16](#t16) calls "a voice that cannot fail" could not start.
+
+`espeak-ng` links the SONAME `libespeak-ng.so.1`, and
+[P5](PIPER-PLAN.md#p5-landed) named the shipped library exactly that so the
+binary would find it. Necessary, and **not sufficient — the loader does not
+search a binary's own directory unless an `$ORIGIN` runpath tells it to.** There
+was none: cmake had baked in the *build machine's* install prefix. So the shipped
+binary resolved through the ordinary loader path, which means
+
+- on a machine with espeak-ng installed, **the distro's library, silently** —
+  the exact substitution bundling exists to prevent, and
+- on a machine without it, `error while loading shared libraries` and the binary
+  does not start **at all**.
+
+Verified in a bare `ubuntu:22.04` with no `libespeak-ng` present, where it
+exited 127 before the fix and renders a 42 KB WAV after it.
+
+**Why it is a linker flag and not `-DCMAKE_INSTALL_RPATH`.** espeak-ng's own
+`src/CMakeLists.txt` sets the target property `INSTALL_RPATH` to
+`${CMAKE_INSTALL_PREFIX}/lib`, and a target property beats the cache variable —
+the first attempt changed nothing at all. Patching upstream's CMakeLists would be
+worse than it looks: the GPL source offer is `git archive HEAD`, so a
+working-tree patch ships a source tarball that does not correspond to the binary
+beside it.
+
+**And the check that hid it was the one meant to catch it.** The packer's
+behavioural espeak probes ran under `export LD_LIBRARY_PATH="$dir"` — with a
+comment saying that is "exactly how the module config will invoke it", an
+assumption about a module that did not exist yet. With the path exported every
+probe passed while the shipped binary could not start. Nothing is exported now.
+
+**Three assertions replace it, and only the third catches this on a build
+machine** — which is itself a finding, from sabotaging the other two:
+
+1. the runpath begins with `$ORIGIN`;
+2. **which library the loader actually picks** must be the one in the payload,
+   read with `LD_TRACE_LOADED_OBJECTS=1`;
+3. it renders a WAV under `env -i`.
+
+Sabotage showed (3) still *passing* on the build machine with a payload built
+without `$ORIGIN`, because the build machine is the one place the baked-in
+absolute path exists. It would have gone red only on a user's machine. **A
+behavioural check run in the environment that created the artifact is not
+evidence about any other environment.**
+
 <a name="t17"></a>
 ### 17. The audio block is not text, and three details make it work
 
