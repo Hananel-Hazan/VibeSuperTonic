@@ -47,7 +47,7 @@ it distributes espeak-ng. The repository's own source stays MIT — MIT is
 GPL-compatible and no `.cs` file changes — and `LICENSE-PHONEMIZER.txt`, written
 by the packer, is where the terms and the source offer live. Releases up to and
 including 0.2.10 — the newest one that was ever published — contain no espeak-ng
-and are unaffected; that is worth saying in 0.2.13's notes, because "the project
+and are unaffected; that is worth saying in 0.2.11's notes, because "the project
 became GPL" is what a reader will otherwise conclude retroactively.
 
 ### What the tests defend, and what they do not
@@ -73,7 +73,8 @@ the archive and belongs in `INSTALL.txt` — it is not a fix to the workflow.
 
 Its first run found that **the daemon could not start on a fresh install**: a
 routing decision read `SampleRate`, which loads the model, from the daemon's
-startup path with no models present. 0.2.10 was fine; 0.2.11 was not.
+startup path with no models present. 0.2.10 was fine; the tree packed as the
+withdrawn `0.2.11` was not.
 
 The rule the existing checks are built on, and the one to keep: **a check that
 has never been observed failing is not evidence.** Every packer assertion was
@@ -207,7 +208,7 @@ has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
 **The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
-`0.2.13`, which is the version **under development** rather than the last one
+`0.2.11`, which is the version **under development** rather than the last one
 shipped — see the note below, which changed on 2026-08-27.
 
 | Version | What it is | State |
@@ -215,28 +216,39 @@ shipped — see the note below, which changed on 2026-08-27.
 | `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
 | `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
 | `0.2.10` | A portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **shipped 2026-08-25**, and the newest release that actually works |
-| `0.2.11` | The GPU fix, cut from the pre-P5 tree | **withdrawn 2026-08-27, never published** |
+| `0.2.11` | The GPU fix, the fresh-install fix, all of P5, a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) — and the moved-install startup check | **in development** |
 | `0.2.12` | Skipped | never cut |
-| `0.2.13` | The GPU fix, the fresh-install fix, all of P5, and a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) | next |
+| `0.2.13` | Briefly the number this work carried, 2026-08-28. Reclaimed to `0.2.11` the same day | never cut |
 | `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md). **P0–P5 are done and in the tree** | after |
 
-**`0.2.11` was packed and then withdrawn the same day**, and the reasoning on
-both sides is worth keeping. It was cut from `7ed7a67` on purpose: the GPU fix
+**A first `0.2.11` was packed and then withdrawn the same day**, and the
+reasoning on both sides is worth keeping. (The number was later reclaimed by the
+current work — see below. Everything in this paragraph is about the *withdrawn*
+artifact, which no longer exists anywhere.) It was cut from `7ed7a67` on purpose: the GPU fix
 landed after 0.2.10's artifacts were packed, and by then P5 had put espeak-ng in
 the archive and moved the whole thing to GPL-3.0-or-later — which is not
 something a user should discover in a patch release. Then
 [the new smoke test](build/smoke-test.sh) found that **the daemon could not start
 on a fresh install** in that same tree, and the fix for it lives in a tree that
-also contains P5. Re-cutting a no-espeak 0.2.11 meant a second branch and a
-second pack run to ship a patch that had already been overtaken. Nothing was
-published, so it was deleted instead.
+also contains P5. Re-cutting a no-espeak patch release meant a second branch and
+a second pack run to ship something that had already been overtaken. Nothing was
+published, so it was deleted instead — which is exactly what left the number free
+to take again.
 
-**So `0.2.13` carries all of it**: the GPU fallback, the fresh-install fix, P5's
+**So `0.2.11` carries all of it**: the GPU fallback, the fresh-install fix, P5's
 phonemiser, and the Speech Dispatcher module. It is the release where
 GPL-3.0-or-later first applies — say so in its notes. Everything up to and
 including the shipped `0.2.10` contains no espeak-ng.
 
-`0.2.13` and `0.3` are the next two numbers. **Everything after them is a
+**The number went back to `0.2.11` on 2026-08-28, and it was free to take.**
+This work carried `0.2.13` for a day. Nothing was ever published as `0.2.11`,
+`0.2.12` or `0.2.13` — the withdrawn `0.2.11` was deleted rather than released —
+so no artifact anywhere claims those numbers and reusing the first of them
+collides with nothing. What it does mean: **`dist/` may still hold a
+`0.2.13` tarball from before the renumber, and it is not a release.** Delete it
+rather than reasoning about it.
+
+`0.2.11` and `0.3` are the next two numbers. **Everything after them is a
 decision to ask about** — propose a bump from what changed, and use
 `AskUserQuestion`.
 

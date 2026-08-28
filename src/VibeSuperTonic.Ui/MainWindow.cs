@@ -41,6 +41,13 @@ public sealed class MainWindow : Window
     /// <summary>The window's normal content, set aside while the first-run screen is up.</summary>
     private readonly Control _shell;
 
+    /// <summary>
+    /// What the first-run screen swaps in and out of. The window's own content is
+    /// the banner plus this, so a screen change cannot take the banner with it —
+    /// see the comment where it is built.
+    /// </summary>
+    private readonly ContentControl _screen = new();
+
     private bool _firstRunDecided;
 
     /// <summary>
@@ -108,16 +115,24 @@ public sealed class MainWindow : Window
                         },
                     },
                 },
-                // Docked above the tabs and below the verbs: a move invalidates
-                // things owned by three different tabs, so the warning cannot
-                // live inside any one of them. Collapsed to nothing when there
-                // is nothing to say, which is every launch but a handful.
-                _banner,
                 _tabs,
             },
         };
 
-        Content = _shell;
+        _screen.Content = _shell;
+
+        // THE BANNER LIVES ABOVE THE SCREEN SWAP, NOT INSIDE IT — and the case
+        // that forced this is the one where it matters most. An AppImage that was
+        // moved orphans its store, which puts the FIRST-RUN screen up asking for
+        // a 762 MB download the user has already done; the banner is the only
+        // thing that explains why, and while it lived inside the shell the swap
+        // took it away just as it appeared.
+        //
+        // It is a child of THIS panel and of nothing else. Avalonia throws on a
+        // control with two visual parents, so leaving it in the shell's children
+        // as well is not a layout quirk — it is a hard crash at startup, every
+        // time, which is how this was found.
+        Content = new DockPanel { Children = { _banner, _screen } };
 
         // Deliberately after the window exists: a fresh install has no models,
         // and the screen that fixes that is the first thing it should show.
@@ -186,8 +201,8 @@ public sealed class MainWindow : Window
             c.BaseDir,
             string.IsNullOrWhiteSpace(c.StoreRoot) ? c.BaseDir : c.StoreRoot,
             c.ModelsRoot);
-        first.Completed += () => Content = _shell;
-        Content = first;
+        first.Completed += () => _screen.Content = _shell;
+        _screen.Content = first;
     }
 
     /// <summary>
