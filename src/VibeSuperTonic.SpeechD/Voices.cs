@@ -36,13 +36,34 @@ internal sealed class Voices
     /// remarks. Overridden by the tests, which need an install that is not the
     /// one they are running inside.
     /// </param>
-    internal Voices(string? root = null)
+    /// <param name="store">
+    /// Where <c>models/</c> lives, which is <b>not</b> the same question.
+    ///
+    /// <para>For a tarball, a portable folder or a USB stick it is the same
+    /// directory as <paramref name="root"/> and always has been. For an AppImage
+    /// the two genuinely differ: the binaries are inside a read-only squashfs
+    /// mount at a path that changes every run, and the models cannot be, so they
+    /// live in a store beside the .AppImage file. Resolving models from
+    /// <paramref name="root"/> would report that an AppImage user has no voices
+    /// at all.</para>
+    /// </param>
+    internal Voices(string? root = null, string? store = null)
     {
         _root = (root ?? AppContext.BaseDirectory).TrimEnd('/');
         CtlPath = Path.Combine(_root, "vst-ctl");
         EspeakPath = Path.Combine(_root, "espeak", "espeak-ng");
         EspeakDataPath = Path.Combine(_root, "espeak");
+
+        // LinuxDataPaths, compiled in from the daemon rather than re-spelled —
+        // see the csproj. `store` is the tests' override and stands in for the
+        // whole rule, since a test install is never an AppImage.
+        ModelsRoot = store is not null
+            ? Path.Combine(store.TrimEnd('/'), "models")
+            : Daemon.LinuxDataPaths.DefaultModelsDir;
     }
+
+    /// <summary>Where <c>voice_styles/</c> and <c>piper/</c> are, for S3's voice list.</summary>
+    internal string ModelsRoot { get; }
 
     internal bool EspeakPresent => File.Exists(EspeakPath);
 
@@ -50,7 +71,14 @@ internal sealed class Voices
     /// Start the neural voice. Streams, so the first samples arrive long before
     /// the last are synthesised.
     /// </summary>
-    internal Process StartNeural(string text, string? voice)
+    /// <param name="language">
+    /// Supertonic's language for this utterance, or null to leave the daemon's
+    /// configured one alone. Supertonic is one model set over 31 languages and
+    /// takes the language per utterance, so this is what carries speechd's
+    /// <c>language=de</c> through to the synthesiser. Null for a Piper voice,
+    /// where the model IS the language.
+    /// </param>
+    internal Process StartNeural(string text, string? voice, string? language = null)
     {
         var psi = Base(CtlPath);
         psi.ArgumentList.Add("render");
@@ -60,6 +88,12 @@ internal sealed class Voices
         {
             psi.ArgumentList.Add("--voice");
             psi.ArgumentList.Add(voice);
+        }
+
+        if (!string.IsNullOrWhiteSpace(language))
+        {
+            psi.ArgumentList.Add("--language");
+            psi.ArgumentList.Add(language);
         }
 
         psi.ArgumentList.Add(text);

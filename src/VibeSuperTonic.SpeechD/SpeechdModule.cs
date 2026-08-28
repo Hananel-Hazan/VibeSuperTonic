@@ -26,6 +26,7 @@ internal sealed class SpeechdModule
     private readonly Stream _out;
     private readonly LineReader _in;
     private readonly Voices _voices;
+    private readonly InstalledVoices _installed;
     private readonly Action<string> _log;
 
     /// <summary>Set by a STOP that arrives while audio is being written.</summary>
@@ -36,6 +37,14 @@ internal sealed class SpeechdModule
     private int _rate;
     private string? _language;
     private string? _synthesisVoice;
+
+    /// <summary>
+    /// speechd's <c>voice=male1</c> and friends. Read because it is the DEFAULT
+    /// selection path rather than an exotic one: measured against 0.12.1, a
+    /// client that has not picked a specific voice sends this on every SET with
+    /// <c>synthesis_voice=NULL</c> beside it. S3.
+    /// </summary>
+    private string? _symbolicVoice;
 
     /// <param name="inputFd">
     /// The descriptor <paramref name="input"/> reads from, so readiness is asked
@@ -50,6 +59,7 @@ internal sealed class SpeechdModule
         _out = output;
         _voices = voices;
         _log = log;
+        _installed = new InstalledVoices(voices.ModelsRoot);
     }
 
     // ------------------------------------------------------------------ loop
@@ -143,6 +153,7 @@ internal sealed class SpeechdModule
                 case "rate": _rate = ParseInt(value, 0); break;
                 case "language": _language = Normalise(value); break;
                 case "synthesis_voice": _synthesisVoice = Normalise(value); break;
+                case "voice": _symbolicVoice = Normalise(value); break;
 
                 // ACCEPTED AND IGNORED, WHICH IS A DECISION AND NOT AN OMISSION.
                 // punctuation_mode, spelling_mode and cap_let_recogn all mean
@@ -166,17 +177,37 @@ internal sealed class SpeechdModule
     }
 
     /// <summary>
-    /// The voice list. S3 replaces this with the installed set; until then it
-    /// names the two voices that always exist, which is honest rather than empty
-    /// — a module that lists nothing is one a user cannot select. Trap 8's
-    /// mapping onto speechd's vocabulary lives here.
+    /// The voice list, read from the store every time it is asked for — S3.
+    ///
+    /// <para><b>Re-read per request rather than cached</b>, which is the whole
+    /// advantage route B has here. A user who downloads a voice in the Voices tab
+    /// expects it in their screen reader's picker, and this module is a
+    /// long-lived process started at login: anything cached would go stale the
+    /// moment they installed one and stay stale until they logged out. A client
+    /// asks for the list when a human opens a voice picker, so the cost is a
+    /// directory listing at human speed.</para>
+    ///
+    /// <para><b>The espeak row is always last and always present.</b> It is the
+    /// voice that cannot fail (trap 16), it needs no model downloaded, and on a
+    /// fresh install where nothing else exists it is the only thing standing
+    /// between this module and trap 14's empty list — which a user cannot select
+    /// from and which makes a working install look broken.</para>
     /// </summary>
     private void HandleListVoices()
     {
-        Reply("200-VibeSuperTonic\ten\tMALE1");
-        Reply("200-VibeSuperTonic-echo\ten\tMALE2");
+        foreach (var v in _installed.Read())
+            Reply($"200-{v.Name}\t{v.Language}\t{v.Variant}");
+
+        Reply($"200-{EchoVoiceName}\ten\techo");
         Reply("200 OK VOICE LIST SENT");
     }
+
+    /// <summary>
+    /// The bundled espeak, named so a user can choose it deliberately. Selecting
+    /// it is the configuration [trap 10] says is a perfectly good outcome: the
+    /// neural voice for reading a document, the fast one for keystroke echo.
+    /// </summary>
+    private const string EchoVoiceName = "vibesupertonic-echo";
 
     // ----------------------------------------------------------------- speak
 
@@ -202,10 +233,39 @@ internal sealed class SpeechdModule
         Reply("200 OK SPEAKING");
         Reply("701 BEGIN");
 
-        var chose = ModuleRouting.For(type);
-        bool spoke = chose == RenderVoice.Neural
-            ? SpeakWith(() => _voices.StartNeural(text, _synthesisVoice), "neural")
-            : false;
+        // THE USER CAN CHOOSE THE FAST VOICE DELIBERATELY, and choosing it has to
+        // beat the message type. Trap 10 calls "excellent for a document, espeak
+        // for echo" a perfectly good outcome for this release rather than a
+        // failure; that is only true if picking the echo row in a voice list
+        // actually means it, including for a SPEAK.
+        bool echoChosen = string.Equals(
+            _synthesisVoice, EchoVoiceName, StringComparison.OrdinalIgnoreCase);
+
+        var chose = echoChosen ? RenderVoice.Espeak : ModuleRouting.For(type);
+
+        bool spoke = false;
+        if (chose == RenderVoice.Neural)
+        {
+            // Resolved per utterance, off the same live read the voice list
+            // answers from, because a client sets a voice once at connect and a
+            // voice can be installed at any point in a session that lasts as long
+            // as the login does.
+            var pick = VoiceList.Resolve(
+                _installed.Read(), _synthesisVoice, _symbolicVoice, _language);
+
+            if (pick is null && !string.IsNullOrWhiteSpace(_synthesisVoice))
+            {
+                // speechd does not check synthesis_voice against the list it was
+                // given — measured — so a stale setting in a screen reader
+                // arrives here verbatim. Speaking with the default is the right
+                // answer and the log line is the only way anyone finds out why
+                // they are not hearing the voice they chose.
+                _log($"no installed voice matches '{_synthesisVoice}'; using the daemon's default");
+            }
+
+            spoke = SpeakWith(
+                () => _voices.StartNeural(text, pick?.RenderVoice, pick?.RenderLanguage), "neural");
+        }
 
         // TRAP 16. Anything that went wrong with the neural voice — no daemon, a
         // model still loading, no voice installed, a refusal because the hotkey

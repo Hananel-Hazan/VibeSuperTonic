@@ -29,7 +29,7 @@ public class ProtocolTests
         var input = new MemoryStream(Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n"));
         var output = new MemoryStream();
 
-        new SpeechdModule(input, output, new Voices(root), _ => { }, inputFd: -1).Run();
+        new SpeechdModule(input, output, new Voices(root, root), _ => { }, inputFd: -1).Run();
 
         return Encoding.UTF8.GetString(output.ToArray())
             .Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -322,7 +322,7 @@ public class ProtocolTests
     {
         var input = new MemoryStream(Encoding.UTF8.GetBytes("KEY\nControl_L\n.\n"));
         var output = new MemoryStream();
-        new SpeechdModule(input, output, new Voices(RenderingInstall.Value), _ => { }, inputFd: -1).Run();
+        new SpeechdModule(input, output, new Voices(RenderingInstall.Value, RenderingInstall.Value), _ => { }, inputFd: -1).Run();
 
         byte[] wire = output.ToArray();
         string text = Encoding.Latin1.GetString(wire);

@@ -483,6 +483,13 @@ So the module config is **generated from what is installed**, at install time an
 again when a voice is added or removed, which makes it the first thing in this
 product that has to be regenerated on a state change.
 
+> **Superseded by route B, and [S3](#s3-landed) is where it stopped being true.**
+> There is no generated config and nothing to regenerate: the module answers
+> `LIST VOICES` from the store at the moment it is asked, so a voice downloaded
+> mid-session appears in the next list rather than after the next login. What
+> survives from this trap is the vocabulary problem itself, and the rule that only
+> installed voices appear.
+
 <a name="t9"></a>
 ### 9. `$DATA` must be inside single quotes, and that is a security rule
 
@@ -755,8 +762,8 @@ Deliberately small, and in this order because each one can fail the next.
 **S0 was a gate and it ran** — [its numbers are below](#s0-result). **S1 opened
 with a second gate**, [the server-side audio question](#b-gate), which decided
 the module's shape — [it was answered on 2026-08-27](#b-gate-result) and route B
-stands. **[S1](#s1-landed) and [S2](#s2-landed) both landed on 2026-08-28**;
-S3 is next.
+stands. **[S1](#s1-landed), [S2](#s2-landed) and [S3](#s3-landed) all landed on
+2026-08-28**; S4 is next.
 
 Route B costs about **two days more than route A** — five to seven rather than
 three — and buys correct echo routing, an explicit `STOP`, no audio backend, and
@@ -1092,6 +1099,83 @@ installed appears. Under route B this is a protocol reply computed at runtime
 rather than a config file generated at install time, **which removes the
 regeneration problem route A had**: nothing is stale because nothing is written
 down. That is the second thing B turned out to buy.
+
+<a name="s3-landed"></a>
+
+#### S3 landed, 2026-08-28
+
+[`VoiceList`](../src/VibeSuperTonic.SpeechD/VoiceList.cs) is the mapping and it is
+pure; [`InstalledVoices`](../src/VibeSuperTonic.SpeechD/InstalledVoices.cs) is the
+filesystem read that feeds it. Driven by the machine's real speech-dispatcher
+against a composed install of six styles and one Piper voice:
+
+| | |
+| --- | --- |
+| rows a client sees | **188** — 6 styles × 31 languages, + the Piper voice, + echo |
+| `spd-say -t female1 -l de` | resolved to `supertonic:F1`, language `de`, **named back by the daemon's own refusal** |
+| `spd-say -O` | still **both** modules — [trap 1](#t1) |
+| the utterance | `rc=0` throughout, because [trap 16](#t16) caught every neural failure |
+
+**The design was decided by a probe, and the probe corrected it.** Selecting a
+voice by name sends `synthesis_voice=<name>` and *no* `voice`; everything else
+sends `voice=male1` — one of eight lowercase symbolic names — with
+`synthesis_voice=NULL`. So **the symbolic form is the ordinary path, not the
+exception**, and a module reading only `synthesis_voice` would have ignored the
+voice nearly every client asks for. Two more facts came out of the same run and
+both are load-bearing: speechd **does not validate `synthesis_voice`** against the
+list it was given (`-y no-such-voice` arrives verbatim), and **`language=` is sent
+on every `SET` whether or not anyone chose it.**
+
+That last one reversed a rule. Resolution originally treated a language as a
+request and fell back to "the first voice for it", which meant every client that
+had never picked a voice would silently replace the user's own configured default
+with whichever row sorted first. **A language now narrows a request; it never is
+one.** Two tests failed the moment it was written down, which is how it was found.
+
+**Supertonic is listed once per style per language — 310 rows on a full install —
+and that is deliberate.** The instinct is that no voice list should be that long;
+the distro's own `espeak-ng` publishes **14,805** on this machine, so it is
+unremarkable to the thing consuming it. Listing the styles once under English
+would instead hide the product entirely from a user whose screen reader is set to
+German, which is the audience this feature exists for.
+
+**The gender labels are honest or absent.** Supertonic's styles are named `M1`…`M5`
+and `F1`…`F5` upstream, which is the only statement of gender anywhere in this
+product and is what makes `MALE1`/`FEMALE1` answerable at all. A Piper voice
+states none, so none is claimed — it is still offered for a gendered request,
+because refusing would answer "no voice" on a machine whose only installed voice
+is a perfectly good one, and the caller's alternative to a voice is the espeak
+buzz. A known gender is preferred over an unknown one. Rank counts **installed**
+styles rather than reading the digit in the name: with only `M3` present, `male1`
+has to find it.
+
+**`vst-ctl` gained `--language`, which S3 found rather than planned.** Supertonic
+is one model set over 31 languages and takes the language per utterance; the
+daemon has read `Request.Language` since Phase 4 and `vst-ctl` was simply never
+able to set it, so speechd's `language=de` had nowhere to go. A Piper voice sends
+none — the model *is* the language.
+
+**The models directory is the daemon's own rule, compiled in rather than
+re-spelled.** It cannot move to Core ([R-12] keeps platform path policy out, and
+Core's csproj says Core may not express a platform at all) and it cannot be
+guessed here, because an AppImage's models sit beside the `.AppImage` file rather
+than beside the executable and a two-line guess would report that an AppImage user
+has no voices. So `LinuxDataPaths.cs` is compiled into the module the way
+`Onnx.Ort` compiles the Engine's `SupertonicSdk.cs`.
+
+**42 new checks, and all 22 sabotages of them were caught — after the first pass
+found one that was not.** The rule that the voice list is re-read per request
+rather than cached was tested with two *separate* module instances, so a cache
+held in a field would have been re-read anyway and every mutation passed. It now
+installs a voice **while one module is running**, through a stdin whose second
+command only exists after the first has been answered. That is the same defect S2
+found four of, and it is worth expecting one per phase. The `vst-ctl` argument
+guard has no test project to live in and was sabotaged by hand instead: without
+it, `--language de` makes `de` the verb — the exact bug the `--voice` comment
+beside it already records.
+
+**Not done here.** The module is still not in the archive and there is no
+installer; that is [S4](#s4), along with the packer assertions.
 
 <a name="s4"></a>
 ### S4 · The installer and packaging · one to one and a half days

@@ -86,6 +86,24 @@ if (voiceAt >= 0)
     voice = args[voiceAt + 1];
 }
 
+// --language, and it exists for exactly one caller. Supertonic is ONE model set
+// over 31 languages and takes the language per utterance, so a Speech Dispatcher
+// module told `language=de` on every SET has no way to honour it without this:
+// the daemon has read Request.Language since Phase 4 and vst-ctl was simply
+// never able to set it. A Piper voice needs nothing here — the model IS the
+// language — and the module sends none for one.
+string? language = null;
+int langAt = Array.IndexOf(args, "--language");
+if (langAt >= 0)
+{
+    if (langAt + 1 >= args.Length || args[langAt + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("--language needs a code, e.g. `--language de`");
+        return 2;
+    }
+    language = args[langAt + 1];
+}
+
 // render's destination. "-" is stdout, which is what a Speech Dispatcher module
 // asks for: the module's whole job is `... | $PLAY_COMMAND`, and a temp file in
 // the middle of that is latency a screen reader pays on every utterance.
@@ -106,9 +124,10 @@ if (outAt >= 0)
 // verb: <the text>".
 int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
 int outValueAt = outAt >= 0 ? outAt + 1 : -1;
+int langValueAt = langAt >= 0 ? langAt + 1 : -1;
 var positional = args
     .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
-                     && i != voiceValueAt && i != outValueAt)
+                     && i != voiceValueAt && i != outValueAt && i != langValueAt)
     .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
@@ -190,6 +209,10 @@ var request = new Request
     // For `voice install|remove` it is the SUBJECT rather than the voice to
     // speak with, which is the same field carrying the same kind of value.
     Voice = voiceSubject ?? voice,
+
+    // Supertonic's language for this utterance. Null leaves the daemon's
+    // configured one alone, which is every caller but the speechd module.
+    Language = language,
 
     // The session travels with the request, because the daemon may not have one.
     // This process was started by the keybinding, the tray or a shell — all
@@ -419,6 +442,8 @@ static void PrintUsage() =>
           --voice ID   speak with this voice — a Supertonic style (M1) or an
                        installed Piper voice (en_US-lessac-medium), which also
                        chooses the engine
+          --language C speak Supertonic in this language (de, fr, ja); a Piper
+                       voice ignores it, since the model is the language
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less);
                        also removes a voice that is the configured default

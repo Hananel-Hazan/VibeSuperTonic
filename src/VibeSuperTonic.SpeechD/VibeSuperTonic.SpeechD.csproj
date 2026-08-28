@@ -40,4 +40,27 @@
     <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    THE DAEMON'S PATH POLICY, COMPILED IN RATHER THAN COPIED OUT.
+
+    S3's voice list is read from the models directory, so the module has to
+    arrive at the same directory the daemon did or it will report that a machine
+    full of voices has none. For a tarball install that is just "beside the
+    executable" and any two-line guess would agree; for an AppImage it is the
+    store beside the .AppImage file, chosen by a rule with a genuine subtlety in
+    it (an existing store beats a preferred location, or moving the file orphans
+    383 MB of models).
+
+    It cannot move to Core: R-12 keeps platform path policy out of Core, and
+    Core's own csproj states that Core is not allowed to express a platform at
+    all. It cannot be re-spelled here either — PiperVoiceInstaller's remarks name
+    exactly this failure, two spellings that agree by inspection until the day a
+    voice lands somewhere the other one never looks. So it is the same source
+    file, the way Onnx.Ort compiles the Engine's SupertonicSdk.cs and RenderHost
+    compiles the Launcher's exporters.
+  -->
+  <ItemGroup>
+    <Compile Include="..\VibeSuperTonic.Daemon\LinuxDataPaths.cs" Link="Shared\LinuxDataPaths.cs" />
+  </ItemGroup>
+
 </Project>
