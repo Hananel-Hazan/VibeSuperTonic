@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Synthesis;
@@ -278,7 +279,7 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     if (verb == RequestVerb.VoiceInstall) return RunVoiceInstall(reader);
 
     // The third, and the only one whose payload is bytes rather than text.
-    if (verb == RequestVerb.Render) return RunRender(reader, outPath);
+    if (verb == RequestVerb.Render) return RunRender(reader, socket, outPath);
 
     string? line = reader.ReadLine();
     if (line is null)
@@ -768,31 +769,21 @@ static void PrintVoices(VoicesPayload list)
 }
 
 /// <summary>
-/// Read an install: a progress line as the bytes arrive, then the verdict.
-///
-/// <para>Same contract as the sweep — lines until one arrives without a progress
-/// field — and the same stdout/stderr split, so the progress that would otherwise
-/// fill a pipe stays on stderr. The bar is rewritten in place with a carriage
-/// return when stderr is a terminal, and printed as ordinary lines when it is
-/// not: a log file full of \r is worse than no bar at all.</para>
-/// </summary>
-/// <summary>
 /// Read a render's replies and write a WAV.
 ///
-/// <para><b>The header is written first, with a length nobody knows yet.</b>
-/// This streams to stdout, which is a pipe: it cannot be seeked, so the two size
-/// fields in a WAV header cannot be filled in at the end. They are written as
-/// 0xFFFFFFFF, which is what every streaming WAV writer does and what every
-/// player this will meet — <c>paplay</c>, <c>aplay</c>, speech-dispatcher's own
-/// output — already handles, because it is how a WAV arriving over a pipe has
-/// always looked. Writing a real length would mean buffering the whole
-/// utterance, which is the latency this verb exists to avoid.</para>
+/// <para>The loop itself is <see cref="RenderWav.Read"/>, in Core, because every
+/// rule it enforces fails silently and none of them could be tested from here —
+/// see that type. What is left in this file is the part that is genuinely about
+/// a process: a socket, a destination, and a signal.</para>
 ///
-/// <para>When <paramref name="outPath"/> is a real file the same header is
-/// written, for one reason: a file and a pipe should not differ in a way that
-/// only shows up when someone switches between them while debugging.</para>
+/// <para><b>SIGTERM is a stop, not a failure.</b> Under route B the Speech
+/// Dispatcher module runs this as a child process and terminates it when speechd
+/// sends <c>STOP</c> — which Orca does on very nearly every keystroke. Left to
+/// the default disposition the process is killed mid-write and speechd logs a
+/// dead child every time; handled, the render stops, whatever was already
+/// produced is flushed, and the exit is 0. docs/SPEECHD-PLAN.md, S1.</para>
 /// </summary>
-static int RunRender(StreamReader reader, string outPath)
+static int RunRender(StreamReader reader, Socket socket, string outPath)
 {
     Stream output;
     try
@@ -808,119 +799,45 @@ static int RunRender(StreamReader reader, string outPath)
     }
 
     using var _ = output;
-    bool wroteHeader = false;
-    long samples = 0;
 
-    while (true)
+    bool stopping = false;
+
+    // Shut the socket down rather than only setting a flag: the read below
+    // blocks, and a flag nothing wakes would go unnoticed until the daemon sent
+    // the next chunk — which, on a stop, is the one thing that will not happen.
+    void Stop()
     {
-        string? line = reader.ReadLine();
-        if (line is null)
-        {
-            // A truncated render is a failure even if we already wrote audio:
-            // NEVER EXIT 0 HAVING PRODUCED NO AUDIO, and never exit 0 having
-            // produced half of it either. speechd logs stderr.
-            Console.Error.WriteLine("the daemon closed the connection mid-render");
-            return 1;
-        }
-
-        var reply = Protocol.TryDecode<Response>(line);
-        if (reply is null)
-        {
-            Console.Error.WriteLine($"unparseable reply: {line}");
-            return 1;
-        }
-
-        if (!reply.Ok)
-        {
-            Console.Error.WriteLine(reply.Error ?? "render failed");
-            return 1;
-        }
-
-        if (reply.Audio is not { } audio)
-        {
-            Console.Error.WriteLine("a render reply carried no audio field");
-            return 1;
-        }
-
-        if (!wroteHeader)
-        {
-            if (audio.SampleRate <= 0)
-            {
-                // The empty-text case: the daemon rendered nothing and said so.
-                // Not an error, and not a WAV either — a zero-byte stdout is
-                // what $PLAY_COMMAND handles best.
-                return 0;
-            }
-
-            WriteWavHeader(output, audio.SampleRate, audio.Channels);
-            wroteHeader = true;
-        }
-
-        if (audio.Pcm is { Length: > 0 } encoded)
-        {
-            byte[] pcm;
-            try { pcm = Convert.FromBase64String(encoded); }
-            catch (FormatException)
-            {
-                Console.Error.WriteLine("a render reply carried unreadable audio");
-                return 1;
-            }
-
-            try
-            {
-                output.Write(pcm, 0, pcm.Length);
-                samples += pcm.Length / 2;
-            }
-            catch (IOException)
-            {
-                // The reader went away — for a speechd module this IS the stop,
-                // and it is the normal end of most utterances a screen reader
-                // starts. Not a failure.
-                return 0;
-            }
-        }
-
-        if (audio.Final)
-        {
-            output.Flush();
-            if (samples == 0)
-            {
-                Console.Error.WriteLine("the render produced no audio");
-                return 1;
-            }
-            return 0;
-        }
+        stopping = true;
+        try { socket.Shutdown(SocketShutdown.Both); }
+        catch (SocketException) { /* already gone */ }
+        catch (ObjectDisposedException) { /* already gone */ }
     }
+
+    using var sigterm = PosixSignalRegistration.Create(
+        PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; Stop(); });
+    using var sigint = PosixSignalRegistration.Create(
+        PosixSignal.SIGINT, ctx => { ctx.Cancel = true; Stop(); });
+
+    string? ReadLine()
+    {
+        try { return reader.ReadLine(); }
+        catch (IOException) { return null; }            // shut down under us
+        catch (ObjectDisposedException) { return null; }
+    }
+
+    return RenderWav.Read(ReadLine, output, Console.Error, () => stopping);
 }
+
 
 /// <summary>
-/// A 44-byte canonical WAV header for 16-bit PCM, with both size fields left at
-/// 0xFFFFFFFF because this is a stream. See <see cref="RunRender"/>.
+/// Read an install: a progress line as the bytes arrive, then the verdict.
+///
+/// <para>Same contract as the sweep — lines until one arrives without a progress
+/// field — and the same stdout/stderr split, so the progress that would otherwise
+/// fill a pipe stays on stderr. The bar is rewritten in place with a carriage
+/// return when stderr is a terminal, and printed as ordinary lines when it is
+/// not: a log file full of \r is worse than no bar at all.</para>
 /// </summary>
-static void WriteWavHeader(Stream output, int sampleRate, int channels)
-{
-    const int BitsPerSample = 16;
-    int blockAlign = channels * BitsPerSample / 8;
-    int byteRate = sampleRate * blockAlign;
-
-    Span<byte> header = stackalloc byte[44];
-    "RIFF"u8.CopyTo(header[..4]);
-    BitConverter.TryWriteBytes(header[4..8], uint.MaxValue);          // RIFF size: unknown
-    "WAVE"u8.CopyTo(header[8..12]);
-    "fmt "u8.CopyTo(header[12..16]);
-    BitConverter.TryWriteBytes(header[16..20], 16);                   // fmt chunk size
-    BitConverter.TryWriteBytes(header[20..22], (short)1);             // PCM
-    BitConverter.TryWriteBytes(header[22..24], (short)channels);
-    BitConverter.TryWriteBytes(header[24..28], sampleRate);
-    BitConverter.TryWriteBytes(header[28..32], byteRate);
-    BitConverter.TryWriteBytes(header[32..34], (short)blockAlign);
-    BitConverter.TryWriteBytes(header[34..36], (short)BitsPerSample);
-    "data"u8.CopyTo(header[36..40]);
-    BitConverter.TryWriteBytes(header[40..44], uint.MaxValue);        // data size: unknown
-
-    output.Write(header);
-}
-
 static int RunVoiceInstall(StreamReader reader)
 {
     bool tty = !Console.IsErrorRedirected;

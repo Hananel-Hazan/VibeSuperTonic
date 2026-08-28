@@ -1,4 +1,5 @@
 using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.Daemon;
@@ -47,7 +48,20 @@ public sealed partial class DaemonServer
     {
         RefreshConfig(force: false);
 
-        string text = request.Text ?? "";
+        // TRAP 11, AND IT ARRIVES WHETHER ANYONE ASKED FOR IT. speechd clients
+        // can set SSML mode, and the gate probe measured what that means here: a
+        // plain `spd-say "hello"` reaches a module as <speak>hello</speak>. Fed
+        // to the model, "speak" is a word the user hears. Stripped here rather
+        // than in the module so that every future caller of this verb gets it,
+        // and narrowly — see Ssml, which leaves text that is not a document
+        // alone so that reading source code aloud still reads the brackets.
+        //
+        // PUNCTUATION VERBOSITY IS DECIDED BY OMISSION, DELIBERATELY. speechd's
+        // four levels mean "say the punctuation out loud" and this product has
+        // no concept of it. All four map to nothing, INSTALL.txt says so (S4),
+        // and that is a better answer than a half-implementation the user has to
+        // discover the shape of.
+        string text = Ssml.Strip(request.Text ?? "");
         if (string.IsNullOrWhiteSpace(text))
         {
             // Not an error. A screen reader sends whatever the focused widget
@@ -71,20 +85,14 @@ public sealed partial class DaemonServer
         // is what discovers "there are no models yet", and since 2026-08-27 it
         // reports that instead of throwing.
         var selection = engines.Select(request.Voice);
-        if (selection.Error is { } routingError)
-        {
-            await WriteAsync(writer, Response.Fail(routingError));
-            return;
-        }
 
-        // A render must not swap the engine out from under an utterance that is
-        // playing. NeedsIdle means exactly that, and the honest answer is to
-        // refuse: speechd will ask again, and a screen reader asking again is
-        // cheaper than a user's audiobook changing voice mid-sentence.
-        if (selection.NeedsIdle)
+        // The whole admission policy, decided rather than emergent — trap 12 and
+        // trap 14. It lives in Core because it is otherwise reachable only
+        // through a fully built DaemonServer, which is to say not testable at
+        // all; see RenderAdmission for why the press wins and what that costs.
+        if (RenderAdmission.Refuse(_session.State, selection.NeedsIdle, selection.Error) is { } refusal)
         {
-            await WriteAsync(writer, Response.Fail(
-                $"busy ({_session.State}) — the engine cannot change while something is playing"));
+            await WriteAsync(writer, Response.Fail(refusal));
             return;
         }
 
@@ -130,8 +138,22 @@ public sealed partial class DaemonServer
         }
         catch (OperationCanceledException)
         {
-            // The client went away — for speechd, that IS the stop. Nothing to
-            // report to a socket nobody is reading.
+            // The daemon is shutting down. Nothing to report to a socket that is
+            // about to close.
+            return;
+        }
+        catch (IOException)
+        {
+            // THE CLIENT WENT AWAY MID-RENDER, WHICH IS A STOP AND NOT A FAULT.
+            // Under route B speechd terminates the module's child process on
+            // STOP, and Orca sends STOP on very nearly every keystroke — so this
+            // is the single most common way a render ends. It reached the
+            // catch-all below until 2026-08-28 and logged "render: failed" every
+            // time, which would have made the daemon log unreadable on the one
+            // machine where reading it matters most.
+            //
+            // Returning here also stops the synthesis: the loop is per chunk, so
+            // the utterance the user cancelled does not carry on being computed.
             return;
         }
         catch (Exception ex)

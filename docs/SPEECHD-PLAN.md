@@ -196,6 +196,38 @@ Three possible answers, and the check is cheap because
 
 **Do this first in S1. Do not write the module before knowing which.**
 
+<a name="b-gate-result"></a>
+
+#### The gate ran, 2026-08-27. **Answer 1: 0.11 has it**
+
+[`spike/speechd-705-gate`](../spike/speechd-705-gate), against Ubuntu 22.04's
+**speech-dispatcher 0.11.1** in a bare container and again on this machine's
+0.12.1. The server sends `AUDIO`, then `audio_output_method=server`, and logs
+`Initialized for server audio`. **Route B's module opens no audio device on the
+oldest supported distro either**, so nothing in this plan changes shape — and
+the distro's own `sd_espeak-ng` takes the same path on 0.11.1, which is the
+strongest available evidence that this is the supported route rather than a
+corner someone will close.
+
+Three protocol facts the probe measured, all of which S2 must be built on:
+
+1. **A command is answered before its parameters arrive.** `AUDIO` → reply →
+   *then* the server sends the settings block and a lone `.` → reply again. A
+   module that reads the block first **deadlocks**; one that answers out of order
+   desynchronises, and the server then refuses to start *at all* rather than
+   running without it. The first probe did exactly this.
+2. `sd_espeak-ng` answers the command with `207 OK RECEIVING AUDIO SETTINGS` and
+   the block with `203 OK AUDIO INITIALIZED`. `203` for both is also accepted.
+3. `spd-say "hello"` reaches the module as **`<speak>hello</speak>`** — trap 11's
+   SSML arrives whether or not anyone asked for it, which is what turned that
+   trap from a worry into a measurement.
+
+**And one thing left open, which is [S2](#s2)'s first bug.** With the audio block
+returned, `spd-say -w` never returns: the end-of-utterance handshake after the
+PCM is not right yet. Both `\n705 AUDIO\n` and `705 AUDIO\n` were tried as the
+terminator. The server *plays* — 0.12.1 logs `Using pulse audio output method`
+and then `speak_queue Playback` — so this is reply framing, not audio.
+
 ### What Route A actually needs
 
 **One new verb: `vst-ctl render`** — synthesise text and write a WAV to stdout
@@ -630,9 +662,10 @@ and here it has a screen-reader user on the other end of it.
 ## Phases
 
 Deliberately small, and in this order because each one can fail the next.
-**S0 was a gate and it ran** — [its numbers are below](#s0-result). **S1 opens
-with a second gate**, [the server-side audio question](#b-gate), which decides
-the module's shape.
+**S0 was a gate and it ran** — [its numbers are below](#s0-result). **S1 opened
+with a second gate**, [the server-side audio question](#b-gate), which decided
+the module's shape — [it was answered on 2026-08-27](#b-gate-result) and route B
+stands. **[S1 itself landed on 2026-08-28](#s1-landed)**; S2 is next.
 
 Route B costs about **two days more than route A** — five to seven rather than
 three — and buys correct echo routing, an explicit `STOP`, no audio backend, and
@@ -813,6 +846,70 @@ Then `render` properly, which route B calls unchanged from
   [trap 11](#t11).
 - **Never exit 0 with no audio** — [trap 14](#t14).
 - Tests, per [TESTING-PLAN.md](TESTING-PLAN.md). S0's prototype has none.
+
+<a name="s1-landed"></a>
+
+#### S1 landed, 2026-08-28
+
+The gate is [answered above](#b-gate-result). Everything else in the list is in
+the tree, and the two decisions the phase existed to force are made rather than
+inherited.
+
+| | Where |
+| --- | --- |
+| Streaming base64 PCM, rate from the first reply | [DaemonServer.Render.cs](../src/VibeSuperTonic.Daemon/DaemonServer.Render.cs), from S0 |
+| `--voice` takes the qualified id, `#12` included | Free from [P3](PIPER-PLAN.md#p3) — `VoiceId` already parses `piper:en_GB-vctk-medium#12` and is tested |
+| SSML stripped, punctuation decided | [Ssml.cs](../src/VibeSuperTonic.Core/Text/Ssml.cs) |
+| The concurrency policy, trap 12 | [RenderAdmission.cs](../src/VibeSuperTonic.Core/Ipc/RenderAdmission.cs) |
+| Cancellation on SIGTERM and on a closed stdout | [RenderWav.cs](../src/VibeSuperTonic.Core/Ipc/RenderWav.cs) and `RunRender` |
+| 60 tests, and each one sabotaged | `SsmlTests`, `RenderWavTests`, `RenderAdmissionTests` |
+
+**The SSML rule is narrower than trap 11 asked for, on purpose.** "Strip SSML
+tags" taken literally would delete angle brackets from source code, shell
+pipelines and mathematics — text people highlight and ask to have read aloud. So
+the strip runs only on text that opens with `<speak`, which is what makes it a
+document rather than a document containing a bracket; everything else passes
+through untouched. Inside a document a bare `<` is still a bare `<`, because
+`<speak>a < b</speak>` is what an unescaping client produces and the naive rule
+speaks the letter "a" and drops the rest of the sentence.
+
+**Punctuation verbosity is decided by omission, and that is the decision.** All
+four of speechd's levels map to nothing. [S4](#s4)'s `INSTALL.txt` says so.
+
+**Trap 12's policy: the press wins.** A render arriving while the session is
+anything but idle is refused with a reason. It is affordable *only* because of
+[trap 16](#t16) — the module falls back to our own espeak rather than to silence
+— so the user hears a flat voice rather than hearing the passage they are
+listening to stutter. `RenderAdmission` says this in a comment because **if that
+fallback is ever removed the policy has to change with it.** Renders do not
+refuse each other: they serialise in the synthesizer already, and Orca's
+commonest sequence is a stop followed at once by the next utterance, so refusing
+the second would put an audible voice change on every keystroke.
+
+**Two defects, both found by writing the tests rather than by reasoning.**
+
+- **The WAV header write was unguarded.** Every sample write already treated a
+  dead pipe as the stop; the header did not, so a `STOP` arriving between the
+  module being spawned and the daemon's first reply — the fastest stop there is
+  — killed `vst-ctl` with a stack trace instead of exiting quietly. The first
+  write is the *likeliest* one to meet a closed pipe, not the least.
+- **A vanished client was logged as a render failure.** The daemon's catch-all
+  caught the `IOException` and wrote `render: failed after N chunk(s)`. Under
+  route B that is what every `STOP` looks like, and Orca sends one on very nearly
+  every keystroke — so the daemon log would have been unreadable on exactly the
+  machine where reading it matters most.
+
+**Why three of these files are in Core.** `RenderWav` and `RenderAdmission` are
+Linux-feature code sitting in the platform-neutral project, which needs a reason.
+It is [TESTING-PLAN's](TESTING-PLAN.md#where-a-check-belongs) — they are logic and
+need no model, network or device — plus the thing that made S0's prototype
+untestable: inside `RenderAsync` and `Program.cs` they were reachable only by
+building a daemon with an engine, a session and a sink, which is to say not
+reachable from a test at all. They also then run on the Windows runner, which is
+the only guard shared code has against a Windows-motivated change.
+
+**Still not done, and it is [S2](#s2)'s:** the end-of-utterance handshake the
+gate left open.
 
 <a name="s2"></a>
 ### S2 · The module · two to three days
