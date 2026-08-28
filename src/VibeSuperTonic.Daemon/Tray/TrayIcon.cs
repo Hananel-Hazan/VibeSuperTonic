@@ -271,14 +271,19 @@ internal sealed class TrayIcon : IDisposable
     /// launch, and the binary sits beside this one for the same reason
     /// <c>vst-ctl</c>'s auto-start assumes it does.
     /// </summary>
+    private readonly WindowLaunchGate _launchGate = new();
+
     private void OpenWindow()
     {
-        if (_uiAttached())
+        // Raising an already-open window would need the UI to be listening for
+        // it. Launching a second one instead would be worse than doing nothing,
+        // so this says what happened rather than guessing — and it also refuses
+        // while a launch is still in flight, because "is a window open" cannot
+        // answer yes until the UI has started and subscribed. See
+        // WindowLaunchGate: two activations inside that gap opened two windows.
+        if (_launchGate.Refuse(_uiAttached(), DateTime.UtcNow) is { } why)
         {
-            // Raising an already-open window would need the UI to be listening
-            // for it. Launching a second one instead would be worse than doing
-            // nothing, so this says what happened rather than guessing.
-            _log("tray: a window is already open");
+            _log($"tray: {why}");
             return;
         }
 
@@ -287,6 +292,7 @@ internal sealed class TrayIcon : IDisposable
 
         if (!File.Exists(exe))
         {
+            _launchGate.Failed();
             _log($"tray: {exe} not found (set VST_UI to override)");
             return;
         }
@@ -302,6 +308,9 @@ internal sealed class TrayIcon : IDisposable
         }
         catch (Exception ex)
         {
+            // Let the next click try again rather than sitting behind a grace
+            // period for a launch that never happened.
+            _launchGate.Failed();
             _log($"tray: could not open the window: {ex.GetType().Name}: {ex.Message}");
         }
     }

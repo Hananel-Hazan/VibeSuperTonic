@@ -258,18 +258,19 @@ public sealed class TuneTab : UserControl
     {
         var reply = await _client.SendAsync(new Request { Verb = RequestVerb.Voices });
 
-        var ids = reply?.Voices?.Installed.Select(v => v.Id).ToList() ?? [];
         _installedVoices = reply?.Voices?.Installed.ToList() ?? [];
 
-        // The voice actually in force may not be installed — the setting can name
-        // a voice someone removed. Listing it anyway is what makes that visible
-        // in the one control whose job is to show which voice is chosen.
-        var qualified = VibeSuperTonic.Core.Synthesis.VoiceId.Parse(inForce).ToString();
-        if (!ids.Contains(qualified)) ids.Insert(0, qualified);
+        // VoicePicker, not the raw list: the daemon reports Supertonic as ONE
+        // row because that is the truth about the download, and this control has
+        // to offer its ten styles because that is the truth about the choice. It
+        // also qualifies the voice in force, so a settings file still holding a
+        // bare "M4" selects the supertonic:M4 row instead of adding a second row
+        // naming the same voice.
+        var (ids, selected) = VibeSuperTonic.Core.Synthesis.VoicePicker.Rows(_installedVoices, inForce);
 
         _loading = true;
         _voice.ItemsSource = ids;
-        _voice.SelectedItem = ids.Contains(qualified) ? qualified : ids.FirstOrDefault();
+        _voice.SelectedItem = ids.Contains(selected) ? selected : ids.FirstOrDefault();
         _loading = false;
 
         ApplyEngineRules();

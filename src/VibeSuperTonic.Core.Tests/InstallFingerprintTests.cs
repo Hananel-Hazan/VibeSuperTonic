@@ -85,6 +85,56 @@ public class InstallFingerprintTests
         Assert.All(changes, c => Assert.Equal(InstallImpact.Bindings, c.Impact));
     }
 
+    /// <summary>
+    /// THE CASE THAT SHIPPED BROKEN. Every AppImage run mounts itself at a fresh
+    /// /tmp/.mount_XXXXXX, so a BaseDir comparison says "the program moved" on
+    /// every launch of an install that has not moved at all — and the banner it
+    /// raises tells the user their hotkeys are dead and must be re-bound, which
+    /// is false. Nothing is different here except the mount, so nothing at all
+    /// should be reported.
+    ///
+    /// <para>The renamed-AppImage test above used Assert.Contains and therefore
+    /// passed with this bug present. Emptiness is the assertion that catches
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public void A_new_mount_for_the_same_appimage_is_not_a_move()
+    {
+        var changes = Recorded(Where(baseDir: "/tmp/.mount_aaa", appImage: "/apps/vst.AppImage"))
+            .ChangesAgainst(Where(baseDir: "/tmp/.mount_bbb", appImage: "/apps/vst.AppImage"));
+
+        Assert.Empty(changes);
+    }
+
+    /// <summary>
+    /// And the renamed case says ONE thing, not two: the AppImage moved. The
+    /// mount underneath it changing is not a second piece of news.
+    /// </summary>
+    [Fact]
+    public void A_renamed_appimage_reports_the_file_and_not_the_mount()
+    {
+        var changes = Recorded(Where(baseDir: "/tmp/.mount_aaa", appImage: "/apps/vst.AppImage"))
+            .ChangesAgainst(Where(baseDir: "/tmp/.mount_bbb", appImage: "/apps/tts.AppImage"));
+
+        var change = Assert.Single(changes);
+        Assert.Contains("AppImage moved", change.What, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A tarball install still reports a real move, which is the case the check
+    /// exists for: the folder is where the user put it, and the hotkeys name the
+    /// old path.
+    /// </summary>
+    [Fact]
+    public void A_tarball_that_moved_still_says_so()
+    {
+        var changes = Recorded(Where(baseDir: "/opt/vst")).ChangesAgainst(Where(baseDir: "/home/u/vst"));
+
+        var change = Assert.Single(changes);
+        Assert.Contains("the program moved", change.What, StringComparison.Ordinal);
+        Assert.Equal(InstallImpact.Bindings, change.Impact);
+    }
+
     [Fact]
     public void A_moved_store_touches_the_voices_and_not_the_bindings()
     {

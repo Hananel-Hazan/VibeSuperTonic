@@ -104,7 +104,22 @@ public sealed record InstallFingerprint(InstallIdentity Identity, string Recorde
             return changes;
         }
 
-        if (!string.Equals(Identity.BaseDir, now.BaseDir, StringComparison.Ordinal))
+        // ONLY WHEN NEITHER RUN IS AN AppImage. An AppImage's BaseDir is a
+        // temporary FUSE mount — /tmp/.mount_XXXXXX — with a fresh random name on
+        // every single run, so comparing it reports a move that never happened,
+        // EVERY TIME the program starts. The AppImage check below is the durable
+        // question, and it was written knowing this; what was missing is that
+        // knowing it must also suppress the BaseDir comparison.
+        //
+        // Found on 2026-08-28 on a real install rather than by a test: the window
+        // opened with a banner saying the program had moved and the hotkeys would
+        // do nothing until re-bound — advice that was false, and frightening, and
+        // arrived on every launch. The test beside it asserted the RENAMED case
+        // with Assert.Contains, which passes just as happily with a spurious
+        // second change in the list.
+        bool appImage = Identity.AppImageFile.Length > 0 || now.AppImageFile.Length > 0;
+
+        if (!appImage && !string.Equals(Identity.BaseDir, now.BaseDir, StringComparison.Ordinal))
         {
             changes.Add(new InstallChange(
                 $"the program moved — it was in {Identity.BaseDir}",

@@ -69,6 +69,59 @@ public sealed class MainWindow : Window
         Width = 900;
         Height = 700;
 
+        // OPENING IS NOT ONE EVENT, AND ON A SCALED SCREEN IT LOOKS LIKE IT.
+        // Measured 2026-08-28 on KDE/Wayland at 170%, XWayland, by polling the
+        // X server every 40 ms while the window opened:
+        //
+        //     427 ms   300x200+10+10       Avalonia's placeholder, at the origin
+        //     469 ms   900x700+10+10       our size, in PHYSICAL pixels
+        //     595 ms   900x700+1469+1429   moved to where it belongs
+        //     637 ms   1528x1188+1469+1429 rescaled once the 1.7 factor is known
+        //
+        // Four different windows in a fifth of a second, and the user watching
+        // reported it as opening huge and then shrinking. Nothing here is wrong
+        // at the end — 1528x1188 IS 900x700 at this screen's scale — but every
+        // intermediate step is on screen.
+        //
+        // The two halves are fixed differently. The jump across the desktop is
+        // ours: without a startup location the window is mapped at +10+10 and
+        // moved afterwards.
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+        // The resize is not ours to prevent — the scale factor arrives from the
+        // X server after the window exists — so the window stays invisible until
+        // it has stopped changing shape. Opacity rather than Hide/Show: the
+        // window is already mapped by the lifetime before any of our code runs,
+        // and hiding a mapped window is what makes it flash in the taskbar.
+        Opacity = 0;
+        bool shown = false;
+        LayoutUpdated += (_, _) =>
+        {
+            if (shown) return;
+            shown = true;
+
+            // One frame after layout settles. Posting at Background rather than
+            // setting it here is what lets the rescale land first; without the
+            // post the fade begins mid-dance and shows exactly what it is meant
+            // to hide.
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => Opacity = 1, Avalonia.Threading.DispatcherPriority.Background);
+        };
+
+        // AND UNCONDITIONALLY, SHORTLY AFTER OPENING. The line above is the only
+        // thing that makes this window visible, so a layout pass that never
+        // arrives is not a cosmetic bug — it is an application that starts and
+        // shows nothing, which is far worse than the flicker it was hiding.
+        Opened += (_, _) =>
+        {
+            var timer = new Avalonia.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1),
+            };
+            timer.Tick += (_, _) => { timer.Stop(); Opacity = 1; };
+            timer.Start();
+        };
+
         // Reader first, and it is what opens: this is a reader that has
         // settings, not a control panel that shows text.
         _tabs = new TabControl
