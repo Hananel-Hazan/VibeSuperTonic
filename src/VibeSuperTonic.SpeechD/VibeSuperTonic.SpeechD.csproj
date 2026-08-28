@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    vst-speechd — the Speech Dispatcher output module.
+
+    A process speech-dispatcher spawns and talks to over stdin and stdout. IT
+    LINKS NOTHING: not libspeechd_module, not an audio library, not speechd's
+    headers. The module protocol is text, and the audio goes back to the server
+    inside it (docs/SPEECHD-PLAN.md, route B) — so there is no per-distro ABI to
+    inherit and no build-time dependency on a speech-dispatcher that may be any
+    of four versions.
+
+    NativeAOT for the same reason vst-ctl is, only more so. speech-dispatcher
+    starts this once per session, but Orca drives it dozens of times a minute and
+    the whole design rests on the espeak path answering a keystroke in a few
+    milliseconds. A ~100 ms managed startup would not show up here as slowness —
+    the process is long-lived — but the .NET runtime would sit resident beside
+    the daemon for the whole session, which is the opposite of why the fast voice
+    exists.
+
+    InvariantGlobalization because a module inherits whatever environment
+    speech-dispatcher was started in, and because the archive must not need ICU —
+    which CI learned the hard way on 2026-08-27.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vst-speechd</AssemblyName>
+    <RootNamespace>VibeSuperTonic.SpeechD</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <Version>$(VstVersion)</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

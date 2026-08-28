@@ -22,6 +22,8 @@
     <Project Path="src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />
     <Project Path="src/VibeSuperTonic.Daemon.Tests/VibeSuperTonic.Daemon.Tests.csproj" />
     <Project Path="src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj" />
+    <Project Path="src/VibeSuperTonic.SpeechD/VibeSuperTonic.SpeechD.csproj" />
+    <Project Path="src/VibeSuperTonic.SpeechD.Tests/VibeSuperTonic.SpeechD.Tests.csproj" />
     <Project Path="src/VibeSuperTonic.Ui/VibeSuperTonic.Ui.csproj" />
   </Folder>
   <Folder Name="/spike/">

@@ -755,7 +755,8 @@ Deliberately small, and in this order because each one can fail the next.
 **S0 was a gate and it ran** — [its numbers are below](#s0-result). **S1 opened
 with a second gate**, [the server-side audio question](#b-gate), which decided
 the module's shape — [it was answered on 2026-08-27](#b-gate-result) and route B
-stands. **[S1 itself landed on 2026-08-28](#s1-landed)**; S2 is next.
+stands. **[S1](#s1-landed) and [S2](#s2-landed) both landed on 2026-08-28**;
+S3 is next.
 
 Route B costs about **two days more than route A** — five to seven rather than
 three — and buys correct echo routing, an explicit `STOP`, no audio backend, and
@@ -1026,6 +1027,61 @@ What it does, in the order the failures matter:
 4. **Answers `STOP` immediately** — stop rendering, stop returning blocks, emit
    `703 STOP`. This is the operation Orca performs most.
 5. **`LIST VOICES`** from what is installed, which is where [S3](#s3) plugs in.
+
+<a name="s2-landed"></a>
+
+#### S2 landed, 2026-08-28
+
+`vst-speechd` — 2.7 MB NativeAOT, linking nothing but libc, spawned by
+speech-dispatcher and talking the module protocol on stdin and stdout. Driven by
+the machine's real speech-dispatcher with real audio,
+[`run-module.sh`](../spike/speechd-705-gate/run-module.sh):
+
+| | |
+| --- | --- |
+| `spd-say -O` | **both** `espeak-ng` and `vibesupertonic` — [trap 1](#t1) |
+| `SPEAK` → neural | returned in 3520 ms, the daemon's model cold |
+| `CHAR` / `KEY` → espeak | 615 / 1114 ms end to end, including playback |
+| audio blocks the server parsed | 90 |
+| `STOP` mid-utterance | `703 STOP`, and the module answers again afterwards |
+| the control, `espeak-ng` SPEAK | 1914 ms |
+
+**The single-threaded shape is upstream's, and it is load-bearing.** The audio
+loop writes a block and then reads whatever has arrived before writing the next,
+which is the only thing that lets a `STOP` interrupt an utterance already in
+flight. A worker thread producing audio while the main loop answered commands
+would need a lock around stdout and every reply would race the block beside it —
+for no gain, because the thing that must be responsive is the stop, and the stop
+is already checked between blocks.
+
+**One audio path for both voices.** `vst-ctl render --out -` and the bundled
+`espeak-ng --stdout` both write a WAV to a pipe, so the choice between them
+changes nothing downstream of [`WavHeader`](../src/VibeSuperTonic.Core/SpeechD/WavHeader.cs)
+— and [trap 16](#t16)'s fallback becomes "start the other one" rather than a
+second code path. S1's *never exit 0 with no audio* is what makes the fallback
+decidable at all: a non-zero exit or a stdout that is not a WAV **is** the
+signal.
+
+**What the tests are, and what sabotage changed about them.** 39 new checks — the
+escaping, the block framing, the routing, the WAV reader in `Core.Tests` (both
+runners), the protocol state machine in a new `SpeechD.Tests` (Linux only, since
+it chmods a shell script). All sixteen rules behind them were sabotaged; **four
+were not caught the first time**, and each was a test that did not reach the
+thing it claimed to:
+
+- Every utterance in the suite ended through the *both voices failed* branch, so
+  deleting `702 END` from the success branch broke nothing. Fixed by a fake voice
+  that actually renders — which also made it possible to assert **what text
+  reached the renderer**, without which a module that dropped SSIP's `..`
+  unescaping passed every test in the file.
+- The non-WAV cases were all too short: they are refused by any reader simply for
+  running out of bytes, so deleting the `RIFF`/`WAVE` check broke none of them.
+- Every WAV in the suite declared `0xFFFFFFFF`, so a reader that special-cased a
+  declared size of zero — and returned no audio from a good utterance — passed.
+
+**Not done here, and deliberately.** The voice list is the two voices that always
+exist, which is honest but is not [S3](#s3); the module is not in the archive yet,
+which is [S4](#s4) along with the installer and the packer assertions.
 
 <a name="s3"></a>
 ### S3 · The voice list · half a day
