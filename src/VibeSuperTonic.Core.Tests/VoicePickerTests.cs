@@ -158,6 +158,33 @@ public sealed class VoicePickerTests
         Assert.Equal("supertonic:M4", VoicePicker.Compose("supertonic:M4", 3));
     }
 
+    /// <summary>
+    /// Choose speaker 6, press Use, watch it snap back to 0 — reported from a
+    /// real install on 2026-08-28. The row's dropdown is seeded from the row's
+    /// id, so the id has to carry the speaker that is actually configured.
+    /// </summary>
+    [Fact]
+    public void A_row_shows_the_speaker_its_id_carries()
+    {
+        var entry = Piper("en_US-libritts-high", "en_US", "English (United States)", speakers: 904);
+
+        Assert.Equal(0, VoicePicker.SpeakerIndex(entry));
+        Assert.Equal(6, VoicePicker.SpeakerIndex(entry with { Id = entry.Id + "#6" }));
+    }
+
+    /// <summary>
+    /// A settings file is hand-editable, so it can name a speaker the voice does
+    /// not have. Selecting nothing at all would be a dropdown that looks broken.
+    /// </summary>
+    [Fact]
+    public void A_speaker_beyond_the_voices_range_is_clamped()
+    {
+        var entry = Piper("en_GB-aru-medium", "en_GB", "English (Great Britain)", speakers: 12);
+
+        Assert.Equal(11, VoicePicker.SpeakerIndex(entry with { Id = entry.Id + "#950" }));
+        Assert.Equal(0, VoicePicker.SpeakerIndex(null));
+    }
+
     [Fact]
     public void A_daemon_that_did_not_answer_offers_nothing_and_claims_nothing()
     {

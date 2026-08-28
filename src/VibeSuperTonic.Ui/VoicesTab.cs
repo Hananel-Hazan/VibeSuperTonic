@@ -239,8 +239,7 @@ public sealed class VoicesTab : UserControl
                 : Enumerable.Range(0, v.Speakers.Value).Select(i => i.ToString()).ToList();
 
             speakers = new ComboBox { ItemsSource = names, Width = 160 };
-            speakers.SelectedIndex = Math.Clamp(
-                VibeSuperTonic.Core.Synthesis.VoiceId.Parse(v.Id).Speaker ?? 0, 0, names.Count - 1);
+            speakers.SelectedIndex = VibeSuperTonic.Core.Synthesis.VoicePicker.SpeakerIndex(v);
             buttons.Children.Add(speakers);
         }
 

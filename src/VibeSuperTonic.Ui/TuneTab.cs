@@ -106,9 +106,10 @@ public sealed class TuneTab : UserControl
 
         // Each level rebuilds the ones below it. Guarded by _loading so filling
         // the controls during a refresh does not look like a user choosing.
-        _engine.SelectionChanged += (_, _) => { if (!_loading) { RebuildLanguages(); } };
-        _voiceLanguage.SelectionChanged += (_, _) => { if (!_loading) { RebuildVoices(); } };
-        _voice.SelectionChanged += (_, _) => { if (!_loading) { RebuildSpeakers(); ApplyEngineRules(); } };
+        _engine.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildLanguages(); } };
+        _voiceLanguage.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildVoices(); } };
+        _voice.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildSpeakers(); ApplyEngineRules(); } };
+        _speaker.SelectionChanged += (_, _) => { if (!_loading) _voiceTouched = true; };
 
         var grid = new StackPanel { Spacing = 8 };
         grid.Children.Add(Row("Engine", _engine,
@@ -290,6 +291,7 @@ public sealed class TuneTab : UserControl
         // turns a settings file still holding a bare "M4" into supertonic:M4,
         // rather than offering the same voice twice under two spellings.
         _at = VoicePicker.Locate(_installedVoices, inForce);
+        _voiceTouched = false;
 
         _loading = true;
         Fill(_engine, VoicePicker.Engines(_installedVoices), _at.Engine);
@@ -300,6 +302,20 @@ public sealed class TuneTab : UserControl
 
     /// <summary>Where the cascade currently stands. Rebuilt from the daemon's list.</summary>
     private VoiceSelection _at = new("supertonic", "", "", null);
+
+    /// <summary>
+    /// Whether the user has touched the voice ON THIS TAB.
+    ///
+    /// <para><b>Two tabs can set the voice, and without this they fight.</b> The
+    /// Voices tab's Use button writes the voice; this tab's Save writes every
+    /// setting it shows, the voice among them. So a Save here — made to change a
+    /// rate, or a provider — would quietly put back whatever voice this tab was
+    /// showing when it last read the file, undoing a choice made next door. The
+    /// tab re-reads on every visit, which makes that window small rather than
+    /// closed; this closes it. Save writes the voice only when the voice is what
+    /// the user came here to change.</para>
+    /// </summary>
+    private bool _voiceTouched;
 
     private void RebuildLanguages()
     {
@@ -368,7 +384,7 @@ public sealed class TuneTab : UserControl
     /// The row a control sits in, so a whole line can be hidden rather than left
     /// empty. Row() builds a two-column grid, so the control's parent IS it.
     /// </summary>
-    private static Control RowOf(Control control) => (Control)control.Parent!;
+    private static Control RowOf(Control control) => control.Parent as Control ?? control;
 
     /// <summary>
     /// Grey out what the selected engine cannot honour, and say why.
@@ -421,7 +437,7 @@ public sealed class TuneTab : UserControl
         // cannot disagree about what choosing a voice means.
         // From the whole cascade, not the voice row alone: a Piper voice with a
         // chosen speaker is saved as piper:<id>#<sid>.
-        if (ChosenVoice() is { Length: > 0 } chosen) root.SetVoice(chosen);
+        if (_voiceTouched && ChosenVoice() is { Length: > 0 } chosen) root.SetVoice(chosen);
 
         root.Set("Language", Text(_fields["Language"]));
 

@@ -103,7 +103,16 @@ public sealed partial class DaemonServer
         if (styles.Count > 0)
         {
             installed.Add(new VoiceEntry(
-                Id: VoiceId.ForSupertonic(defaultIsStyle ? def.Bare : styles[0]).ToString(),
+                // The style in force, or the one REMEMBERED while a Piper voice
+                // holds the default. DefaultVoice keeps the last Supertonic style
+                // for exactly this reason — SetVoice writes it only for a
+                // Supertonic voice — so pressing Use on this row takes the user
+                // back to their own style rather than to whichever sorts first.
+                Id: VoiceId.ForSupertonic(
+                        defaultIsStyle ? def.Bare
+                        : styles.FirstOrDefault(
+                            st => string.Equals(st, _config.Settings.DefaultVoice, StringComparison.OrdinalIgnoreCase))
+                          ?? styles[0]).ToString(),
                 Engine: "supertonic",
                 Name: "Supertonic",
                 Installed: true,
@@ -129,12 +138,26 @@ public sealed partial class DaemonServer
         foreach (string id in installer.Installed())
         {
             var entry = catalog?.Find(id);
+            bool isDefault = defaultIsPiper
+                && string.Equals(def.Bare, id, StringComparison.OrdinalIgnoreCase);
+
             installed.Add(new VoiceEntry(
-                Id: VoiceId.ForPiper(id).ToString(),
+                // WITH THE CONFIGURED SPEAKER, when this is the voice in force.
+                // Supertonic's row has always carried the style that is chosen;
+                // a Piper row carrying no speaker means the id says something
+                // different from what the daemon will actually say, and the
+                // Voices tab — which builds its speaker dropdown FROM this id —
+                // showed speaker 0 for a voice configured with speaker 6. Chosen
+                // 6, pressed Use, watched it snap back, reported 2026-08-28.
+                //
+                // Only for the default row: an installed voice nobody has chosen
+                // has no speaker, and inventing 0 for it would claim a choice
+                // that was never made.
+                Id: VoiceId.ForPiper(id).WithSpeaker(isDefault ? def.Speaker : null).ToString(),
                 Engine: "piper",
                 Name: entry?.Name ?? id,
                 Installed: true,
-                IsDefault: defaultIsPiper && string.Equals(def.Bare, id, StringComparison.OrdinalIgnoreCase),
+                IsDefault: isDefault,
                 LanguageCode: entry?.Language.Code,
                 Language: entry?.Language.Display(),
                 Quality: entry?.Quality,

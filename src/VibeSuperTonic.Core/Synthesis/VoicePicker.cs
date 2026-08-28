@@ -165,6 +165,26 @@ public static class VoicePicker
         return new VoiceSelection(engine, language, voice, wanted.Speaker);
     }
 
+    /// <summary>
+    /// Which speaker a row should show: the one its id carries, clamped to what
+    /// the voice actually has.
+    ///
+    /// <para><b>The id is the only honest source.</b> The Voices tab builds a
+    /// speaker dropdown per row and used to seed it from the row's id — which
+    /// carried no speaker, so a voice configured with speaker 6 displayed 0, and
+    /// pressing Use appeared to reset the choice. The daemon now puts the
+    /// configured speaker on the row it is configured for; this is the reading
+    /// half of that, and the clamp is what stops a settings file naming speaker
+    /// 950 of a 904-speaker voice from selecting nothing at all.</para>
+    /// </summary>
+    public static int SpeakerIndex(VoiceEntry? entry)
+    {
+        if (entry is null) return 0;
+        int count = entry.SpeakerNames?.Count ?? entry.Speakers ?? 1;
+        int wanted = VoiceId.Parse(entry.Id).Speaker ?? 0;
+        return count <= 0 ? 0 : Math.Clamp(wanted, 0, count - 1);
+    }
+
     /// <summary>The id to save, from where the cascade stands.</summary>
     public static string Compose(string voice, int? speaker)
     {
