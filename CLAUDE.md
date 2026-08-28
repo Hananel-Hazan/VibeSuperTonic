@@ -289,6 +289,27 @@ relevant `dotnet publish` output — don't paper over it.
 On success, report the final ZIP path and size to the user. The script prints
 both at the end; relay them verbatim.
 
+### Then tag it, in the same sitting
+
+**A release that is not tagged cannot be found again.** Tag the commit the
+artifacts were packed from, with that version's release notes as the message:
+
+```bash
+git tag -a v<X.Y.Z> -m "$(sed -n '/^# VibeSuperTonic v<X.Y.Z>$/,/^---$/p' RELEASE_NOTES.md)"
+# push it when the user asks — tags are theirs to publish
+```
+
+This rule exists because the first eight releases were **not** tagged, and on
+2026-08-28 they had to be reconstructed from artifact timestamps. Three of the
+six landed within a minute of a commit and are trustworthy; three are placed
+against gaps of hours to four days and say so in their own tag message. That is
+recoverable only because the artifacts were still on disk — the moment one is
+deleted, an untagged release becomes a tree nobody can identify. It nearly
+happened: a cleanup was about to remove the last two copies of 0.2.9 with no tag
+to rebuild from.
+
+So: **pack, verify, tag, in one sitting.** Do not push the tag — the user pushes.
+
 ### Do not bypass
 
 If a packaging script appears broken, fix the script — don't run the underlying
