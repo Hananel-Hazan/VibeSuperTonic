@@ -79,6 +79,14 @@ for arg in "$@"; do
     esac
 done
 
+# ASKING THE OUTSIDE WORLD IS ALLOWED TO FAIL, AND MUST NOT BE FATAL.
+# Under `set -euo pipefail` an unguarded `x="$(cmd | ...)"` takes the whole
+# script out when cmd fails or times out — with no message, because the die that
+# would have explained it never runs. That is how --check came to exit non-zero
+# in the middle of its own report the first time speech-dispatcher was slow to
+# answer: the packer showed a report that simply stopped. Every substitution
+# that asks speechd, the filesystem or a config file a question therefore ends
+# in `|| true`, and the emptiness is handled where it is read.
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 die()  { printf 'speechd-install: %s\n' "$*" >&2; exit 1; }
@@ -163,7 +171,7 @@ enumerate_offered() {
         mapfile -t names < <(timeout 25 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF')
     fi
     if (( ${#names[@]} == 0 )); then
-        local dir; dir="$(modules_dir)"
+        local dir; dir="$(modules_dir || true)"
         if [[ -n "$dir" ]]; then
             while read -r name binary; do
                 [[ -x "$dir/$binary" ]] && names+=("$name")
@@ -295,7 +303,7 @@ if [[ "$action" == check ]]; then
     say ""
     if [[ -f "$conf" ]]; then
         say "  config           $conf"
-        declared="$(sed -n "s/^[[:space:]]*AddModule[[:space:]]\+\"$MODULE_NAME\"[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$conf" | tail -1)"
+        declared="$(sed -n "s/^[[:space:]]*AddModule[[:space:]]\+\"$MODULE_NAME\"[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$conf" | tail -1 || true)"
         if [[ -z "$declared" ]]; then
             say "  declares us      no"
         else
@@ -319,7 +327,7 @@ if [[ "$action" == check ]]; then
     fi
 
     if command -v spd-say >/dev/null 2>&1; then
-        offered="$(timeout 25 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF' | tr '\n' ' ')"
+        offered="$(timeout 25 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF' | tr '\n' ' ' || true)"
         say ""
         say "  speechd offers   ${offered:-(no answer — is speech-dispatcher installed and able to start?)}"
         if [[ -f "$conf" ]] && grep -q "AddModule \"$MODULE_NAME\"" "$conf" 2>/dev/null; then
@@ -345,8 +353,8 @@ if [[ "$action" == remove ]]; then
     created=0; backup=""
     if [[ -f "$state" ]]; then
         # shellcheck source=/dev/null
-        created="$(sed -n 's/^created=//p' "$state" | tail -1)"; created="${created:-0}"
-        backup="$(sed -n 's/^backup=//p' "$state" | tail -1)"
+        created="$(sed -n 's/^created=//p' "$state" | tail -1 || true)"; created="${created:-0}"
+        backup="$(sed -n 's/^backup=//p' "$state" | tail -1 || true)"
     fi
 
     if [[ -n "$backup" && -f "$backup" ]]; then
@@ -381,7 +389,7 @@ if [[ "$action" == remove ]]; then
     # THE TEST THAT MATTERS, run as part of the operation rather than left to
     # the user: after removing ourselves, does the machine still speak?
     if command -v spd-say >/dev/null 2>&1; then
-        offered="$(timeout 30 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF' | tr '\n' ' ')"
+        offered="$(timeout 30 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF' | tr '\n' ' ' || true)"
         say "  speechd now offers: ${offered:-nothing}"
         [[ -n "$offered" ]] || die "speech-dispatcher now offers NO output modules.
        That is the failure this script exists to prevent, and it has to be
@@ -483,7 +491,7 @@ fi
     printf '# turns detection off for every other module at once.\n'
 } >> "$conf"
 
-already="$(active_declarations "$conf")"
+already="$(active_declarations "$conf" || true)"
 for name in "${offered[@]}"; do
     [[ "$name" == "$MODULE_NAME" ]] && continue
     grep -qx "$name" <<< "$already" && continue

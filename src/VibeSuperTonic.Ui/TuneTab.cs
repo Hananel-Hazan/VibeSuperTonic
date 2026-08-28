@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Settings;
 using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Ui;
@@ -72,6 +73,22 @@ public sealed class TuneTab : UserControl
 
     /// <summary>Said beside the controls a Piper voice cannot honour, and blank otherwise.</summary>
     private readonly TextBlock _engineNote = Ui.Label("");
+    /// <summary>
+    /// Who the settings below apply to: every voice, every voice of this engine,
+    /// or this voice alone.
+    ///
+    /// <para>The fields always show what the CHOSEN scope resolves to, so what
+    /// is on screen is what that scope will produce. Saving writes only into
+    /// that scope — the numbers a voice inherits are not copied down into it,
+    /// because an override that silently pins every value is one nobody can
+    /// undo by changing the global setting.</para>
+    /// </summary>
+    private readonly ComboBox _scope = new() { Width = 320 };
+    private readonly Button _clearScope = new() { Content = "Clear these overrides" };
+    private readonly TextBlock _scopeNote = Ui.Label("");
+
+    private readonly Button _test = new() { Content = "Save & test" };
+    private readonly Button _stop = new() { Content = "Stop" };
 
     private string? _settingsPath;
 
@@ -108,10 +125,29 @@ public sealed class TuneTab : UserControl
         // the controls during a refresh does not look like a user choosing.
         _engine.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildLanguages(); } };
         _voiceLanguage.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildVoices(); } };
-        _voice.SelectionChanged += (_, _) => { if (!_loading) { _voiceTouched = true; RebuildSpeakers(); ApplyEngineRules(); } };
+        _voice.SelectionChanged += (_, _) =>
+        {
+            if (_loading) return;
+            _voiceTouched = true;
+            RebuildSpeakers();
+            RebuildScopes();
+            ApplyEngineRules();
+        };
         _speaker.SelectionChanged += (_, _) => { if (!_loading) _voiceTouched = true; };
 
+        _scope.SelectionChanged += (_, _) => { if (!_loading) ApplyScope(); };
+        _clearScope.Click += async (_, _) => await ClearScopeAsync();
+
         var grid = new StackPanel { Spacing = 8 };
+        grid.Children.Add(Row("These settings apply to", _scope,
+            "Choose a voice below, then decide whether what you set here is for every voice, "
+            + "for that whole engine, or for that voice alone."));
+        grid.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { _clearScope, _scopeNote },
+        });
         grid.Children.Add(Row("Engine", _engine,
             "Supertonic is one model set with ten styles. Piper is one voice per download; "
             + "add and remove them in the Voices tab."));
@@ -125,6 +161,32 @@ public sealed class TuneTab : UserControl
             + "this row is hidden."));
         grid.Children.Add(Row("Language", language, "en — a Supertonic code, not en-US."));
         grid.Children.Add(_engineNote);
+
+        // HEAR IT. Every number on this tab is a claim about how a voice sounds,
+        // and none of them can be judged by reading. It saves first because a
+        // Speak request carries text, voice and language and nothing else — the
+        // daemon speaks from settings.json, so testing an unsaved rate would
+        // test the old one and quietly say so with the wrong voice. The button
+        // says "Save & test" for that reason rather than hiding it.
+        _test.Click += async (_, _) =>
+        {
+            await SaveAsync();
+            var reply = await _client.SendAsync(new Request
+            {
+                Verb = RequestVerb.Speak,
+                Voice = ChosenVoice() is { Length: > 0 } v ? v : null,
+                Text = "The quick brown fox jumps over the lazy dog. "
+                     + "This is how the current settings sound.",
+            });
+            if (reply?.Ok == false) _status.Text = reply.Error ?? "the daemon refused to speak.";
+        };
+        _stop.Click += async (_, _) => await _client.SendAsync(new Request { Verb = RequestVerb.Stop });
+        grid.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { _test, _stop },
+        });
 
         foreach (var (key, label, hint) in Numbers)
         {
@@ -233,6 +295,8 @@ public sealed class TuneTab : UserControl
             return;
         }
 
+        _file = root;
+
         await RefreshVoicePickerAsync(c.Voice);
 
         // Blank means "not set in the file", and the placeholder shows what the
@@ -317,6 +381,14 @@ public sealed class TuneTab : UserControl
     /// </summary>
     private bool _voiceTouched;
 
+    /// <summary>
+    /// The settings file as last read. Held so the scope selector can show what
+    /// a scope resolves to without going back to disk on every change — and so
+    /// "does this scope have overrides" is answered from the same copy the
+    /// fields were filled from.
+    /// </summary>
+    private JsonObject? _file;
+
     private void RebuildLanguages()
     {
         string engine = Selected(_engine) ?? _at.Engine;
@@ -345,7 +417,96 @@ public sealed class TuneTab : UserControl
         _loading = false;
 
         RebuildSpeakers();
+        RebuildScopes();
         ApplyEngineRules();
+    }
+
+    /// <summary>
+    /// The three scopes, named for the voice that is selected — "all Piper
+    /// voices" and "only piper:en_GB-cori-high" are only meaningful once there
+    /// is a voice to point at.
+    /// </summary>
+    private void RebuildScopes()
+    {
+        var (engine, voiceKey) = ScopeNames();
+        string engineLabel = engine == "piper" ? "Piper" : "Supertonic";
+
+        var rows = new List<PickerRow>
+        {
+            new(nameof(SettingsScopeKind.All), "All voices"),
+            new(nameof(SettingsScopeKind.Engine), $"All {engineLabel} voices"),
+            new(nameof(SettingsScopeKind.Voice), $"Only {voiceKey}"),
+        };
+
+        _loading = true;
+        Fill(_scope, rows, Selected(_scope) ?? nameof(SettingsScopeKind.All));
+        _loading = false;
+
+        ApplyScope();
+    }
+
+    private SettingsScopeKind ScopeKind() =>
+        Enum.TryParse(Selected(_scope), out SettingsScopeKind kind) ? kind : SettingsScopeKind.All;
+
+    private (string Engine, string Voice) ScopeNames()
+    {
+        string voice = Selected(_voice) ?? _at.Voice;
+        var id = VoiceId.Parse(voice.Length > 0 ? voice : "supertonic:M1");
+        return (Selected(_engine) ?? _at.Engine, SettingsScope.KeyFor(id));
+    }
+
+    /// <summary>
+    /// Show what the chosen scope resolves to, and say whether it has anything
+    /// of its own.
+    ///
+    /// <para>Without that second half a user cannot tell an override from an
+    /// inherited value, which is the difference between "this voice is slower"
+    /// and "everything is slower" — and the first thing they would do about it
+    /// is set a number that was already correct, pinning it forever.</para>
+    /// </summary>
+    private void ApplyScope()
+    {
+        if (_file is null) return;
+
+        var (engine, voiceKey) = ScopeNames();
+        var kind = ScopeKind();
+        var source = kind == SettingsScopeKind.All
+            ? _file
+            : SettingsScope.Merge(_file, engine, voiceKey);
+
+        _loading = true;
+        _fields["Language"].Text = source.String("Language") ?? "";
+        foreach (var (key, _, _) in Numbers)
+            _fields[key].Text = source.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
+        _loading = false;
+
+        bool has = SettingsScope.Has(_file, kind, engine, voiceKey);
+        _clearScope.IsVisible = kind != SettingsScopeKind.All;
+        _clearScope.IsEnabled = has;
+        _scopeNote.Text = kind == SettingsScopeKind.All
+            ? "The values every voice starts from."
+            : has
+                ? "This scope has values of its own. Saving writes only what is set here."
+                : "Nothing is set for this scope yet — what you see is inherited. Saving writes "
+                  + "these values here, and they stop following the ones above.";
+    }
+
+    private async Task ClearScopeAsync()
+    {
+        if (_settingsPath is null) return;
+
+        var (engine, voiceKey) = ScopeNames();
+        JsonObject root;
+        try { root = SettingsFile.Read(_settingsPath); }
+        catch (Exception ex) { _status.Text = $"could not re-read the file: {ex.Message}"; return; }
+
+        SettingsScope.Clear(root, ScopeKind(), engine, voiceKey);
+        try { SettingsFile.Write(_settingsPath, root); }
+        catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
+
+        _status.Text = "overrides cleared — this scope follows the ones above it again.";
+        await _client.SendAsync(new Request { Verb = RequestVerb.Reload });
+        await RefreshAsync();
     }
 
     private void RebuildSpeakers()
@@ -439,12 +600,25 @@ public sealed class TuneTab : UserControl
         // chosen speaker is saved as piper:<id>#<sid>.
         if (_voiceTouched && ChosenVoice() is { Length: > 0 } chosen) root.SetVoice(chosen);
 
-        root.Set("Language", Text(_fields["Language"]));
+        // WHERE the scoped values land. "All voices" is the file itself, which is
+        // what every save did before this existed; the others are sections, made
+        // only when something is actually written into them.
+        var (scopeEngine, scopeVoice) = ScopeNames();
+        var kind = ScopeKind();
+        var target = kind == SettingsScopeKind.All
+            ? root
+            : SettingsScope.Target(root, kind, scopeEngine, scopeVoice);
+
+        target.Set("Language", Text(_fields["Language"]));
 
         foreach (var (key, label, _) in Numbers)
         {
+            // Unscoped numbers always belong to the file: a thread budget or a
+            // provider is about this machine, and a voice cannot have its own.
+            var into = SettingsScope.IsScoped(key) ? target : root;
+
             string raw = _fields[key].Text?.Trim() ?? "";
-            if (raw.Length == 0) { root.Remove(key); continue; }
+            if (raw.Length == 0) { into.Remove(key); continue; }
 
             if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
             {
@@ -454,8 +628,13 @@ public sealed class TuneTab : UserControl
 
             // Integers stay integers on the wire. A TotalStep of 8.0 parses
             // everywhere but reads as a mistake in a file people open.
-            root.Set(key, value == Math.Floor(value) ? JsonValue.Create((long)value) : JsonValue.Create(value));
+            into.Set(key, value == Math.Floor(value) ? JsonValue.Create((long)value) : JsonValue.Create(value));
         }
+
+        // An override section that ended up empty is deleted rather than left as
+        // an empty object: "this voice has settings" must mean it has some.
+        if (kind != SettingsScopeKind.All && target.Count == 0)
+            SettingsScope.Clear(root, kind, scopeEngine, scopeVoice);
 
         root.Set("ClipboardFallback", JsonValue.Create(_clipboardFallback.IsChecked == true));
         root.Set("GpuOnBattery", JsonValue.Create(_gpuOnBattery.IsChecked == true));

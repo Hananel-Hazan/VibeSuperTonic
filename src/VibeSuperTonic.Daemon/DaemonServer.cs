@@ -653,7 +653,17 @@ public sealed partial class DaemonServer : IDisposable
                 Log($"audio: re-tuned to {selection.SampleRate} Hz for {plan.Engine}");
         }
 
-        _session.Options = _config.SessionOptions with { StretchFactor = plan.StretchFactor };
+        // Scoped to the voice about to speak, not to the file's globals: chunk
+        // sizes, volume trim and inter-chunk silence are as much "how this voice
+        // sounds" as its rate is, so they follow the same PerEngine/PerVoice
+        // rules. Identical to SessionOptions — the same object — when nothing is
+        // overridden, which is every install that has not used the scope
+        // selector.
+        // The SAME expression the plan was built from, override included: asking
+        // for one voice's plan and another's chunking is a bug that would only
+        // show as slightly wrong pacing on a --voice request.
+        _session.Options = _config.SessionOptionsFor(voice ?? _options.VoiceOverride)
+            with { StretchFactor = plan.StretchFactor };
         return plan.Synthesis;
     }
 

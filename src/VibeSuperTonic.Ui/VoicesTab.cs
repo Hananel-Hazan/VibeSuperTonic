@@ -251,9 +251,14 @@ public sealed class VoicesTab : UserControl
                 .WithSpeaker(speakers.SelectedIndex >= 0 ? speakers.SelectedIndex : null)
                 .ToString();
 
-        // Offered even for the current default when there is a speaker to change:
-        // "already in use" and "in use with this speaker" are different states.
-        if (!v.IsDefault || speakers is not null)
+        // ONLY WHERE THERE IS A SPEAKER TO CARRY. Which voice speaks is chosen
+        // in the Tune tab, in one place, with the engine and language above it;
+        // a second Use button on every row was the same decision offered twice
+        // and the two could disagree. What Tune has no answer for is a voice
+        // with 904 speakers you want to AUDITION before adopting — Sample is
+        // here, next to the dropdown — so Use survives exactly where it says
+        // something Tune's picker cannot: this voice, with this speaker.
+        if (speakers is not null)
         {
             var use = new Button { Content = "Use" };
             use.Click += async (_, _) => await UseAsync(Chosen());

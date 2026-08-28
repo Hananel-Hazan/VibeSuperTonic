@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using VibeSuperTonic.Core.Settings;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using VibeSuperTonic.Core.Audio;
@@ -382,6 +384,79 @@ public sealed class HostConfig
     /// a voice belongs to exactly one engine, so a setting that could disagree
     /// with the voice is a setting that eventually will.</para>
     /// </summary>
+    /// <summary>The raw settings object, for resolving scoped overrides.</summary>
+    private JsonObject? _rawSettings;
+
+    /// <summary>Merged settings per scope key, cleared whenever the file reloads.</summary>
+    private readonly Dictionary<string, LinuxSettings> _scoped = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The settings that apply to one voice: the file's own values, with this
+    /// engine's overrides on top, with this voice's on top of those.
+    ///
+    /// <para>Returns the global settings unchanged when nothing is overridden,
+    /// which is every install until somebody uses the scope selector — so the
+    /// common path allocates nothing and behaves exactly as it did.</para>
+    /// </summary>
+    public LinuxSettings SettingsFor(string? voice)
+    {
+        if (_rawSettings is null) return Settings;
+
+        var id = VoiceId.Parse(voice ?? ConfiguredVoice);
+        string engine = id.MayBePiper && PiperVoices.Config(id.Bare) is not null ? "piper"
+            : id.Engine == VoiceEngine.Piper ? "piper" : "supertonic";
+        string key = SettingsScope.KeyFor(id);
+
+        if (!SettingsScope.Has(_rawSettings, SettingsScopeKind.Engine, engine, key)
+            && !SettingsScope.Has(_rawSettings, SettingsScopeKind.Voice, engine, key))
+        {
+            return Settings;
+        }
+
+        string cacheKey = engine + "|" + key;
+        lock (_scoped)
+        {
+            if (_scoped.TryGetValue(cacheKey, out var cached)) return cached;
+        }
+
+        var merged = SettingsScope.Merge(_rawSettings, engine, key);
+
+        LinuxSettings resolved;
+        try
+        {
+            resolved = merged.Deserialize(HostConfigJsonContext.Default.LinuxSettings) ?? Settings;
+        }
+        catch (JsonException)
+        {
+            // A hand-edited override that does not parse must not take the voice
+            // down with it: the global settings still speak.
+            resolved = Settings;
+        }
+
+        lock (_scoped) _scoped[cacheKey] = resolved;
+        return resolved;
+    }
+
+    /// <summary>
+    /// The session options for one voice — chunking, volume and gaps — resolved
+    /// through the same scope rules, with that voice's own stretch factor.
+    /// </summary>
+    public SpeechSessionOptions SessionOptionsFor(string? voice)
+    {
+        var s = SettingsFor(voice);
+        if (ReferenceEquals(s, Settings)) return SessionOptions;
+
+        var (_, stretch) = SpeechRate.Compute(s.EngineSpeed, s.DspRate, s.RateClampCeiling);
+        return SessionOptions with
+        {
+            MaxChunkChars = s.MaxChunkChars,
+            MinChunkChars = s.MinChunkChars,
+            StretchFactor = stretch,
+            VolumeScale = SpeechRate.VolumeScale(s.VolumeTrimDb),
+            InterChunkSilenceMs = Math.Max(0, s.InterChunkSilenceMs),
+        };
+    }
+
     public UtterancePlan Utterance(string? voice, string? language)
     {
         // The one place the qualified form is unwrapped. Everything downstream —
@@ -390,11 +465,21 @@ public sealed class HostConfig
         var requested = VoiceId.Parse(voice ?? ConfiguredVoice);
         string voiceId = requested.Bare;
 
+        // THE SETTINGS THIS VOICE ACTUALLY RUNS ON. Identical to the global ones
+        // unless somebody has scoped something to this engine or this voice, and
+        // reference-equal in that case, so the rate below is the same arithmetic
+        // it always was for every install that has no overrides.
+        var scoped = SettingsFor(voice);
+        double rate = ReferenceEquals(scoped, Settings)
+            ? _requestedRate
+            : (scoped.EngineSpeed > 0 ? scoped.EngineSpeed : SpeechRate.DefaultEngineSpeed)
+              * (scoped.DspRate > 0 ? scoped.DspRate : 1.0f);
+
         if (requested.MayBePiper && PiperVoices.Config(voiceId) is { } piperVoice)
         {
             var calibration = PiperVoices.Calibration(voiceId);
-            var plan = calibration?.Plan(_requestedRate)
-                       ?? PiperRateCalibration.Reciprocal(_requestedRate, piperVoice.LengthScale);
+            var plan = calibration?.Plan(rate)
+                       ?? PiperRateCalibration.Reciprocal(rate, piperVoice.LengthScale);
 
             var options = new PiperOptions(
                 voiceId,
@@ -405,16 +490,29 @@ public sealed class HostConfig
                 // an id carrying #12 for a voice that has since been replaced by
                 // a single-speaker one renders speaker 0 rather than throwing.
                 SpeakerId: requested.Speaker ?? 0,
-                SilenceSeconds: Settings.SynthesisSilenceSec);
+                SilenceSeconds: scoped.SynthesisSilenceSec);
 
             return new UtterancePlan(options, plan.StretchFactor, "piper",
-                calibration is null && Math.Abs(_requestedRate - 1.0) > 0.01
-                    ? $"'{voiceId}' has not been measured yet, so {_requestedRate:F2}x is approximate " +
+                calibration is null && Math.Abs(rate - 1.0) > 0.01
+                    ? $"'{voiceId}' has not been measured yet, so {rate:F2}x is approximate " +
                       "— the daemon is measuring it now and the next reading will be exact"
                     : null);
         }
 
-        return new UtterancePlan(Synthesis(voiceId, language), _supertonicStretch, "supertonic", null);
+        if (ReferenceEquals(scoped, Settings))
+            return new UtterancePlan(Synthesis(voiceId, language), _supertonicStretch, "supertonic", null);
+
+        var (synthSpeed, stretch) = SpeechRate.Compute(
+            scoped.EngineSpeed, scoped.DspRate, scoped.RateClampCeiling);
+
+        return new UtterancePlan(
+            new SupertonicOptions(
+                voiceId,
+                SupertonicLanguages.Normalize(language ?? scoped.Language),
+                scoped.TotalStep,
+                synthSpeed,
+                scoped.SynthesisSilenceSec),
+            stretch, "supertonic", null);
     }
 
     /// <summary>
@@ -454,8 +552,11 @@ public sealed class HostConfig
         catch { return long.MinValue; }
     }
 
-    private static LinuxSettings LoadSettings(string path, List<string> notes)
+    private LinuxSettings LoadSettings(string path, List<string> notes)
     {
+        _rawSettings = null;
+        _scoped.Clear();
+
         if (!File.Exists(path)) return new LinuxSettings();
         try
         {
@@ -464,7 +565,22 @@ public sealed class HostConfig
             // fail intermittently.
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
-            return JsonSerializer.Deserialize(fs, HostConfigJsonContext.Default.LinuxSettings)
+
+            // Read the file ONCE, as a node, and deserialize from that. The
+            // typed view is what the daemon runs on; the node is what per-engine
+            // and per-voice overrides are merged on, because "is this key set"
+            // is a question only the raw JSON can answer. A typed override would
+            // have to say it with sentinels — 0 means unset — which cannot
+            // express VolumeTrimDb 0, and that is a real setting.
+            _rawSettings = JsonNode.Parse(fs, nodeOptions: default,
+                documentOptions: new JsonDocumentOptions
+                {
+                    CommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true,
+                }) as JsonObject;
+
+            if (_rawSettings is null) return new LinuxSettings();
+            return _rawSettings.Deserialize(HostConfigJsonContext.Default.LinuxSettings)
                    ?? new LinuxSettings();
         }
         catch (Exception ex)

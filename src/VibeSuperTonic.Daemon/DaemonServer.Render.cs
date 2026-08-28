@@ -107,9 +107,14 @@ public sealed partial class DaemonServer
             Audio = new AudioChunk(rate, 1, null, Final: false),
         });
 
+        // The rendering voice's own chunk sizes, so `render` and the hotkey
+        // break text the same way for the same voice — the Speech Dispatcher
+        // module goes through this path, and a chunk size that differed from the
+        // one the settings scope asks for would change where it pauses.
+        var renderOptions = _config.SessionOptionsFor(request.Voice);
         var chunks = SentenceChunker.Chunk(text,
-            _config.SessionOptions.MaxChunkChars,
-            _config.SessionOptions.MinChunkChars);
+            renderOptions.MaxChunkChars,
+            renderOptions.MinChunkChars);
 
         try
         {
