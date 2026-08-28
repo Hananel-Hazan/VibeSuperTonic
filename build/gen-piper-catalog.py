@@ -37,7 +37,10 @@ entire selection rule is built on the licence line in each MODEL_CARD:
 SELECTION, once eligibility is settled:
 
   1. One voice NAME per language, chosen by licence class first (a CC0 voice
-     beats a NonCommercial one) then by the best tier it offers.
+     beats a NonCommercial one) then by the best tier it offers — EXCEPT for the
+     languages in FULL_LANGUAGES (en_US, en_GB), which get every eligible name.
+     English is where one voice is most obviously a limitation, and it is the
+     only place the review burden of "every name" is worth paying.
   2. Then EVERY TIER of that name goes in, not just the best. The default is the
      highest tier available, but 114 MB against 20 MB is a choice a person on a
      metered connection is entitled to make, so the smaller tiers stay one click
@@ -55,6 +58,14 @@ UA = {"User-Agent": "VibeSuperTonic-catalog-generator/1.0"}
 # choose between two voices for the same language; the name is what the Voices
 # tab shows and what the download gate makes the user accept.
 LICENCE_ORDER = ["public", "by", "apache", "by-sa", "agpl", "nc"]
+
+# Languages that get EVERY eligible voice rather than one. Added 2026-08-28 at
+# the user's request, measured before it was decided: 26 eligible English entries
+# across 22 names, against the 4 entries 2 names gave. Five of the twenty-two are
+# NonCommercial and three carry hundreds of speakers, which is exactly why the
+# licence is shown on the gate and why the picker is a cascade rather than a
+# list.
+FULL_LANGUAGES = {"en_US", "en_GB"}
 
 POLICIES = {
     # Policy letters are the ones docs/PIPER-PLAN.md put to the user on
@@ -253,14 +264,24 @@ def main():
         def rank(k):
             return (LICENCE_ORDER.index(licences[k][2]), TIER_ORDER[index[k]["quality"]], k)
 
-        best = min(keys, key=rank)
-        name = index[best]["name"]
-        # Every tier of the winning name that is ITSELF eligible. A name can span
+        # EVERY eligible name for the languages in FULL_LANGUAGES, one for the
+        # rest. English is the exception because it is the language this product
+        # is most used in and the one where a single voice is most obviously a
+        # limitation: two names for en_US and en_GB against twenty-two available.
+        # Everywhere else the one-name rule stands, for the reason it was written
+        # — a catalog is a list somebody has to be able to review.
+        if code in FULL_LANGUAGES:
+            names = sorted({index[k]["name"] for k in keys})
+        else:
+            names = [index[min(keys, key=rank)]["name"]]
+
+        # Every tier of each chosen name that is ITSELF eligible. A name can span
         # tiers whose datasets differ, so the licence is re-checked per tier
         # rather than inherited from the one that won.
-        tiers = [k for k in keys if index[k]["name"] == name]
-        tiers.sort(key=lambda k: TIER_ORDER[index[k]["quality"]])
-        chosen.extend(tiers)
+        for name in names:
+            tiers = [k for k in keys if index[k]["name"] == name]
+            tiers.sort(key=lambda k: TIER_ORDER[index[k]["quality"]])
+            chosen.extend(tiers)
 
     langs = {index[k]["language"]["code"] for k in chosen}
     sys.stderr.write(f"  selected {len(chosen)} entries across {len(langs)} languages\n")

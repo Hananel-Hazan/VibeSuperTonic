@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Ui;
 
@@ -54,7 +55,20 @@ public sealed class TuneTab : UserControl
     /// field is a hotkey that refuses with a sentence about a voice nobody meant
     /// to type.
     /// </summary>
-    private readonly ComboBox _voice = new() { Width = 260, MinWidth = 200 };
+    private readonly ComboBox _voice = new() { Width = 320, MinWidth = 200 };
+
+    /// <summary>
+    /// The three levels above the voice. A flat list of everything installed is
+    /// what this replaces: with the English Piper voices in, libritts and
+    /// libritts_r carry 904 speakers each and vctk another 109, so "every voice
+    /// and every speaker" is eighteen hundred rows with the ten Supertonic
+    /// styles somewhere inside it. Each level offers only what the one above it
+    /// left standing, and no control ever shows the whole catalog.
+    /// </summary>
+    private readonly ComboBox _engine = new() { Width = 160 };
+    private readonly ComboBox _voiceLanguage = new() { Width = 220 };
+    private readonly ComboBox _speaker = new() { Width = 220 };
+    private readonly TextBlock _speakerLabel = Ui.Label("Speaker");
 
     /// <summary>Said beside the controls a Piper voice cannot honour, and blank otherwise.</summary>
     private readonly TextBlock _engineNote = Ui.Label("");
@@ -90,11 +104,24 @@ public sealed class TuneTab : UserControl
         var language = new TextBox { Width = 120 };
         _fields["Language"] = language;
 
-        _voice.SelectionChanged += (_, _) => { if (!_loading) ApplyEngineRules(); };
+        // Each level rebuilds the ones below it. Guarded by _loading so filling
+        // the controls during a refresh does not look like a user choosing.
+        _engine.SelectionChanged += (_, _) => { if (!_loading) { RebuildLanguages(); } };
+        _voiceLanguage.SelectionChanged += (_, _) => { if (!_loading) { RebuildVoices(); } };
+        _voice.SelectionChanged += (_, _) => { if (!_loading) { RebuildSpeakers(); ApplyEngineRules(); } };
 
         var grid = new StackPanel { Spacing = 8 };
+        grid.Children.Add(Row("Engine", _engine,
+            "Supertonic is one model set with ten styles. Piper is one voice per download; "
+            + "add and remove them in the Voices tab."));
+        grid.Children.Add(Row("Voice language", _voiceLanguage,
+            "A Piper voice is trained for one language. Supertonic has no such level — it "
+            + "takes the language per utterance, from the Language field below."));
         grid.Children.Add(Row("Voice", _voice,
-            "Installed voices, both engines. Add and remove them in the Voices tab."));
+            "Each row shows its licence: a NonCommercial voice says so here, before you use it."));
+        grid.Children.Add(Row("Speaker", _speaker,
+            "Only for voices that carry several. LibriTTS has 904; most voices have one and "
+            + "this row is hidden."));
         grid.Children.Add(Row("Language", language, "en — a Supertonic code, not en-US."));
         grid.Children.Add(_engineNote);
 
@@ -257,24 +284,91 @@ public sealed class TuneTab : UserControl
     private async Task RefreshVoicePickerAsync(string inForce)
     {
         var reply = await _client.SendAsync(new Request { Verb = RequestVerb.Voices });
-
         _installedVoices = reply?.Voices?.Installed.ToList() ?? [];
 
-        // VoicePicker, not the raw list: the daemon reports Supertonic as ONE
-        // row because that is the truth about the download, and this control has
-        // to offer its ten styles because that is the truth about the choice. It
-        // also qualifies the voice in force, so a settings file still holding a
-        // bare "M4" selects the supertonic:M4 row instead of adding a second row
-        // naming the same voice.
-        var (ids, selected) = VibeSuperTonic.Core.Synthesis.VoicePicker.Rows(_installedVoices, inForce);
+        // Where the cascade should stand for the voice in force — which also
+        // turns a settings file still holding a bare "M4" into supertonic:M4,
+        // rather than offering the same voice twice under two spellings.
+        _at = VoicePicker.Locate(_installedVoices, inForce);
 
         _loading = true;
-        _voice.ItemsSource = ids;
-        _voice.SelectedItem = ids.Contains(selected) ? selected : ids.FirstOrDefault();
+        Fill(_engine, VoicePicker.Engines(_installedVoices), _at.Engine);
         _loading = false;
 
+        RebuildLanguages();
+    }
+
+    /// <summary>Where the cascade currently stands. Rebuilt from the daemon's list.</summary>
+    private VoiceSelection _at = new("supertonic", "", "", null);
+
+    private void RebuildLanguages()
+    {
+        string engine = Selected(_engine) ?? _at.Engine;
+        var rows = VoicePicker.Languages(_installedVoices, engine);
+
+        _loading = true;
+        Fill(_voiceLanguage, rows, _at.Language);
+        // Supertonic has no language LEVEL — it is one model set that takes its
+        // language per utterance, in the Language field further down this tab.
+        // Hiding the row is the honest form of that: an empty dropdown would
+        // read as "no languages", which is the opposite of true.
+        RowOf(_voiceLanguage).IsVisible = rows.Count > 0;
+        _loading = false;
+
+        RebuildVoices();
+    }
+
+    private void RebuildVoices()
+    {
+        string engine = Selected(_engine) ?? _at.Engine;
+        string language = Selected(_voiceLanguage) ?? _at.Language;
+        var rows = VoicePicker.Voices(_installedVoices, engine, language);
+
+        _loading = true;
+        Fill(_voice, rows, _at.Voice);
+        _loading = false;
+
+        RebuildSpeakers();
         ApplyEngineRules();
     }
+
+    private void RebuildSpeakers()
+    {
+        var rows = VoicePicker.Speakers(_installedVoices, Selected(_voice) ?? "");
+
+        _loading = true;
+        Fill(_speaker, rows, _at.Speaker?.ToString() ?? "0");
+        RowOf(_speaker).IsVisible = rows.Count > 0;
+        _loading = false;
+    }
+
+    /// <summary>The id the settings file should hold, from where the cascade stands.</summary>
+    private string ChosenVoice()
+    {
+        string voice = Selected(_voice) ?? "";
+        int? speaker = null;
+        if (RowOf(_speaker).IsVisible && int.TryParse(Selected(_speaker), out int sid)) speaker = sid;
+        return VoicePicker.Compose(voice, speaker);
+    }
+
+    private static string? Selected(ComboBox box) => (box.SelectedItem as PickerRow)?.Value;
+
+    /// <summary>
+    /// Fill a level, keeping <paramref name="want"/> selected when it survived
+    /// and falling to the first row when it did not — which is what happens when
+    /// the level above changes and the old choice belongs to another engine.
+    /// </summary>
+    private static void Fill(ComboBox box, IReadOnlyList<PickerRow> rows, string want)
+    {
+        box.ItemsSource = rows;
+        box.SelectedItem = rows.FirstOrDefault(r => r.Value == want) ?? rows.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// The row a control sits in, so a whole line can be hidden rather than left
+    /// empty. Row() builds a two-column grid, so the control's parent IS it.
+    /// </summary>
+    private static Control RowOf(Control control) => (Control)control.Parent!;
 
     /// <summary>
     /// Grey out what the selected engine cannot honour, and say why.
@@ -288,7 +382,7 @@ public sealed class TuneTab : UserControl
     /// </summary>
     private void ApplyEngineRules()
     {
-        string? selected = _voice.SelectedItem as string;
+        string? selected = Selected(_voice);
         bool piper = selected is not null
                      && VibeSuperTonic.Core.Synthesis.VoiceId.Parse(selected).Engine
                         == VibeSuperTonic.Core.Synthesis.VoiceEngine.Piper;
@@ -296,7 +390,10 @@ public sealed class TuneTab : UserControl
         _fields["Language"].IsEnabled = !piper;
         _fields["TotalStep"].IsEnabled = !piper;
 
-        var entry = _installedVoices.FirstOrDefault(v => v.Id == selected);
+        var entry = _installedVoices.FirstOrDefault(v =>
+            selected is not null
+            && VibeSuperTonic.Core.Synthesis.VoiceId.Parse(v.Id).WithSpeaker(null).ToString()
+               == VibeSuperTonic.Core.Synthesis.VoiceId.Parse(selected).WithSpeaker(null).ToString());
 
         _engineNote.Text = piper
             ? "Language and Model steps do not apply to a Piper voice: it is trained for one "
@@ -322,7 +419,9 @@ public sealed class TuneTab : UserControl
         // ago is the worst kind of correct.
         // The shared writer, so this picker and the Voices tab's Use button
         // cannot disagree about what choosing a voice means.
-        if (_voice.SelectedItem is string chosen && chosen.Length > 0) root.SetVoice(chosen);
+        // From the whole cascade, not the voice row alone: a Piper voice with a
+        // chosen speaker is saved as piper:<id>#<sid>.
+        if (ChosenVoice() is { Length: > 0 } chosen) root.SetVoice(chosen);
 
         root.Set("Language", Text(_fields["Language"]));
 
