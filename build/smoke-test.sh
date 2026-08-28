@@ -68,11 +68,15 @@ echo "smoke test: $dir"
 echo "sandbox:    $sandbox"
 
 # ------------------------------------------------------------------ 1. shape
-step "The three binaries are there and executable"
-for b in vibesupertonicd vibesupertonic-ui vst-ctl; do
+step "The binaries are there and executable"
+binaries=(vibesupertonicd vibesupertonic-ui vst-ctl)
+# vst-speechd arrived in S4; an older tarball is still a valid thing to smoke
+# test, so it joins the list only when the archive has it.
+[[ -e "$dir/vst-speechd" ]] && binaries+=(vst-speechd)
+for b in "${binaries[@]}"; do
     [[ -x "$dir/$b" ]] || die "$b is missing or not executable"
 done
-pass "vibesupertonicd, vibesupertonic-ui, vst-ctl"
+pass "${binaries[*]}"
 
 # ---------------------------------------------------------------- 2. they run
 #
@@ -84,15 +88,16 @@ pass "vibesupertonicd, vibesupertonic-ui, vst-ctl"
 # and CI has no display either.
 step "Each binary starts and reports its version, headless"
 versions=()
-for b in vibesupertonicd vibesupertonic-ui vst-ctl; do
+for b in "${binaries[@]}"; do
     v="$(env -u DISPLAY -u WAYLAND_DISPLAY "$dir/$b" --version 2>&1)" \
         || die "$b could not run here: $v"
     [[ -n "$v" ]] || die "$b printed no version"
     versions+=("$v")
     pass "$b $v"
 done
-[[ "${versions[0]}" == "${versions[1]}" && "${versions[0]}" == "${versions[2]}" ]] \
-    || die "the three binaries disagree on a version: ${versions[*]}"
+for v in "${versions[@]}"; do
+    [[ "$v" == "${versions[0]}" ]] || die "the binaries disagree on a version: ${versions[*]}"
+done
 
 # ------------------------------------------------------------ 3. the store
 step "The daemon can work out where its store goes"
@@ -154,6 +159,38 @@ $(grep -i espeak <<<"$log" || echo '  (nothing about espeak at all)')"
     pass "$(grep -o 'espeak-ng: [^)]*)' <<<"$log" | head -1)"
 else
     pass "no espeak/ in this archive — skipped (pre-P5 tarball)"
+fi
+
+# ------------------------------------------- 5b. the Speech Dispatcher module
+#
+# THE ONE BINARY NOBODY RUNS BY HAND, checked in the one environment that
+# matters: a container with no speech-dispatcher, no .NET, no display, no audio
+# device and no models. speechd would spawn it exactly like this, read one line,
+# and drop it on anything it does not like — and a dropped module reaches the
+# user as VibeSuperTonic simply not being in their screen reader's list.
+#
+# 299 means loaded. 399 is the module refusing because it cannot find the espeak
+# payload beside it, which in a container is what "the archive is not portable
+# after all" looks like — the same failure the ICU probe found in 0.2.11, from a
+# different direction.
+step "The Speech Dispatcher module answers INIT with nothing installed"
+if [[ -x "$dir/vst-speechd" ]]; then
+    reply="$(printf 'INIT\nQUIT\n' | timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY \
+        "$dir/vst-speechd" 2>/dev/null | grep -E '^(299|399) ' | tail -1)"
+    [[ "$reply" == 299\ * ]] || die "vst-speechd answered INIT with: ${reply:-nothing}.
+       speech-dispatcher drops a module that does not answer 299. 399 means it
+       could not find espeak/espeak-ng beside itself in this extracted archive."
+    pass "${reply#299 }"
+
+    # The installer is a bash script that runs on the user's machine and nowhere
+    # else, so a container without bash-isms is exactly where its portability
+    # gets decided. --check needs no speech-dispatcher and writes nothing.
+    out="$(XDG_CONFIG_HOME="$sandbox/xdg" "$dir/speechd-install.sh" --check 2>&1)" \
+        || die "speechd-install.sh --check failed in the container:
+$(sed 's/^/  /' <<< "$out")"
+    pass "speechd-install.sh --check runs here"
+else
+    pass "no vst-speechd in this archive — skipped (pre-S4 tarball)"
 fi
 
 # ------------------------------------------------------------- 6. it stops

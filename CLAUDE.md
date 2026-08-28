@@ -26,6 +26,17 @@ In that order, and a failed tarball means no AppImage. `pack-appimage.sh` refuse
 to run against a composed tree whose binaries report a different version, so the
 two artifacts of one release cannot come from two builds.
 
+**Since S4 (2026-08-28) the archive also carries a Speech Dispatcher module** —
+`vst-speechd` and `speechd-install.sh` beside `install.sh` — which is what makes
+these voices reachable from Orca and anything else that speaks on Linux. The
+installer is a shipped file in [build/](build/speechd-install.sh) rather than a
+heredoc inside the packer, deliberately: it can be driven against a private
+speech-dispatcher that way, and
+[spike/speechd-s4-install/](spike/speechd-s4-install/README.md) is what does it.
+**Never test it against your own `~/.config/speech-dispatcher`** — a mistake
+there is somebody's screen reader going quiet, and the harness redirects
+`XDG_CONFIG_HOME` precisely so it does not have to.
+
 **Since P5 (2026-08-27) a Linux release needs one step before either**, because
 the archive now contains a phonemiser:
 
@@ -103,7 +114,7 @@ because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
 `INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
 `install-gpu.sh` to the root, and archives it.
 
-Six assertions run against the **composed tree**, not the build outputs, and
+Ten assertions run against the **composed tree**, not the build outputs, and
 each exists because the failure it catches is silent:
 
 - **All three binaries report the same version**, asked of the shipped files via
@@ -174,6 +185,35 @@ each exists because the failure it catches is silent:
   `es-419` and reads `es_dict`. The catalog carries each voice's `espeakVoice`,
   taken from the model's own config, and `build-espeak.sh` discovers the
   dictionaries by asking espeak which file it failed to open.
+
+- **The Speech Dispatcher module works, and its installer refuses a voiceless
+  archive** (S4, 2026-08-28). Assertion 3e runs
+  [check-speechd-payload.sh](build/check-speechd-payload.sh) over the composed
+  tree. `vst-speechd` is the one binary nobody ever runs by hand: speechd spawns
+  it, reads one line and **drops it on anything it does not like** — and a
+  dropped module reaches the user as VibeSuperTonic simply missing from their
+  screen reader's list, with no error on any screen they can reach. So the check
+  is behavioural: the shipped binary must answer `INIT` with `299` *in the
+  composed tree*, which is also the only way to prove `espeak/` landed where the
+  module looks for it. Then the installer, which is the piece that can silence a
+  machine: `--check` must pass and name the module in this tree, it must notice a
+  config whose path does not exist (a moved install — trap 13), and a real
+  install attempt must **refuse**, because the archive ships no voices and a
+  synthesizer with nothing to say is worse than one that is absent. All hermetic
+  — no speech-dispatcher, no display, no models — so it runs in CI's bare
+  container too. Sabotage it with
+  [payload-sabotage.sh](spike/speechd-s4-install/payload-sabotage.sh), which is
+  possible *because* the assertion is a script rather than a step inside a
+  four-minute pack.
+
+**The AppImage's two new assertions are about one mechanism.** speech-dispatcher
+execs a single absolute path with **no arguments** — measured: a binary field
+containing a space fails with `Exec of module ... error 2` while speechd still
+logs the module as loaded — so an AppImage install points it at a symlink,
+`~/.local/bin/vst-speechd`, and AppRun's `$ARGV0` case turns that into the
+module. Without that case the symlink falls through to AppRun's default branch
+and **opens the window, once per utterance**. `pack-appimage.sh` therefore builds
+such a symlink and asks it for both `--version` and `INIT`.
 
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from

@@ -15,7 +15,11 @@
 set -eu
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
-OUT=/tmp/vst-s3-install
+# S4 drives the same composer at a different path — one scratch install, not
+# two spellings of one. Keep it under /tmp and short: AF_UNIX truncates at
+# ~108 bytes and a socket under a long path makes speechd die claiming it
+# cannot bind, which reads like a permissions problem and is not.
+OUT="${VST_SCRATCH_INSTALL:-/tmp/vst-s3-install}"
 rm -rf "$OUT" /tmp/vst-s3-pub-{sd,ctl,d}; mkdir -p "$OUT"
 
 [ -x build/espeak-out/espeak/espeak-ng ] || {

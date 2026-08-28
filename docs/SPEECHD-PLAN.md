@@ -1201,6 +1201,135 @@ path that exists.
 The test that matters is not that ours works. **It is that espeak-ng still
 answers afterwards, and again after `--remove`.**
 
+<a name="s4-landed"></a>
+
+#### S4 landed, 2026-08-28
+
+[`speechd-install.sh`](../build/speechd-install.sh) is the installer and it ships
+in the archive beside `install.sh`;
+[`check-speechd-payload.sh`](../build/check-speechd-payload.sh) is the packer's
+new assertion; [`appimage-speechd.sh`](../build/appimage-speechd.sh) and
+[`appimage-home.sh`](../build/appimage-home.sh) are what make the same installer
+correct for an image whose contents move every run.
+
+**Driven against the machine's real speech-dispatcher 0.12.1, in a scratch
+`XDG_CONFIG_HOME`** — [`restore-test.sh`](../spike/speechd-s4-install/restore-test.sh),
+six scenarios, 40 checks:
+
+| | |
+| --- | --- |
+| baseline, no user config | espeak-ng offered, **14,805** voices |
+| after our install | **both** modules offered; espeak-ng still 14,805; ours 188 |
+| after `--remove` | espeak-ng back to 14,805, ours gone, our config file deleted |
+| a user who already had a config | settings survive, backed up, restored **byte-identical** |
+| no voices / no phonemiser / no enumeration | refuses, and writes nothing |
+| the install moved afterwards | `--check` names the path, not the module |
+
+**One redirected variable, not a set of arguments.** The harness moves
+`XDG_CONFIG_HOME` and nothing else: speech-dispatcher reads its user config from
+there (measured — and it still resolves *module* configs from `/etc`, so a user
+config need not carry them), and the installer writes there by default. So the
+installer under test resolves the module, the store and the config exactly as it
+will on a user's machine. `-C` was tried first and is wrong: it replaces the
+system directory wholesale, so trap 2's copy has nowhere to copy *from*, and it
+refuses to start when the directory has no `speechd.conf` — which makes the
+auto-detection baseline untestable.
+
+**The trap-1 catastrophe was in the code, and a test found it rather than a
+reading.** `printf '%s\n' "${names[@]}"` on an **empty** array prints one blank
+line, not nothing — so the enumeration counted one module, the refusal never
+fired, and the config written declared ours **and nothing else**. That is the
+exact failure this script exists to prevent, it survived being written and
+reviewed, and what caught it was asking speechd through a dead socket.
+
+**Three of the first thirteen sabotages found defects in the tests, not the
+code**, which is the ratio to expect and the reason for doing it:
+
+- `grep 'AddModule "espeak-ng"'` matched the **commented** line the copied system
+  config brings with it, so "espeak-ng was re-declared" passed while the module
+  list was in fact destroyed. Active declarations only.
+- the moved-install scenario proved nothing: with speechd not restarted, `--check`
+  failed because ours was *configured but not offered*, whatever the path said.
+- the packer's own trap-13 probe had the same shape — it asserted a non-zero
+  exit, which a build machine running speech-dispatcher produces anyway. It now
+  requires the words.
+
+`payload-sabotage.sh` does the same for the packer assertion, **9 of 9 caught**,
+and it is fast because the assertion is a script rather than a step inside a
+four-minute pack. Hardlink copies (`cp -al`) were the first attempt and are
+wrong twice over: `/tmp` is a different filesystem, and a mutation that *appends*
+to a hardlinked file writes through to the archive it is protecting.
+
+**`pgrep -x speech-dispatcher` can never match.** The name is 17 characters,
+pgrep matches the 15-character `comm` and refuses a longer pattern outright — so
+the installer's wait-for-it-to-die loop exited on its first iteration and the
+config was rewritten under a server that had not finished dying. It reads as
+"Speech Dispatcher already running" three scenarios later.
+
+**The AppImage cannot be named in a config, and the reason is measured.** A
+binary field containing a space is exec'd verbatim: `Exec of module ... failed
+with error 2` — *while speechd still logs the module as loaded*. Naming the image
+with no argument is worse, because AppRun would fall through to its default case
+and open the window once per utterance. So the config names
+`~/.local/bin/vst-speechd`, a symlink to the image, and AppRun's `$ARGV0` case
+turns it into the module. A **symlink, not a copy** — the opposite of the hotkey
+client, which is copied: a copied module would resolve `espeak/` and `vst-ctl`
+"beside me" in `~/.local/bin`, find neither, and answer `INIT` with 399. It has
+to run inside the mount, and it is started once per session, so the mount it
+costs is paid once.
+
+**A portable home would have made the config unreadable**, the same way it made
+the hotkeys unbindable in 0.2.10: `$HOME` points inside `<image>.AppImage.home`
+and speech-dispatcher reads the *real* `~/.config`. The rule for which files
+belong in the real home now lives in `appimage-home.sh` and has one
+implementation with two callers, with its own [test](../spike/speechd-s4-install/home-rule-test.sh)
+covering a passwd entry that points back at the portable home and a `getent` that
+fails outright.
+
+**The real machine found one more, and it is an upgrade bug rather than an
+install bug.** Registering the module makes `vst-speechd` a *second* long-lived
+process: speech-dispatcher spawns it once per login and holds it for the session.
+So an upgrade that stops only the daemon — which is what `install.sh` and every
+instruction in this project said to do — leaves a module answering the screen
+reader from the binary being replaced. On an AppImage it announces itself, because
+the module holds the image file open and `cp` refuses with **"Text file busy"**;
+forced past that, the module dies on its next spawn, speechd never notices, and
+**every utterance hangs forever with no error anywhere** — a `[vst-speechd]
+<defunct>` in `ps` is the only evidence. `install.sh` now stops speech-dispatcher
+as well, but only when the user's config actually declares our module, and
+INSTALL.txt and the AppRun help say so for a hand-untar.
+
+Two false leads on the way there, both worth recording because both looked
+conclusive. `env -i` makes the AppImage runtime fail with *"No suitable
+fusermount binary found on the $PATH"*, which is a real fragility and was not
+this — speechd passes its children a full environment, read from a live
+`sd_espeak-ng`'s `/proc/<pid>/environ`, and the module runs perfectly under an
+exact copy of it. And a `pgrep -f "bin/speech-dispatcher"` in the diagnosis
+matched **its own command line** and hung for four minutes, which is the same
+trap `install.sh` carries a comment about.
+
+**And once more on the way back in: stopping it before is not enough.** Replacing
+the image a second time, anything that spoke during the copy started a fresh
+speech-dispatcher which spawned the module from the image being overwritten. The
+module died, and that speech-dispatcher then answered **nothing** — `spd-say -O`
+empty, espeak-ng zero rows — because it was still waiting on a module that no
+longer existed. One `kill` on the server and the next request rebuilt everything
+correctly. So the instruction is stop it **before and after**, and INSTALL.txt and
+the AppRun help now say so.
+
+**Measured on the real install** (KDE/Wayland, portable home, CPU inference):
+`spd-say -o vibesupertonic -w` returns in **2.1 s** warm for a short sentence and
+**~620 ms** for a single character on the espeak echo path — whole round trips
+including playback, not first-word latency, which is [S5](#s5)'s number to take
+properly.
+
+**Not done here.** Everything in [S5](#s5): the latency budget as a checked
+number, the archive-size budget, and the no-audio-with-exit-0 test. The restore
+test is written and passes, but it is a spike script — CI does not run it,
+because it needs a speech-dispatcher and CI's smoke container deliberately has
+none. What CI does get is the packer assertion and the module's `INIT` in the
+bare container.
+
 <a name="s5"></a>
 ### S5 · The safety net · one day
 

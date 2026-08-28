@@ -115,8 +115,9 @@ tarball="$root/dist/VibeSuperTonic-$version-linux-x64.tar.gz"
 pub_daemon="$root/dist/build-linux/daemon"
 pub_ui="$root/dist/build-linux/ui"
 pub_ctl="$root/dist/build-linux/ctl"
+pub_speechd="$root/dist/build-linux/speechd"
 rm -rf "$root/dist/build-linux" "$staging"
-mkdir -p "$pub_daemon" "$pub_ui" "$pub_ctl"
+mkdir -p "$pub_daemon" "$pub_ui" "$pub_ctl" "$pub_speechd"
 
 step "Publishing vibesupertonicd (linux-x64, self-contained)…"
 dotnet publish "$root/src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" \
@@ -139,6 +140,17 @@ dotnet publish "$root/src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj" \
     -o "$pub_ctl" --nologo --verbosity minimal \
     || die "vst-ctl publish failed"
 
+# NativeAOT for a different reason from vst-ctl's. speech-dispatcher starts this
+# once per session, so startup is not on the hotkey path — but Orca drives it
+# dozens of times a minute for the whole session, and a managed build would keep
+# a second .NET runtime resident beside the daemon's for as long as the user is
+# logged in. That is the opposite of why the espeak echo path exists.
+step "Publishing vst-speechd (linux-x64, NativeAOT)…"
+dotnet publish "$root/src/VibeSuperTonic.SpeechD/VibeSuperTonic.SpeechD.csproj" \
+    -c Release -r linux-x64 \
+    -o "$pub_speechd" --nologo --verbosity minimal \
+    || die "vst-speechd publish failed"
+
 # ----------------------------------------------------------------- compose
 step "Composing portable layout at $staging…"
 mkdir -p "$staging"
@@ -153,12 +165,14 @@ mkdir -p "$staging"
 cp -a "$pub_daemon/." "$staging/"
 cp -a "$pub_ui/."     "$staging/"
 cp -a "$pub_ctl/vst-ctl" "$staging/vst-ctl"
+cp -a "$pub_speechd/vst-speechd" "$staging/vst-speechd"
 
 # Debug symbols are large and nobody diagnoses a field report from them.
 find "$staging" -name '*.pdb' -delete
 find "$staging" -name '*.dbg' -delete
 
-chmod 755 "$staging/vibesupertonicd" "$staging/vibesupertonic-ui" "$staging/vst-ctl"
+chmod 755 "$staging/vibesupertonicd" "$staging/vibesupertonic-ui" "$staging/vst-ctl" \
+          "$staging/vst-speechd"
 
 # models/ and data/ beside the binaries, both empty. models/ empty is what the
 # first-run screen keys off ("no models present"), and there is deliberately no
@@ -185,6 +199,13 @@ cp "$root/piper-voices.json" "$staging/piper-voices.json"
 # install time, which is why the split exists.
 cp "$root/build/keybindings.sh" "$staging/keybindings.sh"
 chmod 755 "$staging/keybindings.sh"
+
+# The Speech Dispatcher installer (S4). Kept in build/ rather than written into
+# the packer like install.sh, because unlike install.sh it is testable on its own
+# — spike/speechd-s4-install/ drives THIS file against a private speech-dispatcher
+# — and a script that only exists inside a heredoc cannot be tested at all.
+cp "$root/build/speechd-install.sh" "$staging/speechd-install.sh"
+chmod 755 "$staging/speechd-install.sh"
 
 # The optional GPU pack's installer. The pack itself is ~3.1 GB against a 51 MB
 # archive, so it is fetched on request from nuget.org and PyPI rather than
@@ -251,10 +272,12 @@ step "Checking the composed tree…"
 v_daemon="$("$staging/vibesupertonicd"   --version 2>/dev/null || echo FAILED)"
 v_ui="$(    "$staging/vibesupertonic-ui" --version 2>/dev/null || echo FAILED)"
 v_ctl="$(   "$staging/vst-ctl"           --version 2>/dev/null || echo FAILED)"
+v_speechd="$("$staging/vst-speechd"       --version 2>/dev/null || echo FAILED)"
 info "vibesupertonicd   $v_daemon"
 info "vibesupertonic-ui $v_ui"
 info "vst-ctl           $v_ctl"
-if [[ "$v_daemon" != "$v_ui" || "$v_daemon" != "$v_ctl" ]]; then
+info "vst-speechd       $v_speechd"
+if [[ "$v_daemon" != "$v_ui" || "$v_daemon" != "$v_ctl" || "$v_daemon" != "$v_speechd" ]]; then
     die "the three binaries do not agree on a version — a stale one survived a publish"
 fi
 # And they must agree with the archive's NAME, or the tarball lies about itself.
@@ -279,20 +302,23 @@ fi
 # could omit the .dll for another reason, and a future managed single-file host
 # could be large.
 _assert_native() {
-    local exe="$1"
+    local exe="$1" name; name="$(basename "$exe")"
     file "$exe" | grep -q 'ELF 64-bit' \
-        || die "vst-ctl is not an ELF binary: $(file -b "$exe")"
-    [[ -e "$staging/vst-ctl.dll" ]] \
-        && die "vst-ctl.dll is present beside vst-ctl — that is a MANAGED apphost.
-       PublishAot did not take effect. It costs ~100 ms on every hotkey press and
-       the binary works perfectly, so nothing else will tell you."
+        || die "$name is not an ELF binary: $(file -b "$exe")"
+    [[ -e "$exe.dll" ]] \
+        && die "$name.dll is present beside $name — that is a MANAGED apphost.
+       PublishAot did not take effect. The binary works perfectly, so nothing
+       else will tell you: for vst-ctl it costs ~100 ms on every hotkey press,
+       and for vst-speechd it keeps a second .NET runtime resident for the whole
+       login session."
     local bytes; bytes=$(stat -c%s "$exe")
     (( bytes >= 1048576 )) \
-        || die "vst-ctl is only $bytes bytes; a NativeAOT build is megabytes.
+        || die "$name is only $bytes bytes; a NativeAOT build is megabytes.
        This is a managed apphost or a truncated copy."
-    info "vst-ctl is native ($(numfmt --to=iec "$bytes"))"
+    info "$name is native ($(numfmt --to=iec "$bytes"))"
 }
 _assert_native "$staging/vst-ctl"
+_assert_native "$staging/vst-speechd"
 
 # --- 3. no models in the archive ---------------------------------------------
 if find "$staging/models" -type f -print -quit | grep -q .; then
@@ -344,7 +370,7 @@ _assert_catalog
 # invariant globalization, and ABORTS if it finds none — before Main, so there is
 # no message from the program, only the runtime's. Every desktop has ICU, so this
 # is invisible until the first machine that has not got one, and INSTALL.txt
-# promises "No runtime to install. All three binaries carry what they need."
+# promises "No runtime to install. All four binaries carry what they need."
 #
 # vibesupertonic-ui was that binary. Measured 2026-08-27: it probed libicuuc.so
 # .78, .79, .80 and .81 in turn, and CI's bare ubuntu:22.04 container had none.
@@ -551,6 +577,39 @@ print("\n".join(v))
 }
 _assert_espeak
 
+# --- 3e. the Speech Dispatcher module, and the installer that registers it ----
+#
+# Delegated to build/check-speechd-payload.sh, which holds the reasoning and can
+# be run against any composed tree in a second — that is what makes it possible
+# to sabotage, and an assertion nobody has watched fail is not evidence.
+#
+# THE MODULE IS NOT A PROGRAM ANYBODY RUNS, which is what makes every failure
+# here quiet. speech-dispatcher spawns it, reads one line, and on anything it
+# does not like DROPS THE MODULE — the user's only symptom is that VibeSuperTonic
+# is missing from the synthesizer list, with no error on any screen they can
+# reach. So the check is behavioural: ask it the same question the server will.
+#
+#   INIT is the reply the server acts on. 299 means loaded; 399 means the module
+#   refused, which it does when the espeak payload is not beside it. Running the
+#   SHIPPED binary in the COMPOSED tree is the point — it proves espeak/ landed
+#   where the module looks for it, which no file listing can.
+#
+# And the installer, which is the piece that can silence a machine. Two things
+# are asked of it here, both hermetic — no speech-dispatcher, no display, no
+# models, so this runs in CI's bare container as well as on a desktop:
+#
+#   - `--check` in a scratch config home must pass and must name the module in
+#     THIS tree. That is trap 13's assertion in the only form a packer can make
+#     it: the path a config would be given is a path that exists.
+#   - a real install attempt must REFUSE, because the archive ships no voices
+#     (assertion 3). A registered module with nothing to say is trap 14, and the
+#     refusal is what keeps a fresh extract from producing one.
+_assert_speechd() {
+    bash "$root/build/check-speechd-payload.sh" "$staging" \
+        || die "the Speech Dispatcher payload did not pass its checks"
+}
+_assert_speechd
+
 # --- 4. the GPU provider is NOT in the archive, and its installer agrees ------
 #
 # libonnxruntime_providers_cuda.so is 330 MB against a 51 MB archive, and it
@@ -745,6 +804,25 @@ result is the new binary on disk, the OLD one still serving every hotkey press,
 and `vst-ctl status` truthfully reporting the old version — for as long as that
 process lives, which may be a week.
 
+If you have registered the Speech Dispatcher module (./speechd-install.sh), stop
+speech-dispatcher too — it holds vst-speechd open for your whole login session,
+so an upgrade otherwise leaves the OLD module answering your screen reader:
+
+    pkill -u "$USER" -x speech-dispatcher     # it restarts on the next request
+
+install.sh does both for you, and it runs AFTER you extract, which is the half
+that matters: anything that spoke while you were extracting will have started a
+speech-dispatcher holding the module you just replaced, and stopping it then is
+what clears that.
+
+On an AppImage there is no install.sh doing it for you, so stop speech-dispatcher
+BOTH BEFORE AND AFTER replacing the image. Skipping the "before" makes the copy
+fail outright with "Text file busy", which is the friendly version. Skipping the
+"after" is the quiet one: a speech-dispatcher that spawned the module from the
+image during the copy is left holding a dead one, and it then answers NOTHING —
+not our module, not espeak-ng — until it is restarted. Measured on 2026-08-28,
+recovered by one `pkill -u "$USER" -x speech-dispatcher`.
+
 Stop it BEFORE you extract over an existing folder, not after. `shutdown` with
 nothing running is a success, so it is always safe to type. The next hotkey
 press starts the new daemon by itself.
@@ -811,6 +889,34 @@ not the same terms as the Supertonic models and not the same as this program's.
 
 The phonemiser they need is already in this folder (espeak/). Nothing to install,
 and no distro package to match.
+
+
+Optional: a voice for your screen reader (Speech Dispatcher)
+-----------------------------------------------------------
+Orca and anything else that speaks on Linux goes through Speech Dispatcher. This
+archive can register itself there as an output module, so VibeSuperTonic becomes
+selectable as a synthesizer alongside espeak-ng:
+
+    ./speechd-install.sh
+
+Do the first-run download FIRST — it refuses while there are no voices, because
+a synthesizer with nothing to say is worse than one that is not offered.
+
+    ./speechd-install.sh --check     what is configured, and whether it works
+    ./speechd-install.sh --remove    put back exactly what was there
+
+WHAT IT CHANGES, because this is the file your screen reader depends on: Speech
+Dispatcher offers modules automatically only while its configuration declares
+none, so adding one line would otherwise leave you with THIS module and nothing
+else. The installer therefore reads what is offered now, writes each of those
+back explicitly, and only then adds ours. If you had no personal configuration it
+copies the system one first (a personal one REPLACES the system file rather than
+adding to it), and if you had one it is backed up beside it before anything is
+written. --remove puts the backup back.
+
+It never needs root, never opens a window, and prints what it wrote.
+
+In Orca: Preferences > Voice > Speech system > vibesupertonic.
 
 
 Optional: use an NVIDIA GPU
@@ -940,6 +1046,36 @@ if (( stopped )); then
     echo "  daemon stopped"
 else
     echo "  no daemon was running from this folder"
+fi
+
+# --- and the Speech Dispatcher module, for exactly the same reason -----------
+#
+# THE DAEMON IS NOT THE ONLY LONG-LIVED PROCESS ANY MORE. If speechd-install.sh
+# has been run, speech-dispatcher spawns vst-speechd once per login and holds it
+# for the whole session — so an upgrade that stops only the daemon leaves a
+# module serving every screen-reader utterance from the binary this install is
+# about to replace. Found on 2026-08-28 by upgrading an AppImage install with
+# the module registered: `cp` refused with "Text file busy", and forcing it past
+# that left a module that died on its next spawn and a screen reader that hung
+# on every utterance with no error anywhere.
+#
+# Stopping speech-dispatcher is safe and undramatic: every client autospawns it
+# again on the next request, which is also how the new module gets picked up.
+if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/speech-dispatcher/speechd.conf" ]] &&
+   grep -q "^[[:space:]]*AddModule[[:space:]]\+\"vibesupertonic\"" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/speech-dispatcher/speechd.conf" 2>/dev/null; then
+    sd_stopped=0
+    for exe in /proc/[0-9]*/exe; do
+        target="$(readlink "$exe" 2>/dev/null || true)"
+        [[ "${target##*/}" == speech-dispatcher ]] || continue
+        pid="${exe#/proc/}"; pid="${pid%/exe}"
+        [[ "$(stat -c %u "/proc/$pid" 2>/dev/null || echo -1)" == "$(id -u)" ]] || continue
+        kill "$pid" 2>/dev/null && sd_stopped=1
+    done
+    if (( sd_stopped )); then
+        echo "  stopped speech-dispatcher, which was holding the old module"
+        echo "  (it starts again by itself on the next thing that speaks)"
+    fi
 fi
 
 chmod 755 "$here/vibesupertonicd" "$here/vibesupertonic-ui" "$here/vst-ctl" 2>/dev/null || true

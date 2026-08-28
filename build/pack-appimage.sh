@@ -92,13 +92,13 @@ done
 # binaries agree before it archives; asking again here is what catches the
 # sequence that actually happens — a tarball built yesterday, a rebuild since,
 # and an AppImage packaged from whatever is on disk now.
-for binary in vibesupertonicd vibesupertonic-ui vst-ctl; do
+for binary in vibesupertonicd vibesupertonic-ui vst-ctl vst-speechd; do
     [[ -x "$staging/$binary" ]] || die "$binary is missing from $staging"
     reported="$("$staging/$binary" --version 2>/dev/null | tr -d '[:space:]')"
     [[ "$reported" == "$version" ]] || die "$binary in the composed tree reports $reported, not $version.
        The tree is from another build. Re-run build/pack-tar.sh -v $version."
 done
-info "all three binaries report $version"
+info "all four binaries report $version"
 
 # ASSERTIONS 2-4, re-asked for pennies. Each caught something real once, and the
 # cost of asking again is three tests against a directory that is already there.
@@ -170,6 +170,7 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   ./VibeSuperTonic.AppImage ctl <verb>      everything vst-ctl does
 #   ./VibeSuperTonic.AppImage daemon [args]   run the daemon in the foreground
 #   ./VibeSuperTonic.AppImage bind            bind the hotkeys (and install vst-ctl)
+#   ./VibeSuperTonic.AppImage speechd-install register with Speech Dispatcher
 #   ./VibeSuperTonic.AppImage gpu-install     fetch the optional CUDA pack (~3.1 GB)
 #   ./VibeSuperTonic.AppImage store           print where models and data live
 #
@@ -181,6 +182,14 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   directory you left behind.
 #
 #   Upgrading? Stop the daemon FIRST:  ./VibeSuperTonic.AppImage ctl shutdown
+#   And if you ran `speechd-install`, stop speech-dispatcher too — it holds this
+#   image open for your whole session, so overwriting it fails with "Text file
+#   busy" (and forcing past that leaves a module that dies on its next spawn,
+#   which a screen reader sees as every utterance hanging):
+#       pkill -u "$USER" -x speech-dispatcher
+#   Run that AFTER replacing the image as well: anything that spoke during the
+#   copy will have started a new speech-dispatcher holding the old image, and it
+#   then answers nothing at all — not us, not espeak-ng — until it is restarted.
 #   The daemon is long-lived and Linux lets you replace a running file without
 #   complaint. Overwrite this image while it runs and the OLD daemon keeps
 #   serving every hotkey press — with `ctl status` truthfully reporting the old
@@ -201,6 +210,13 @@ vst_store() { "$APP/vibesupertonicd" --print-store; }
 
 case "$(basename "${ARGV0:-$0}")" in
     vst-ctl) exec "$APP/vst-ctl" "$@" ;;
+    # speech-dispatcher execs ONE absolute path with no arguments (measured:
+    # a binary field containing a space fails with "Exec of module ... error 2"
+    # while speechd still logs the module as loaded). So the config names a
+    # symlink, appimage-speechd.sh installs it, and this is what it lands on.
+    # Without this case the module falls through to the default below and opens
+    # a window per utterance.
+    vst-speechd) exec "$APP/vst-speechd" "$@" ;;
 esac
 
 case "${1-}" in
@@ -208,6 +224,9 @@ case "${1-}" in
     daemon) shift; exec "$APP/vibesupertonicd" "$@" ;;
     ui)     shift; exec "$APP/vibesupertonic-ui" "$@" ;;
     store)  vst_store; exit 0 ;;
+    # The verb form, for `--version` and for anyone driving it by hand. The
+    # symlink above is what speechd uses.
+    speechd) shift; exec "$APP/vst-speechd" "$@" ;;
     # bash, not sh: appimage-bind.sh sources keybindings.sh, which uses arrays.
     # Every desktop this targets has bash; a system without it cannot bind keys
     # with the tarball either, and says so rather than failing strangely.
@@ -218,6 +237,13 @@ case "${1-}" in
             exit 1
         }
         exec bash "$APP/appimage-bind.sh" "$@" ;;
+    speechd-install)
+        shift
+        command -v bash >/dev/null 2>&1 || {
+            echo "bash is required to register the Speech Dispatcher module." >&2
+            exit 1
+        }
+        exec bash "$APP/appimage-speechd.sh" "$@" ;;
     gpu-install)
         shift
         store="$(vst_store)"
@@ -267,6 +293,14 @@ cp "$root/build/vibesupertonic.png" "$appdir/usr/share/icons/hicolor/256x256/app
 cp "$root/build/appimage-bind.sh" "$appdir/usr/lib/vibesupertonic/appimage-bind.sh"
 chmod +x "$appdir/usr/lib/vibesupertonic/appimage-bind.sh"
 
+# The Speech Dispatcher adapter, and the portable-home rule it shares with the
+# hotkeys. speechd-install.sh itself arrives with the composed tree — it is a
+# tarball file — and these two are what make it correct for an image whose
+# contents move on every run.
+cp "$root/build/appimage-speechd.sh" "$appdir/usr/lib/vibesupertonic/appimage-speechd.sh"
+cp "$root/build/appimage-home.sh"    "$appdir/usr/lib/vibesupertonic/appimage-home.sh"
+chmod +x "$appdir/usr/lib/vibesupertonic/appimage-speechd.sh"
+
 if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$appdir/VibeSuperTonic.desktop" \
         || die "the .desktop entry does not validate"
@@ -309,7 +343,41 @@ reported="$("$out" --version 2>/dev/null | tr -d '[:space:]')" \
 ctl_reported="$("$out" ctl --version 2>/dev/null | tr -d '[:space:]')"
 [[ "$ctl_reported" == "$version" ]] || die "AppRun's ctl dispatch reports '$ctl_reported', not $version.
        The hotkey path goes through that branch."
-info "runs, and both dispatch paths report $version"
+
+# The verb, and then the ARGV0 form — which is the one speech-dispatcher will
+# actually use, and the one nothing else in this script exercises.
+#
+# THE SYMLINK IS THE ASSERTION. A module config names one absolute path with no
+# arguments, so an AppImage install points speechd at ~/.local/bin/vst-speechd
+# -> the image. If AppRun's $ARGV0 case were missing or misspelled, that symlink
+# would fall through to the default branch and OPEN THE WINDOW once per
+# utterance — and every check that ran the image by its own name would still
+# pass. Tested here with a symlink in a scratch directory, which is exactly what
+# appimage-speechd.sh installs.
+sd_reported="$("$out" speechd --version 2>/dev/null | tr -d '[:space:]')"
+[[ "$sd_reported" == "$version" ]] || die "AppRun's speechd dispatch reports '$sd_reported', not $version."
+
+link_dir="$(mktemp -d)"
+ln -s "$(readlink -f "$out")" "$link_dir/vst-speechd"
+# `|| true` on both, and no display for either. Without the first, a symlink
+# that falls through to the WINDOW takes this script out at the assignment under
+# `set -e` — a packer that fails with no sentence, which is the failure mode
+# every assertion here exists to replace. Without the second, that same
+# fall-through opens a window on the packer's desktop. Both found by sabotage.
+link_reported="$(env -u DISPLAY -u WAYLAND_DISPLAY "$link_dir/vst-speechd" --version 2>/dev/null | tr -d '[:space:]' || true)"
+# INIT through the same symlink: a module that reports its version and then
+# cannot answer the server is a module speechd drops, and the espeak payload
+# living inside the mount is the part that could be wrong here.
+link_init="$(printf 'INIT\nQUIT\n' | timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY "$link_dir/vst-speechd" 2>/dev/null | grep -E '^(299|399) ' | tail -1 || true)"
+rm -rf "$link_dir"
+[[ "$link_reported" == "$version" ]] || die "a symlink named vst-speechd pointing at the image reported
+       '$link_reported', not $version. AppRun's \$ARGV0 dispatch is what makes the
+       Speech Dispatcher config work, and without it speechd opens the window."
+[[ "$link_init" == 299\ * ]] || die "through the vst-speechd symlink, INIT answered: ${link_init:-nothing}.
+       speech-dispatcher drops a module that does not answer 299. 399 means the
+       espeak payload is not reachable from inside the mount."
+info "runs; ctl, speechd and the vst-speechd symlink all report $version"
+info "the module answers INIT through the symlink — ${link_init#299 }"
 
 size="$(du -h "$out" | cut -f1)"
 step "Done."
@@ -317,5 +385,6 @@ info "$out"
 info "$size"
 printf '\n'
 printf 'Install:  chmod +x %s && ./%s bind\n' "$(basename "$out")" "$(basename "$out")"
+printf 'Screen reader:  ./%s speechd-install   (after the first-run download)\n' "$(basename "$out")"
 printf 'Models and data go beside the file, in a VibeSuperTonic/ folder.\n'
 printf 'Keep them together: moving the AppImage alone leaves the store behind.\n'

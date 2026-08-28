@@ -70,24 +70,26 @@ fi
 # those same two variables steer the daemon's store resolution
 # (LinuxDataPaths.ResolveStore consults $XDG_DATA_HOME before it falls back to
 # $HOME), so they must not be set while --ensure-client runs.
-portable_home=""
-real_home=""
-if [[ "$(cd "$HOME" && pwd)" == "$APPIMAGE.home" ]]; then
-    portable_home="$APPIMAGE.home"
-    # `|| true` is load-bearing under `set -euo pipefail`: without it a failing
-    # or absent getent takes the whole script out at this assignment, and the
-    # explanation below — the entire point of the branch — never prints. Found
-    # by testing the failure path rather than only the happy one.
-    real_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
-
-    if [[ -z "$real_home" || ! -d "$real_home" || "$real_home" == "$portable_home" ]]; then
+#
+# The lookup itself moved to appimage-home.sh when the Speech Dispatcher module
+# arrived (S4) and needed exactly the same answer for exactly the same reason —
+# speechd reads the real ~/.config and nothing else. It resolves and does not
+# exit, because the two callers have different things to say about a failure:
+# this one can explain the store, and the other cannot.
+# shellcheck source=/dev/null
+source "$here/appimage-home.sh"
+vst_resolve_real_home
+portable_home="$vst_portable_home"
+real_home="$vst_real_home"
+if [[ -n "$portable_home" ]]; then
+    if [[ -z "$real_home" ]]; then
         die "a portable home is in use:  $portable_home
 
        \$HOME points inside it, so the shortcut configuration this writes would
        land there and your desktop would never read it. Normally this script
        finds your real home in the passwd database and writes the desktop's
        registration there instead, but that lookup did not return a usable
-       directory${real_home:+ (it gave: $real_home)}.
+       directory.
 
        Do NOT delete that directory to work around this. If your models and
        settings live inside it — which is where the portable arrangement puts

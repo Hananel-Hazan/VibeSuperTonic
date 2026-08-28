@@ -173,12 +173,14 @@ jobs:
 
   # ------------------------------------------------------------------- pack
   #
-  # WHY THIS JOB EXISTS. build/pack-tar.sh carries nine assertions, and until
+  # WHY THIS JOB EXISTS. build/pack-tar.sh carries ten assertions, and until
   # this job they ran ONLY on the machine that packed a release, only when a
   # human ran the packer. Every one of them guards a failure that is silent — a
   # stale binary, a managed apphost, 330 MB of CUDA provider, a missing espeak
-  # dictionary that makes a voice produce no sound while exiting 0. A green
-  # `build` job said nothing about any of them.
+  # dictionary that makes a voice produce no sound while exiting 0, a Speech
+  # Dispatcher module that answers the server's INIT with a refusal and is
+  # therefore never offered at all. A green `build` job said nothing about any
+  # of them.
   #
   # It is also the only job that builds espeak-ng, so P5's payload is otherwise
   # unverified between releases.
@@ -215,7 +217,7 @@ jobs:
       # No -v: the default is <VstVersion> from Directory.Build.props, which is
       # what assertion 1 checks the binaries against. Passing a version here
       # would test the flag rather than the agreement.
-      - name: Pack the Linux tarball, with its nine assertions
+      - name: Pack the Linux tarball, with its ten assertions
         run: bash build/pack-tar.sh
 
       # The script travels WITH the tarball rather than being checked out in the

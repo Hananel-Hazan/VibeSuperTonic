@@ -51,6 +51,7 @@ a command line**.
 | Catalog → disk path | `StorePath.Under` + `IsSafeVoiceId`, at every point a string becomes a path | Yes, as of today — 39 tests, plus the same rule in [check-piper-catalog.py](../build/check-piper-catalog.py) |
 | `vst-ctl voice remove <id>` | Same guard. The path that ends in `Directory.Delete(recursive: true)` | Yes |
 | Archive extraction | Nothing extracts archives. `tar` is the user's | n/a |
+| The user's speech-dispatcher config | `speechd-install.sh` re-declares every module it found, copies the system file before creating a user one, and backs up an existing one | Yes, as of 2026-08-28 — [restore-test.sh](../spike/speechd-s4-install/restore-test.sh) drives a private speechd through six scenarios, 40 checks, and 13 sabotages of the installer are all caught |
 
 **The catalog guard was added on 2026-08-27 because this audit found it
 missing.** `Path.Combine(root, entry.Path)` had no traversal check, in two
@@ -73,10 +74,22 @@ never a traversal to catch, just an instruction to obey. See
    numbers are already visible in one place). `pip --require-hashes` for the
    wheels is the same idea and more work; decide it separately.
 
-2. **The speechd module puts arbitrary desktop text into a shell command.**
-   [Trap 9](SPEECHD-PLAN.md#t9). `sd_generic` escapes `$DATA` correctly *only if
-   the config wraps it in single quotes*. **Do**: a packer assertion on the
-   generated config's quoting — a security check, not a tidiness one.
+2. ~~**The speechd module puts arbitrary desktop text into a shell command.**~~
+   **Gone, and worth saying why rather than deleting.** That was
+   [trap 9](SPEECHD-PLAN.md#t9) under route A, where `sd_generic` builds a shell
+   command and hands it to `system()` — safe *only* while the config wraps
+   `$DATA` in single quotes, which looks like a style convention and is not.
+   Route B ([reversed 2026-08-27](SPEECHD-PLAN.md#route-b)) is a module binary
+   speaking a line protocol on stdin: **no shell is involved at any point**, and
+   the utterance never becomes part of a command line. The security check that
+   was owed here is not needed, and the decision that removed it was made for an
+   unrelated reason — routing keystroke echo — which is the sort of thing worth
+   noticing when a design changes.
+
+   What replaced it is a different assertion about the same file: the installer
+   writes the config, so [check-speechd-payload.sh](../build/check-speechd-payload.sh)
+   checks that what it writes names a path that exists, and that it refuses to
+   write at all when there is nothing to say.
 
 3. **Nothing asserts the socket's mode.** **Do**: a daemon test that creates the
    listener and asserts `0600` on the socket and `0700` on its directory. Cheap,
