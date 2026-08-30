@@ -47,7 +47,7 @@ a command line**.
 | Surface | Defence | Tested |
 | --- | --- | --- |
 | Model and voice downloads | SHA-256 pinned in the manifest, re-verified after *each* mirror | Yes — a mirror serving a truncated file must fall through, not leave it on disk |
-| The daemon's socket | `0600` inside a `0700` directory, so no other local user can speak or read your selection | **No** — add one |
+| The daemon's socket | `0600` inside a `0700` directory, so no other local user can speak or read your selection | Yes, as of 2026-08-30 — [SocketModeTests](../src/VibeSuperTonic.Daemon.Tests/SocketModeTests.cs), four checks including the `/tmp` fallback, and four sabotages |
 | Catalog → disk path | `StorePath.Under` + `IsSafeVoiceId`, at every point a string becomes a path | Yes, as of today — 39 tests, plus the same rule in [check-piper-catalog.py](../build/check-piper-catalog.py) |
 | `vst-ctl voice remove <id>` | Same guard. The path that ends in `Directory.Delete(recursive: true)` | Yes |
 | Archive extraction | Nothing extracts archives. `tar` is the user's | n/a |
@@ -91,9 +91,15 @@ never a traversal to catch, just an instruction to obey. See
    checks that what it writes names a path that exists, and that it refuses to
    write at all when there is nothing to say.
 
-3. **Nothing asserts the socket's mode.** **Do**: a daemon test that creates the
-   listener and asserts `0600` on the socket and `0700` on its directory. Cheap,
-   and the failure mode — a mode that widens under a refactor — is invisible.
+3. ~~**Nothing asserts the socket's mode.**~~ **Done 2026-08-30.** A daemon test
+   binds a real listener and asserts `0600` on the socket and `0700` on its
+   directory — in both places the path can land, because under
+   `$XDG_RUNTIME_DIR` the modes would come out right by INHERITANCE and the
+   `/tmp` fallback is the case the explicit `chmod` exists for. So the version
+   of this code that relies on inheritance passes the first check and fails the
+   second, which is what the sabotage run confirmed. A third check narrows a
+   directory somebody else left at 0755, and a fourth connects to what was
+   bound, because a mode on a leftover file proves nothing about a listener.
 
 ### The test to write first
 
@@ -290,7 +296,7 @@ Ranked by defect-caught per hour, not by axis.
 | 1 | ✅ **CI runs `pack-tar.sh`** with a cached espeak build — **done 2026-08-27** | valid | half a day |
 | 2 | ✅ **Clean-container smoke test** on Ubuntu 22.04 — **done 2026-08-27**, and it found a release blocker on its first run | valid | half a day |
 | 3 | ✅ **Archive size budget** with a ten-biggest-files report on failure — **done 2026-08-30**, [check-budgets.sh](../build/check-budgets.sh) | slim | an hour |
-| 4 | **Socket mode test** | safe | an hour |
+| 4 | ✅ **Socket mode test** — **done 2026-08-30**, [SocketModeTests.cs](../src/VibeSuperTonic.Daemon.Tests/SocketModeTests.cs) | safe | an hour |
 | 5 | **Pin the ORT nupkg hash** in `install-gpu.sh` | safe | an hour |
 | 6 | ✅ **Pipeline-latency test** with a synthetic synthesizer — **done 2026-08-30**, [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs) | fast | half a day |
 | 7 | ✅ **`vst-ctl` startup measured**, not inferred — **done 2026-08-30**, in the same script as 3 | fast | an hour |
@@ -298,10 +304,10 @@ Ranked by defect-caught per hour, not by axis.
 | 9 | ✅ **espeak payload size budget** — **done 2026-08-30**, in the same script as 3 | slim | 15 minutes |
 | 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
 
-**Four of the ten are left, and none is a Speech Dispatcher blocker**: the socket
-mode test and the ORT hash pin are the two *safe*-axis items this audit opened
-with, the parity spike in CI is cheap now that the pack job builds the payload,
-and the RSS budget needs a model and therefore a spike rather than a job.
+**Three of the ten are left, and none is a Speech Dispatcher blocker**: the ORT
+hash pin is the last of the two *safe*-axis items this audit opened with, the
+parity spike in CI is cheap now that the pack job builds the payload, and the RSS
+budget needs a model and therefore a spike rather than a job.
 
 Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one
