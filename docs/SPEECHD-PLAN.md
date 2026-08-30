@@ -1416,6 +1416,16 @@ screen reader still work after we install.** The 13 sabotages of the installer
 that S4 recorded are what make a green run mean something; this is what makes it
 mean something on every push rather than on the days somebody remembers.
 
+**And it is a second machine, which is worth more than a second run.** The runner
+installs speech-dispatcher **0.12.0~rc2** from Ubuntu's archive; every
+measurement in this document was taken against **0.12.1** on the development box.
+Its espeak-ng answers `LIST VOICES` with **13,362** rows where this laptop's
+gives 14,805. Both pass, because the check is a **comparison and not a constant**
+— espeak-ng is offered before, still offered after, and offering the same number
+of rows as it did — which is the property that lets one test speak for two
+distros. A test that had recorded 14,805 as the right answer would have failed on
+the runner and been "fixed" by loosening it.
+
 ---
 
 ## Non-goals for 0.2.13

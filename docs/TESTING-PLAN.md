@@ -227,6 +227,19 @@ it is a regression the model would otherwise hide.
    absolute budget would fail on a loaded runner while shipping a fast binary,
    and the sabotage — an ELF that sleeps 100 ms, still native, still passing
    assertion 2 — is caught either way.
+
+   **Two machines, measured the same day, and the relative budget is why both
+   pass:**
+
+   | | fork/exec floor | `vst-ctl` | budget |
+   | --- | --- | --- | --- |
+   | development box | 4 ms | 7 ms | 39 ms |
+   | GitHub runner | 1 ms | 4 ms | 36 ms |
+
+   The runner is the *faster* of the two at spawning processes, which is the
+   direction nobody plans for — a budget written as "35 ms, absolute" would have
+   been fine here and would have quietly stopped meaning anything the first time
+   it ran somewhere slower.
 3. **[SPEECHD-PLAN.md's S0](SPEECHD-PLAN.md#s0) is the first place a real
    first-word budget gets written down**, because it is the first feature where
    the number decides whether to ship. Whatever it measures should become the
