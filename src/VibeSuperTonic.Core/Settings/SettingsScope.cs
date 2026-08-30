@@ -123,6 +123,48 @@ public static class SettingsScope
     }
 
     /// <summary>
+    /// The object the Tune tab's boxes are FILLED FROM — the file itself for
+    /// <see cref="SettingsScopeKind.All"/>, the merged view for the others.
+    ///
+    /// <para><b>This exists so that no caller chooses a source.</b> The tab used
+    /// to fill its fields from two places — the file, on every refresh, and the
+    /// merged view, on every scope change — and the refresh ran second, so a
+    /// scoped value was replaced by the file's within the same repaint. Reported
+    /// 2026-08-30 as "the volume will not stick": the file held
+    /// <c>PerEngine.supertonic.VolumeTrimDb 5</c> and the box showed the top
+    /// level's 0, and the next save wrote that 0 back over the 5. One function
+    /// answering "which object" is what makes that unrepresentable.</para>
+    /// </summary>
+    public static JsonObject Resolve(JsonObject root, SettingsScopeKind kind, string engine, string voiceKey)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        return kind == SettingsScopeKind.All ? root : Merge(root, engine, voiceKey);
+    }
+
+    /// <summary>
+    /// The scoped keys this voice does NOT take from the file, because its own
+    /// engine or voice section sets them.
+    ///
+    /// <para>What it is for: a person editing "All voices" is editing values
+    /// this voice may not use, and nothing on screen would otherwise say so. It
+    /// is the same file's own doing — writing a scope saves every field into it,
+    /// so one deliberate override leaves the whole tab shadowed for that voice
+    /// — and the symptom is a setting that saves correctly, reads back
+    /// correctly, and changes nothing anybody can hear.</para>
+    /// </summary>
+    public static IReadOnlyList<string> Shadowed(JsonObject? root, string engine, string voiceKey)
+    {
+        var shadowed = new List<string>();
+        foreach (string key in Keys)
+        {
+            if (Section(root, PerEngine, engine)?.ContainsKey(key) == true
+                || Section(root, PerVoice, voiceKey)?.ContainsKey(key) == true)
+                shadowed.Add(key);
+        }
+        return shadowed;
+    }
+
+    /// <summary>
     /// The object a save should write into, created if it is not there.
     /// <see cref="SettingsScopeKind.All"/> is the file itself.
     /// </summary>

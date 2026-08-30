@@ -29,6 +29,28 @@ public sealed class TuneTab : UserControl
     private readonly DaemonClient _client;
     private readonly TextBlock _status = Ui.Label("");
     private readonly Dictionary<string, TextBox> _fields = [];
+
+    /// <summary>
+    /// What the boxes should say, and whether anything in them is unsaved.
+    ///
+    /// <para><b>This tab does not decide where a value comes from, and that is
+    /// deliberate.</b> Two paths used to fill these boxes — the read from disk
+    /// and the scope selector — and the read ran second and always used the
+    /// file's top level, so a scoped value was overwritten by the global one
+    /// within the same repaint. Reported 2026-08-30 as "the volume will not
+    /// stick": the file held <c>PerEngine.supertonic.VolumeTrimDb 5</c>, the box
+    /// showed 0, and the next Save wrote that 0 back over the 5. It was the
+    /// third bug in three days of the same family — a display disagreeing with
+    /// what was saved — so the remedy is structural rather than another guard:
+    /// <see cref="ScopedFields"/> derives the source from the scope, and nothing
+    /// here can pass it a different one.</para>
+    ///
+    /// <para>It also carries the touched rule the rate bug produced: a refresh
+    /// must never silently discard what somebody typed, because the read is
+    /// asynchronous and lands after a person has already typed a rate. Revert is
+    /// the button that discards on purpose, and it says so.</para>
+    /// </summary>
+    private readonly ScopedFields _state = new(["Language", .. Numbers.Select(n => n.Key)]);
     private readonly TextBlock _benchmarkStatus = Ui.Label("");
     private readonly TextBlock _inForce = Ui.Label("");
     private readonly Button _benchmark;
@@ -120,7 +142,7 @@ public sealed class TuneTab : UserControl
 
         var language = new TextBox { Width = 120 };
         _fields["Language"] = language;
-        language.TextChanged += (_, _) => { if (!_loading) _fieldsTouched = true; };
+        language.TextChanged += (_, _) => { if (!_loading) _state.Typed("Language", language.Text); };
 
         // Each level rebuilds the ones below it. Guarded by _loading so filling
         // the controls during a refresh does not look like a user choosing.
@@ -192,7 +214,7 @@ public sealed class TuneTab : UserControl
         foreach (var (key, label, hint) in Numbers)
         {
             var box = new TextBox { Width = 120 };
-            box.TextChanged += (_, _) => { if (!_loading) _fieldsTouched = true; };
+            box.TextChanged += (_, _) => { if (!_loading) _state.Typed(key, box.Text); };
             _fields[key] = box;
             grid.Children.Add(Row(label, box, hint));
         }
@@ -210,7 +232,7 @@ public sealed class TuneTab : UserControl
         // The one button that discards on purpose, so it clears the flag first —
         // otherwise the refresh it triggers would politely keep the very edits
         // the user just asked to throw away.
-        revert.Click += async (_, _) => { _fieldsTouched = false; await RefreshAsync(); };
+        revert.Click += async (_, _) => { _state.Discard(); ShowFields(); await RefreshAsync(); };
 
         // WIRED IN PHASE 8B, and it was an exit criterion: parity does not
         // permit a dead control to reach v1. It calls the same verb `vst-ctl
@@ -301,24 +323,17 @@ public sealed class TuneTab : UserControl
         }
 
         _file = root;
+        _state.Load(root);
 
+        // The picker cascade ends in ApplyScope, which is the ONE place the
+        // boxes are filled — from whatever scope is selected, which is what this
+        // read cannot know and must not assume.
         await RefreshVoicePickerAsync(c.Voice);
 
         // Blank means "not set in the file", and the placeholder shows what the
         // daemon is using instead. An empty box that silently means 8 would make
         // "clear it to get the default" indistinguishable from "it is 8".
         _fields["Language"].Watermark = c.Language;
-
-        // Only when there is nothing to lose. The two round trips above take
-        // long enough for a person to have typed a rate already.
-        if (!_fieldsTouched)
-        {
-            _loading = true;
-            _fields["Language"].Text = root.String("Language") ?? "";
-            foreach (var (key, _, _) in Numbers)
-                _fields[key].Text = root.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
-            _loading = false;
-        }
 
         _fields["TotalStep"].Watermark = c.TotalStep.ToString(CultureInfo.InvariantCulture);
         _fields["MaxChunkChars"].Watermark = c.MaxChunkChars.ToString(CultureInfo.InvariantCulture);
@@ -401,22 +416,6 @@ public sealed class TuneTab : UserControl
     /// </summary>
     private JsonObject? _file;
 
-    /// <summary>
-    /// Whether any field has been typed in since the last load.
-    ///
-    /// <para><b>A refresh must never silently discard what somebody typed.</b>
-    /// Two paths fill these boxes — the read from disk and the scope selector —
-    /// and both used to overwrite unconditionally. The read is asynchronous and
-    /// makes two round trips to the daemon before it fills anything, so typing a
-    /// rate the moment the tab opens and pressing Save wrote the OLD rate: the
-    /// fill landed in between, and the box the save read from no longer held
-    /// what the user had put in it. Reported as "changing speed and saving
-    /// reverts it", 2026-08-28.</para>
-    ///
-    /// <para>Revert is the button that discards on purpose, and it says so.</para>
-    /// </summary>
-    private bool _fieldsTouched;
-
     private void RebuildLanguages()
     {
         string engine = Selected(_engine) ?? _at.Engine;
@@ -498,40 +497,57 @@ public sealed class TuneTab : UserControl
 
         var (engine, voiceKey) = ScopeNames();
         var kind = ScopeKind();
-        var source = kind == SettingsScopeKind.All
-            ? _file
-            : SettingsScope.Merge(_file, engine, voiceKey);
 
         // Switching scope SHOULD change these boxes — each scope has its own
         // values — but not at the cost of throwing away an edit in progress. The
-        // note below says which of the two is on screen, so neither is a
-        // surprise.
-        if (!_fieldsTouched)
-        {
-            _loading = true;
-            _fields["Language"].Text = source.String("Language") ?? "";
-            foreach (var (key, _, _) in Numbers)
-                _fields[key].Text = source.Number(key)?.ToString(CultureInfo.InvariantCulture) ?? "";
-            _loading = false;
-        }
+        // state holds both rules; the note below says which of the two is on
+        // screen, so neither is a surprise.
+        _state.Scoped(kind, engine, voiceKey);
+        ShowFields();
 
         bool has = SettingsScope.Has(_file, kind, engine, voiceKey);
         _clearScope.IsVisible = kind != SettingsScopeKind.All;
         _clearScope.IsEnabled = has;
 
-        if (_fieldsTouched)
+        if (_state.Touched)
         {
             _scopeNote.Text = "The boxes still show YOUR unsaved values, not this scope's. "
                             + "Save writes them here; Revert discards them and shows what is on disk.";
             return;
         }
 
-        _scopeNote.Text = kind == SettingsScopeKind.All
-            ? "The values every voice starts from."
-            : has
+        if (kind != SettingsScopeKind.All)
+        {
+            _scopeNote.Text = has
                 ? "This scope has values of its own. Saving writes only what is set here."
                 : "Nothing is set for this scope yet — what you see is inherited. Saving writes "
                   + "these values here, and they stop following the ones above.";
+            return;
+        }
+
+        // A SAVE HERE THAT CHANGES NOTHING AUDIBLE IS THE WORST OUTCOME on this
+        // tab, and it is easy to reach: saving a scope writes every field into
+        // it, so one deliberate override leaves the whole tab shadowed for that
+        // voice. Then "all voices" is edited, saved, read back correctly — and
+        // the voice goes on sounding exactly as it did.
+        var shadowed = SettingsScope.Shadowed(_file, engine, voiceKey);
+        _scopeNote.Text = shadowed.Count == 0
+            ? "The values every voice starts from."
+            : $"The values every voice starts from — but {voiceKey} does not take all of them: "
+              + $"{string.Join(", ", shadowed)} {(shadowed.Count == 1 ? "is" : "are")} set for that "
+              + "voice or its engine, so changing them here will not change how it sounds. Pick that "
+              + "scope above to change them.";
+    }
+
+    /// <summary>
+    /// Put the state on screen. The one place these boxes are written, and it
+    /// takes no argument on purpose — see <see cref="_state"/>.
+    /// </summary>
+    private void ShowFields()
+    {
+        _loading = true;
+        foreach (var (key, box) in _fields) box.Text = _state[key];
+        _loading = false;
     }
 
     private async Task ClearScopeAsync()
@@ -690,7 +706,7 @@ public sealed class TuneTab : UserControl
         try { SettingsFile.Write(_settingsPath, root); }
         catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
 
-        _fieldsTouched = false;
+        _state.Committed();
         _status.Text = "saved — waiting for the daemon to pick it up…";
 
         // Ask the daemon rather than asserting. `reload` is a verb vst-ctl has,

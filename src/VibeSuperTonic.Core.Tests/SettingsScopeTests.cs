@@ -128,4 +128,56 @@ public sealed class SettingsScopeTests
 
         Assert.False(SettingsScope.Has(root, SettingsScopeKind.Voice, "supertonic", "M4"));
     }
+
+    /// <summary>
+    /// One function answers "which object do the boxes show", so the two callers
+    /// that used to answer it differently cannot.
+    /// </summary>
+    [Fact]
+    public void All_voices_resolves_to_the_file_itself_and_the_others_to_the_merge()
+    {
+        var root = File("""{ "TotalStep": 8, "PerEngine": { "supertonic": { "TotalStep": 6 } } }""");
+
+        Assert.Same(root, SettingsScope.Resolve(root, SettingsScopeKind.All, "supertonic", "M4"));
+        Assert.Equal(8, (int)SettingsScope.Resolve(root, SettingsScopeKind.All, "supertonic", "M4")["TotalStep"]!);
+        Assert.Equal(6, (int)SettingsScope.Resolve(root, SettingsScopeKind.Engine, "supertonic", "M4")["TotalStep"]!);
+        Assert.Equal(6, (int)SettingsScope.Resolve(root, SettingsScopeKind.Voice, "supertonic", "M4")["TotalStep"]!);
+    }
+
+    /// <summary>
+    /// What "all voices" cannot change for the voice that is selected. Without
+    /// this the tab has no way to say why a saved value changed nothing
+    /// audible — and a file gets into that state from one deliberate scope save,
+    /// because saving a scope writes every field into it.
+    /// </summary>
+    [Fact]
+    public void A_shadowed_key_is_one_this_voice_does_not_take_from_the_file()
+    {
+        var root = File("""
+            {
+              "VolumeTrimDb": 0, "EngineSpeed": 1.3, "TotalStep": 8,
+              "PerEngine": { "supertonic": { "VolumeTrimDb": 5 } },
+              "PerVoice":  { "F1": { "EngineSpeed": 1.1 } }
+            }
+            """);
+
+        Assert.Equal(["EngineSpeed", "VolumeTrimDb"], SettingsScope.Shadowed(root, "supertonic", "F1"));
+
+        // Another engine's section shadows nothing here, and neither does
+        // another voice's.
+        Assert.Empty(SettingsScope.Shadowed(root, "piper", "piper:x"));
+        Assert.Equal(["VolumeTrimDb"], SettingsScope.Shadowed(root, "supertonic", "M4"));
+    }
+
+    /// <summary>
+    /// An unscoped key in a section shadows nothing, because the merge ignores
+    /// it — saying otherwise would explain a symptom the user does not have.
+    /// </summary>
+    [Fact]
+    public void An_unscoped_key_in_a_section_shadows_nothing()
+    {
+        var root = File("""{ "Provider": "cpu", "PerEngine": { "piper": { "Provider": "gpu" } } }""");
+
+        Assert.Empty(SettingsScope.Shadowed(root, "piper", "piper:x"));
+    }
 }
