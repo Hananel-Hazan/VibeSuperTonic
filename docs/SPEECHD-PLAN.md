@@ -1342,7 +1342,10 @@ being the release that broke somebody's screen reader. Everything in
 - the **first-word latency budget** as a checked number rather than a memory,
 - the **archive size budget**,
 - the **no-audio-with-exit-0 test**,
-- and CI actually running the Linux packer, which today it does not.
+- ~~and CI actually running the Linux packer, which today it does not~~ —
+  **done 2026-08-27**, along with the clean-container smoke test, which found a
+  release blocker on its first run. Items 1 and 2 of
+  [TESTING-PLAN.md](TESTING-PLAN.md#the-order-to-do-it-in).
 
 ---
 

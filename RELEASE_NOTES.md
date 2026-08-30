@@ -1,3 +1,98 @@
+# VibeSuperTonic v0.2.11
+
+*Linux gets a second engine, a screen-reader voice, and — because of the first
+two — a different licence for the archive.*
+
+Piper joins Supertonic: 65 hash-pinned voices across 35 languages, downloaded on
+request from a Voices tab, phonemised by an espeak-ng built into the archive. And
+VibeSuperTonic now appears in Orca's list of synthesizers, because the archive
+carries a Speech Dispatcher module.
+
+```
+VibeSuperTonic-0.2.11-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.11-x86_64.AppImage      56 MB
+```
+
+**Read the licence note below before upgrading if you redistribute this.** The
+archive as a whole is GPL-3.0-or-later from this release onward. Nothing up to
+and including 0.2.10 is affected.
+
+## New
+
+- **Piper, as a second engine.** One voice per download, each trained for one
+  language, chosen in the Voices tab and used from the Tune tab. The catalog is
+  pinned to `rhasspy/piper-voices@v1.0.0` with a SHA-256 for every file, and the
+  licence a voice carries is on its row before you download it. Multi-speaker
+  voices — LibriTTS has 904 — pick a speaker per voice.
+- **A phonemiser in the archive.** espeak-ng, built for this project and pruned
+  to the 31 dictionaries the catalog needs, so a Piper voice works on a machine
+  that has never installed one. The packer refuses to ship a payload whose
+  revision does not match the script that builds it, and checks that every voice
+  the catalog names actually phonemises — a missing dictionary otherwise reaches
+  you as a voice that installs, selects, and then says nothing.
+- **A Speech Dispatcher module, so screen readers can use these voices.**
+  `speechd-install.sh` beside `install.sh` registers it; Orca and anything else
+  that speaks through speechd then lists VibeSuperTonic. It refuses to register
+  an install with no voices downloaded — a synthesizer that appears in the list
+  and cannot speak is worse than one that is absent — and it backs up and
+  restores the speech-dispatcher configuration it touches. On the AppImage the
+  same thing is `./VibeSuperTonic.AppImage speechd-install`.
+- **Settings that belong to all voices, to an engine, or to one voice.** A scope
+  selector above the Tune tab's fields: rate, volume, chunking and the rest can
+  be set once for everything, for every Piper voice, or for the one voice you are
+  listening to. The note under the selector says whether what you are looking at
+  is that scope's own value or inherited.
+- **A tray click raises a window that is already open** instead of reporting that
+  one exists — which is what you are clicking to find out.
+
+## Fixed
+
+- **The daemon could not start on a fresh install.** A routing decision read the
+  sample rate, which loads a model, from the startup path — on a machine whose
+  models had not downloaded yet, that was an unhandled exception before anything
+  worked. Found by a new CI job that extracts the tarball into a bare
+  `ubuntu:22.04` with no .NET, no display, no audio and no models.
+- **A GPU that reported itself healthy and then failed.** The CUDA provider can
+  load and still be unusable; the daemon now falls back to CPU with a sentence
+  saying so, rather than failing every utterance.
+- **A moved install now says so at startup.** Copying the folder elsewhere left
+  paths pointing at where it used to be.
+- **Three settings that would not stick.** A Piper speaker that snapped back to 0
+  after Use, a rate that reverted when Save landed on the same repaint as a
+  refresh, and — reported against this release — a volume trim that reverted to
+  the file's global value whenever a scope was selected, and then overwrote the
+  saved one on the next press. All three were the same defect: a second place
+  that filled the same boxes. The Tune tab no longer decides where a value comes
+  from.
+- **A saved setting that changes nothing audible now explains itself.** Setting a
+  value for "all voices" cannot reach a voice whose own scope overrides it; the
+  tab names those keys instead of leaving you to wonder.
+
+## Licence — read this if you redistribute
+
+**The archive as a whole is GPL-3.0-or-later from this release onward**, because
+it distributes espeak-ng. `LICENSE-PHONEMIZER.txt` in the archive carries the
+terms and the written offer for its source, and the exact source tarball is
+reproducible from `build/build-espeak.sh`.
+
+This repository's own source stays MIT — no `.cs` file changed licence, and MIT
+is GPL-compatible. **Releases up to and including 0.2.10 contain no espeak-ng and
+are entirely unaffected**; this is not retroactive.
+
+## Upgrading
+
+Stop the daemon before replacing the binaries — `install.sh` does it for you, and
+`INSTALL.txt` says to do it by hand before a manual untar. Linux lets you replace
+a running executable, and the result is a new binary on disk with the old one
+still answering every hotkey press.
+
+## Windows
+
+Unchanged by this release, as 0.2.9 and 0.2.10 were. Everything here is the Linux
+product; the Windows ZIP ships from the same version number and the same source.
+
+---
+
 # VibeSuperTonic v0.2.10
 
 *A portable AppImage install could not bind its hotkeys, and the sentence we
