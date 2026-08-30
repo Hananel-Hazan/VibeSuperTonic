@@ -458,11 +458,14 @@ public sealed class TuneTab : UserControl
         var (engine, voiceKey) = ScopeNames();
         string engineLabel = engine == "piper" ? "Piper" : "Supertonic";
 
+        // The NAME the voice picker is showing, not the settings file's key for
+        // it. "Only piper:en_GB-cori-high" is what the file needs to say and not
+        // what a person choosing a scope needs to read.
         var rows = new List<PickerRow>
         {
             new(nameof(SettingsScopeKind.All), "All voices"),
             new(nameof(SettingsScopeKind.Engine), $"All {engineLabel} voices"),
-            new(nameof(SettingsScopeKind.Voice), $"Only {voiceKey}"),
+            new(nameof(SettingsScopeKind.Voice), $"Only {ShortVoiceName(voiceKey)}"),
         };
 
         _loading = true;
@@ -470,6 +473,23 @@ public sealed class TuneTab : UserControl
         _loading = false;
 
         ApplyScope();
+    }
+
+    /// <summary>
+    /// A voice's name as the picker above shows it, short enough to sit inside
+    /// another sentence.
+    ///
+    /// <para>The voice rows carry more than a name — "cori-high · 2 speakers ·
+    /// CC BY" — because a person choosing a VOICE wants the licence and the
+    /// speaker count in front of them. A person choosing a SCOPE has already
+    /// chosen the voice, so everything after the first separator is noise there.
+    /// Falls back to the settings key, which is at least unambiguous.</para>
+    /// </summary>
+    private string ShortVoiceName(string fallback)
+    {
+        if ((_voice.SelectedItem as PickerRow)?.Label is not { Length: > 0 } label) return fallback;
+        int sep = label.IndexOf('·');
+        return (sep > 0 ? label[..sep] : label).Trim();
     }
 
     private SettingsScopeKind ScopeKind() =>

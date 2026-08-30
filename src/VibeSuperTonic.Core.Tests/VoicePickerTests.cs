@@ -192,4 +192,58 @@ public sealed class VoicePickerTests
         Assert.Empty(VoicePicker.Voices(null, "piper", "en_US"));
         Assert.Equal("supertonic", VoicePicker.Locate(null, "M4").Engine);
     }
+
+    // ------------------------------------------------- what the control shows
+
+    /// <summary>
+    /// A ROW RENDERS AS ITS LABEL, and this is not a formatting preference.
+    ///
+    /// <para>Reported 2026-08-30: the Tune tab's dropdowns read
+    /// <c>PickerRow { Value = All, Label = All voices }</c> — a record's
+    /// compiler-generated ToString, which is what a control displays when
+    /// nothing tells it otherwise. Every picker on that tab showed the
+    /// debugger's view of the object while holding a perfectly good label
+    /// nothing was reading.</para>
+    ///
+    /// <para>Nothing here could have caught it: every test asserted Values and
+    /// Labels, which were right. The missing assertion was about the ONE
+    /// property the toolkit actually uses.</para>
+    /// </summary>
+    [Fact]
+    public void A_row_displays_its_label_and_nothing_of_its_own_shape()
+    {
+        var row = new PickerRow("All", "All voices");
+
+        Assert.Equal("All voices", row.ToString());
+        Assert.DoesNotContain("PickerRow", row.ToString());
+        Assert.DoesNotContain("Value", row.ToString());
+    }
+
+    /// <summary>
+    /// And every row the picker actually builds, at every level — because the
+    /// bug was in the type, so one row proving it is one row, and the levels are
+    /// what a user sees.
+    /// </summary>
+    [Fact]
+    public void Every_level_renders_as_something_a_person_would_read()
+    {
+        IReadOnlyList<PickerRow>[] levels =
+        [
+            VoicePicker.Engines(Install),
+            VoicePicker.Languages(Install, "piper"),
+            VoicePicker.Voices(Install, "piper", "en_US"),
+            VoicePicker.Voices(Install, "supertonic", ""),
+            VoicePicker.Speakers(Install, "piper:en_US-libritts-high"),
+        ];
+
+        foreach (var level in levels)
+        {
+            Assert.NotEmpty(level);
+            foreach (var row in level)
+            {
+                Assert.Equal(row.Label, row.ToString());
+                Assert.DoesNotContain("PickerRow", row.ToString());
+            }
+        }
+    }
 }

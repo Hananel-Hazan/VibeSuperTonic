@@ -5,7 +5,25 @@ namespace VibeSuperTonic.Core.Synthesis;
 /// <summary>One row of a picker level: what is stored, and what is shown.</summary>
 /// <param name="Value">The stable key — an engine name, a language code, a voice id, a speaker index.</param>
 /// <param name="Label">What the control shows.</param>
-public sealed record PickerRow(string Value, string Label);
+public sealed record PickerRow(string Value, string Label)
+{
+    /// <summary>
+    /// The label, because <b>this is what a control displays when nothing tells
+    /// it otherwise</b> — and a record's compiler-generated ToString does not
+    /// display a label, it displays its own source code.
+    ///
+    /// <para>Reported 2026-08-30: the Tune tab's dropdowns read
+    /// <c>PickerRow { Value = All, Label = All voices }</c>. Avalonia's ComboBox
+    /// renders an item through ToString unless it is given a template, so every
+    /// picker on that tab — scope, engine, language, voice, speaker — showed the
+    /// debugger's view of the object to the user. The Label was correct the
+    /// whole time and nothing was reading it.</para>
+    ///
+    /// <para>Fixed here rather than with a template on each control, because a
+    /// template fixes the five pickers that exist and this fixes the sixth.</para>
+    /// </summary>
+    public override string ToString() => Label;
+}
 
 /// <summary>
 /// Where the picker stands: the engine, language, voice and speaker chosen.
