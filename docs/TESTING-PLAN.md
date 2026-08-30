@@ -157,9 +157,24 @@ a publish that stops trimming, a payload that quietly ships `--full-data`.
 2. ✅ **A per-payload budget for `espeak/`** — **done 2026-08-30**. 18 MiB
    against 13.2 measured, which is on the useful side of the ~25 MB an unpruned
    build costs.
-3. **An RSS budget**, which is the harder one because it needs a model. Put it in
-   [spike/daemon-stress](../spike/daemon-stress) rather than in CI, and record
-   the number in the release notes the way P2's table does. **Still open.**
+3. ✅ **An RSS budget** — **done 2026-08-30**,
+   [rss-budget.py](../spike/daemon-stress/rss-budget.py), in the spike rather
+   than in CI because it needs 1.6 GB of models and an idle machine.
+
+   **It plateaus**, which is the finding: bound with nothing loaded 665 MB, warm
+   697 MB, peak 842 MB reached by about utterance 60 and unmoved 200 utterances
+   later. Phase 0's ~830 MB is confirmed from a second direction.
+
+   **Two designs of the check were wrong first, and the second one is worth
+   keeping in mind whenever a budget is written.** A fixed growth budget measures
+   how long you ran the script, because growth is sub-linear — 52 MB at N=30,
+   100 MB at N=100, the same behaviour. Comparing the two halves of a run reads
+   beautifully and does not work: a daemon deliberately leaking 2 MB per
+   utterance **passed it**, because warm-up here is large enough to hide a real
+   leak inside its own deceleration. What works is to render a warm-up and throw
+   it away, then measure — after which the injected leak fails by 143 MB against
+   a 25 MB budget where the real daemon uses 7, and the script names the leak's
+   size to within a rounding error.
 
 Both budgets live in [check-budgets.sh](../build/check-budgets.sh) rather than
 inside the packer, for the reason `check-speechd-payload.sh` does: a check that
@@ -341,12 +356,15 @@ Ranked by defect-caught per hour, not by axis.
 | 7 | ✅ **`vst-ctl` startup measured**, not inferred — **done 2026-08-30**, in the same script as 3 | fast | an hour |
 | 8 | ✅ **Parity spike in CI** — **done 2026-08-30**, negative control and all | valid | an hour, once 1 exists |
 | 9 | ✅ **espeak payload size budget** — **done 2026-08-30**, in the same script as 3 | slim | 15 minutes |
-| 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
+| 10 | ✅ **RSS budget** in `spike/daemon-stress` — **done 2026-08-30**, [rss-budget.py](../spike/daemon-stress/rss-budget.py), and two designs of it were wrong before the sabotage settled the third | slim | half a day |
 
-**One of the ten is left**: the RSS budget, which needs a model and therefore a
-spike rather than a job. Both *safe*-axis items this audit opened with are
-closed, both *fast* numbers are measured, and the only *slim* item outstanding is
-the one that cannot run in CI.
+**All ten are done, as of 2026-08-30.** Seven run continuously in CI; the RSS
+budget is a spike, because it needs a real model and an idle machine, which is
+what this document's own "where a check belongs" table says to do with it. What
+this audit found missing on 2026-08-27 — no packer assertion in CI, no smoke
+test, no socket-mode test, no size budget, no latency number, an unpinned 3.1 GB
+download, a parity corpus nobody re-ran — is now checked, and every one of those
+checks has been watched failing.
 
 Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one
