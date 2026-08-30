@@ -30,6 +30,62 @@ set -euo pipefail
 # in src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj.
 ORT_VERSION="1.22.1"
 
+# THE ONE DOWNLOAD IN THIS PRODUCT THAT DID NOT FOLLOW THE PRODUCT'S OWN RULE.
+# Models and Piper voices are SHA-256 pinned in their manifests and re-verified
+# after every mirror; this fetched 227 MB over TLS and ran it. And what it
+# fetches is not data — libonnxruntime_providers_cuda.so is dlopen'd into the
+# daemon, so it is code, in the process that reads the user's selection.
+#
+# Pinned 2026-08-30, and pinned to what NUGET.ORG ITSELF PUBLISHES rather than
+# to a number this repository invented. Anyone can re-derive it without
+# downloading 227 MB:
+#
+#   curl -s --compressed \
+#     https://api.nuget.org/v3/registration5-gz-semver2/microsoft.ml.onnxruntime.gpu.linux/1.22.1.json \
+#   | python3 -c 'import json,sys; print(json.load(sys.stdin)["catalogEntry"])'
+#   # then fetch that, and read .packageHash — base64 SHA-512 of the .nupkg
+#
+# The base64 form of the value below, which is what that field holds:
+#   JC+j5Le8iCoxGpGz1uEnHYU0Baenmg+hKxsWtfGXmLDEG1RYLWFR9F3TZgBiZ8YWYV8uKiAugVgwYEFa0Lsgyw==
+# Verified 2026-08-30 by downloading through the URL below — the v2 API, not the
+# flat container the metadata names — and confirming the bytes agree. That check
+# is the difference between a pin and a decoration: the two URLs serve the same
+# package, but nothing SAYS so, and assuming it is how a pin ends up guarding a
+# file nobody fetches.
+#
+# nuget.org packages are immutable once published, so this pins the artifact
+# rather than merely recording a first sighting.
+ORT_SHA512="242fa3e4b7bc882a311a91b3d6e1271d853405a7a79a0fa12b1b16b5f19798b0c41b54582d6151f45dd366006267c616615f2e2a202e81583060415ad0bb20cb"
+
+# WHICH VERSION THAT HASH IS FOR, spelled out rather than implied by proximity.
+# A hash is only a pin while it belongs to the version being fetched, and the
+# failure mode of bumping ORT_VERSION without re-pinning is a script that
+# refuses every download with a hash mismatch — on the USER's machine, after a
+# 227 MB download. build/pack-tar.sh asserts these two agree, so that is caught
+# when the release is packed instead.
+ORT_SHA512_FOR="1.22.1"
+
+# CHECKED HERE, BEFORE ANYTHING IS FETCHED, and the first version of this was
+# wrong about that: the check sat next to the hash comparison, so a script whose
+# two numbers disagreed downloaded 227 MB and only then said it was
+# misconfigured. Found by breaking it on purpose. It is a statement about this
+# file, so it costs nothing to answer at the top and nobody's bandwidth to get
+# wrong at the bottom.
+if [ "$ORT_SHA512_FOR" != "$ORT_VERSION" ]; then
+  echo "ORT_SHA512 is pinned for ONNX Runtime $ORT_SHA512_FOR but this script fetches $ORT_VERSION." >&2
+  echo "Re-pin it before using this — the comment above says how, from nuget.org's" >&2
+  echo "own metadata, without downloading the package." >&2
+  exit 1
+fi
+
+# The CUDA and cuDNN wheels below are NOT pinned, and that is a separate
+# decision rather than an oversight. `pip --require-hashes` needs the full
+# transitive closure hashed for every platform it may resolve on, regenerated on
+# every bump, and pip refuses to install anything at all if one entry is missing
+# — a maintenance surface with a failure mode that lands on the user. The trust
+# model there is PyPI's own, which is the same one `dotnet restore` and this
+# whole toolchain already run on. docs/TESTING-PLAN.md, "safe", item 1.
+
 # The seven the provider actually links against (ldd), plus the two packages
 # that carry their own dependencies. Deliberately not "everything NVIDIA
 # publishes": the pack is already 3.1 GB.
@@ -155,7 +211,11 @@ if [ "$(ldconfig -p 2>/dev/null | grep -c "libcuda\.so\.1" || true)" -eq 0 ]; th
 fi
 
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "GPU: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)"
+  # awk NR==1 rather than `head -1`: head closes the pipe after one line, and on
+  # a machine with TWO GPUs nvidia-smi is still writing — SIGPIPE, which under
+  # `set -o pipefail` and `set -e` ends this script while it is printing a
+  # banner. awk reads to the end, so there is nothing to signal.
+  echo "GPU: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | awk 'NR==1')"
 fi
 
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -m pip --version >/dev/null 2>&1; then
@@ -202,6 +262,32 @@ if command -v curl >/dev/null 2>&1; then
 else
   wget -q --show-progress -O "$nupkg" "$url"
 fi
+
+# VERIFY BEFORE UNPACKING, not after installing. sha512sum is coreutils;
+# python3 is already a hard requirement of this script, so the fallback costs
+# nothing and keeps the check from being skipped on a machine that happens to be
+# missing one tool. A skipped verification is worse than none: it reports
+# success.
+if command -v sha512sum >/dev/null 2>&1; then
+  actual=$(sha512sum "$nupkg" | cut -d' ' -f1)
+else
+  actual=$(python3 -c 'import hashlib,sys;print(hashlib.sha512(open(sys.argv[1],"rb").read()).hexdigest())' "$nupkg")
+fi
+
+if [ "$actual" != "$ORT_SHA512" ]; then
+  rm -f "$nupkg"
+  echo >&2
+  echo "The ONNX Runtime package does not match its pinned hash." >&2
+  echo "  expected  $ORT_SHA512" >&2
+  echo "  got       $actual" >&2
+  echo >&2
+  echo "Nothing has been installed and the download has been deleted. This library" >&2
+  echo "is loaded into the speech daemon, so it is not something to install anyway." >&2
+  echo "A corrupted or truncated download is the likely cause — try again. If it" >&2
+  echo "happens twice, do not work around it." >&2
+  exit 1
+fi
+echo "    verified against the pinned SHA-512"
 
 inner="runtimes/linux-x64/native/libonnxruntime_providers_cuda.so"
 if command -v unzip >/dev/null 2>&1; then

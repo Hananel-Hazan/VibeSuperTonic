@@ -62,7 +62,7 @@ info() { printf '    %s\n' "$*"; }
 # investigation instead of ending one.
 biggest() {
     find "$1" -type f -printf '%s %p\n' \
-        | sort -rn | head -10 \
+        | sort -rn | awk 'NR<=10' \
         | while read -r bytes path; do
               printf '       %8s  %s\n' "$(numfmt --to=iec "$bytes")" "${path#"$1"/}"
           done

@@ -63,7 +63,8 @@ die()  { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 if [[ -z "$version" ]]; then
     props="$root/Directory.Build.props"
     [[ -f "$props" ]] || die "Directory.Build.props not found at $props"
-    version="$(sed -n 's:.*<VstVersion>\(.*\)</VstVersion>.*:\1:p' "$props" | head -1 | tr -d '[:space:]')"
+    # awk, not `sed | head -1`: awk exits by itself, so nothing takes SIGPIPE.
+    version="$(awk '/<VstVersion>/ { sub(/.*<VstVersion>/, ""); sub(/<\/VstVersion>.*/, ""); gsub(/[[:space:]]/, ""); print; exit }' "$props")"
     [[ -n "$version" ]] || die "no non-empty <VstVersion> in $props"
     info "version not supplied; using <VstVersion> $version from Directory.Build.props"
 fi

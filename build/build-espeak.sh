@@ -165,7 +165,12 @@ cmake --build "$src/build" -j"$(nproc)" >/dev/null
 rm -rf "$prefix"
 cmake --install "$src/build" >/dev/null
 
-lib="$(ls "$prefix"/lib/libespeak-ng.so.*.* | head -1)"
+# A glob rather than `ls | head -1`: under `set -o pipefail` the assignment
+# takes ls's SIGPIPE when head closes first, and `set -e` then kills this script
+# with no message. It is a race that passes until it does not — see the note on
+# assertion 3c in pack-tar.sh, where it eventually did.
+libs=("$prefix"/lib/libespeak-ng.so.*.*)
+lib="${libs[0]}"
 espeak_bin="$prefix/bin/espeak-ng"
 full_dir="$prefix/share/espeak-ng-data"
 [[ -x "$espeak_bin" ]] || die "no espeak-ng binary at $espeak_bin"
@@ -177,7 +182,10 @@ full_dir="$prefix/share/espeak-ng-data"
 # assumed — each fails on a user's machine and nowhere else.
 step "Checking the library"
 
-nm -D "$lib" | grep -q espeak_TextToPhonemesWithTerminator \
+# grep -c rather than grep -q: -q leaves at the first match while nm is still
+# writing, and pipefail turns that SIGPIPE into a failure that reads as "the
+# export is missing" when it is present.
+(( $(nm -D "$lib" | grep -c espeak_TextToPhonemesWithTerminator) > 0 )) \
     || die "the terminator function is missing — wrong revision?"
 info "espeak_TextToPhonemesWithTerminator is exported"
 
@@ -212,7 +220,8 @@ mkdir -p "$payload/espeak-ng-data"
 #
 # So the real file is called what the linker asks for. The true version lives in
 # BUILD-INFO, which is where the packer reads it from anyway.
-soname="$(objdump -p "$lib" | awk '/SONAME/ {print $2; exit}')"
+# No `exit` in the awk — it would SIGPIPE objdump mid-write. See the note above.
+soname="$(objdump -p "$lib" | awk '/SONAME/ && !seen {print $2; seen=1}')"
 [[ -n "$soname" ]] || die "the built library declares no SONAME"
 install -m 644 "$lib" "$payload/$soname"
 strip --strip-unneeded "$payload/$soname"

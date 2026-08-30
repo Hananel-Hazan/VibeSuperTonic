@@ -62,17 +62,27 @@ never a traversal to catch, just an instruction to obey. See
 
 ### What is not defended, and what to do
 
-1. **`install-gpu.sh` fetches ~3.1 GB with no hash pin.** The ORT provider comes
-   from nuget.org by version, and CUDA/cuDNN come from PyPI through `pip`. TLS
-   and the registries' own integrity are the whole defence — which is the same
-   trust model as `dotnet restore`, so it is not unreasonable, but it is the one
-   download path in this product that does not follow its own rule. These
-   libraries are `dlopen`ed into the daemon.
+1. ~~**`install-gpu.sh` fetches ~3.1 GB with no hash pin.**~~ **The nupkg is
+   pinned as of 2026-08-30**, and the interesting part is *what it is pinned to*:
+   the SHA-512 **nuget.org itself publishes** in the package's catalog entry, not
+   a number this repository invented. Anyone can re-derive it with one `curl`
+   and no 227 MB download — the recipe is in
+   [install-gpu.sh](../build/install-gpu.sh) above the constant. It was verified
+   once by downloading through the URL the script actually uses (the v2 API, not
+   the flat container the metadata names) and confirming the bytes agree; the two
+   serve the same package, but nothing *says* so, and assuming it is how a pin
+   ends up guarding a file nobody fetches.
 
-   **Do**: pin the nupkg's SHA-256 and check it, in the shape assertion 5 already
-   has (it compares the *version* in that script against the csproj, so both
-   numbers are already visible in one place). `pip --require-hashes` for the
-   wheels is the same idea and more work; decide it separately.
+   `pack-tar.sh` asserts the hash is 128 hex characters and that the version it
+   was pinned for is the version being fetched — so a bump that forgets to re-pin
+   fails the pack, not the user's install after a 227 MB download.
+
+   **The wheels are still unpinned, and that is now a decision rather than an
+   omission.** `pip --require-hashes` needs the full transitive closure hashed
+   for every platform it may resolve on, regenerated on every bump, and pip
+   refuses to install anything at all if one entry is missing — a maintenance
+   surface whose failure mode lands on the user. The trust model there stays
+   PyPI's own, which is what `dotnet restore` already runs on.
 
 2. ~~**The speechd module puts arbitrary desktop text into a shell command.**~~
    **Gone, and worth saying why rather than deleting.** That was
@@ -318,17 +328,17 @@ Ranked by defect-caught per hour, not by axis.
 | 2 | ✅ **Clean-container smoke test** on Ubuntu 22.04 — **done 2026-08-27**, and it found a release blocker on its first run | valid | half a day |
 | 3 | ✅ **Archive size budget** with a ten-biggest-files report on failure — **done 2026-08-30**, [check-budgets.sh](../build/check-budgets.sh) | slim | an hour |
 | 4 | ✅ **Socket mode test** — **done 2026-08-30**, [SocketModeTests.cs](../src/VibeSuperTonic.Daemon.Tests/SocketModeTests.cs) | safe | an hour |
-| 5 | **Pin the ORT nupkg hash** in `install-gpu.sh` | safe | an hour |
+| 5 | ✅ **Pin the ORT nupkg hash** in `install-gpu.sh` — **done 2026-08-30**, and it found a flaky packer death on the way | safe | an hour |
 | 6 | ✅ **Pipeline-latency test** with a synthetic synthesizer — **done 2026-08-30**, [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs) | fast | half a day |
 | 7 | ✅ **`vst-ctl` startup measured**, not inferred — **done 2026-08-30**, in the same script as 3 | fast | an hour |
 | 8 | **Parity spike in CI** | valid | an hour, once 1 exists |
 | 9 | ✅ **espeak payload size budget** — **done 2026-08-30**, in the same script as 3 | slim | 15 minutes |
 | 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
 
-**Three of the ten are left, and none is a Speech Dispatcher blocker**: the ORT
-hash pin is the last of the two *safe*-axis items this audit opened with, the
+**Two of the ten are left, and neither is a Speech Dispatcher blocker**: the
 parity spike in CI is cheap now that the pack job builds the payload, and the RSS
-budget needs a model and therefore a spike rather than a job.
+budget needs a model and therefore a spike rather than a job. Both *safe*-axis
+items this audit opened with are now closed.
 
 Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one

@@ -101,6 +101,22 @@ The rule the existing checks are built on, and the one to keep: **a check that
 has never been observed failing is not evidence.** Every packer assertion was
 sabotaged on the day it was written. Do that for the next one too.
 
+**And one rule about the shell these checks are written in, learned the hard way
+on 2026-08-30: never put an early-exiting consumer in a pipeline.** `head -c 4`,
+`head -1`, `grep -q`, `awk '{... exit}'` — each of them closes the pipe while the
+producer is still writing, the producer takes SIGPIPE, `set -o pipefail` hands
+the assignment its 141, and `set -e` ends the script **with no message at all**.
+Whether it happens is a race, so the shape passes for a dozen releases and then
+fails under load: `pack-tar.sh` died twice in five runs at
+`espeak-ng --stdout | head -c 4`, printing nothing, in the middle of a phonemiser
+check that was working perfectly. Worse, `nm -D | grep -q` fails in the direction
+that *lies* — a successful match arriving as 141 reports the export as missing.
+
+Write it as a glob (`libs=(dir/lib*); lib="${libs[0]}"`), through a file, with
+`grep -c`, or with an awk that reads to the end (`/pat/ && !seen {…; seen=1}`).
+Every instance in `build/` was converted; the deterministic way to see the
+failure is to make the producer write more than a 64 KB pipe buffer.
+
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
 artifacts, on either platform. The Windows script is canonical because it:
 
@@ -146,10 +162,17 @@ catches is silent:
   version of that removal lived in the backend csproj, looked correct and built
   clean — a target in a project governs *that project's* output, not the publish
   of the daemon referencing it — and this assertion is what caught the 330 MB.
-- **`install-gpu.sh` fetches the same ONNX Runtime version the daemon links.**
-  The provider library and `libonnxruntime.so` are one build split across two
-  files; a drift between them fails on the user's machine and nowhere else, and
-  this is the only place both numbers are visible at once.
+- **`install-gpu.sh` fetches the same ONNX Runtime version the daemon links, and
+  fetches it by hash.** The provider library and `libonnxruntime.so` are one
+  build split across two files; a drift between them fails on the user's machine
+  and nowhere else, and this is the only place both numbers are visible at once.
+  Since 2026-08-30 the assertion also checks the **SHA-512 pin** — 128 hex
+  characters, and pinned *for* the version being fetched, so a bump that forgets
+  to re-pin fails the pack instead of failing every user's install after a 227 MB
+  download. The pin is nuget.org's own published hash, re-derivable with one
+  `curl`; the recipe is in the script above the constant. The CUDA/cuDNN wheels
+  stay unpinned deliberately — `pip --require-hashes` is a maintenance surface
+  whose failure mode lands on the user.
 - **The glibc floor has not risen above 2.34** (Phase 9). Measured across every
   ELF in the tree: `vst-ctl` needs `GLIBC_2.34` and nothing else needs above
   2.27, because `vst-ctl` is the only binary compiled on the build machine — the

@@ -100,7 +100,8 @@ ESPEAK_TERMINATOR="espeak_TextToPhonemesWithTerminator"
 if [[ -z "$version" ]]; then
     props="$root/Directory.Build.props"
     [[ -f "$props" ]] || die "Directory.Build.props not found at $props"
-    version="$(sed -n 's:.*<VstVersion>\(.*\)</VstVersion>.*:\1:p' "$props" | head -1 | tr -d '[:space:]')"
+    # awk, not `sed | head -1`: awk exits by itself, so nothing takes SIGPIPE.
+    version="$(awk '/<VstVersion>/ { sub(/.*<VstVersion>/, ""); sub(/<\/VstVersion>.*/, ""); gsub(/[[:space:]]/, ""); print; exit }' "$props")"
     [[ -n "$version" ]] || die "no non-empty <VstVersion> in $props"
     info "version not supplied; using <VstVersion> $version from Directory.Build.props"
 fi
@@ -283,7 +284,7 @@ fi
 # And they must agree with the archive's NAME, or the tarball lies about itself.
 if [[ "$v_daemon" != "$version" ]]; then
     die "binaries report $v_daemon but the archive would be named $version.
-       <VstVersion> in Directory.Build.props is $(sed -n 's:.*<VstVersion>\(.*\)</VstVersion>.*:\1:p' "$root/Directory.Build.props" | head -1).
+       <VstVersion> in Directory.Build.props is $(awk '/<VstVersion>/ { sub(/.*<VstVersion>/, ""); sub(/<\/VstVersion>.*/, ""); gsub(/[[:space:]]/, ""); print; exit }' "$root/Directory.Build.props").
        Pass -v to name the archive, but the binaries take their version from the
        props file — change it there and rebuild, do not rename the box."
 fi
@@ -422,11 +423,25 @@ _assert_espeak() {
     [[ "$pin_script" == "$pin_payload" ]] || die "the espeak payload was built at $pin_payload but build-espeak.sh pins $pin_script.
        Rebuild it: bash build/build-espeak.sh --clean"
 
-    local lib
-    lib="$(ls "$dir"/libespeak-ng.so* 2>/dev/null | head -1)"
-    [[ -n "$lib" ]] || die "no libespeak-ng.so* in $dir"
+    # A GLOB, NOT `ls | head -1`, AND THAT IS NOT A STYLE PREFERENCE. `ls` into
+    # `head` under `set -o pipefail` gives the assignment ls's 141 when head
+    # closes the pipe first, and `set -e` turns that into a packer that dies
+    # with NO MESSAGE. It is a race — one matching file usually finishes writing
+    # before head exits — so it passed for a dozen releases and then failed on
+    # 2026-08-30 under load, exactly the way an intermittent CI failure arrives.
+    # The same trap is documented against assertion 5 below; this line was the
+    # one it was not applied to.
+    local libs=("$dir"/libespeak-ng.so*)
+    local lib="${libs[0]}"
+    [[ -e "$lib" ]] || die "no libespeak-ng.so* in $dir"
 
-    nm -D "$lib" 2>/dev/null | grep -q "$ESPEAK_TERMINATOR" \
+    # grep -c, not grep -q, and install-gpu.sh already carries this note for the
+    # same reason: grep -q exits at the first match while nm is still writing
+    # thousands of symbols, so under `set -o pipefail` a SUCCESSFUL match can
+    # arrive as 141 — and this check would then report that the export is
+    # missing when it is present. A check that lies in that direction is worse
+    # than no check.
+    (( $(nm -D "$lib" 2>/dev/null | grep -c "$ESPEAK_TERMINATOR") > 0 )) \
         || die "the shipped libespeak-ng has no $ESPEAK_TERMINATOR.
        It is newer than the 1.52.0 release and older builds do not have it. Without
        it there is no way to tell a clause that ends a sentence from one that does
@@ -485,7 +500,10 @@ _assert_espeak() {
     # more: the probes below run with the environment a user has, which is the
     # only way they say anything about the archive.
     local runpath
-    runpath="$(objdump -p "$bin" | awk '/RUNPATH|RPATH/ {print $2; exit}')"
+    # No `exit` in the awk: it would close the pipe while objdump is still
+    # writing, which is the SIGPIPE trap the probes below document. A first-match
+    # flag reads to the end and costs nothing at this size.
+    runpath="$(objdump -p "$bin" | awk '/RUNPATH|RPATH/ && !seen {print $2; seen=1}')"
     [[ "$runpath" == "\$ORIGIN"* ]] || die "the shipped espeak-ng has runpath $(printf %q "$runpath").
        It must begin with \$ORIGIN so the loader finds the libespeak-ng.so.1 sitting
        beside it. Without that it resolves through the ordinary loader path: the
@@ -503,7 +521,7 @@ _assert_espeak() {
     # assertion is about.
     local resolved
     resolved="$(env -i LD_TRACE_LOADED_OBJECTS=1 "$bin" 2>/dev/null \
-                | awk '/libespeak-ng\.so\.1 =>/ {print $3; exit}')"
+                | awk '/libespeak-ng\.so\.1 =>/ && !seen {print $3; seen=1}')"
     [[ "$resolved" == "$dir/"* ]] || die "the shipped espeak-ng loads libespeak-ng.so.1 from
        $(printf %q "${resolved:-nowhere}")
        rather than from the payload beside it ($dir).
@@ -514,8 +532,18 @@ _assert_espeak() {
     # A BARE ENVIRONMENT, because that is the one the user has. env -i drops
     # LD_LIBRARY_PATH along with everything else, so this fails if the runpath
     # above ever stops working, whatever the reason.
+    # THROUGH A FILE, NOT A PIPE INTO `head -c 4`, and this is the line that
+    # taught the lesson. espeak-ng writes a whole WAV; head takes four bytes and
+    # closes the pipe; espeak-ng takes SIGPIPE; `set -o pipefail` hands the
+    # assignment its 141 and `set -e` ends the packer WITH NO MESSAGE. Whether
+    # it happens is a race between espeak finishing and head exiting — a small
+    # WAV usually fits the pipe buffer — so it passed for every release from P5
+    # until 2026-08-30, when four packs in a row under load lost that race
+    # twice. An intermittent, silent packer death is worse than a wrong answer.
     local bare
-    bare="$(env -i "$bin" --path="$dir" -v en --stdout "test" 2>"$staging/.espeak-bare.err" | head -c 4)"
+    env -i "$bin" --path="$dir" -v en --stdout "test" \
+        >"$staging/.espeak-bare.wav" 2>"$staging/.espeak-bare.err" || true
+    bare="$(head -c 4 "$staging/.espeak-bare.wav")"
     [[ "$bare" == "RIFF" ]] || die "the shipped espeak-ng cannot render with an empty environment.
        It returned $(printf %q "$bare") rather than a WAV. This is what a user's
        machine looks like, and this binary is the voice that is supposed to be
@@ -561,8 +589,10 @@ print("\n".join(v))
     # AUDIO, not just phonemes. Synthesis is a different path through the library
     # from phonemisation, and it is the one the echo voice uses — so a payload
     # that phonemises 32 voices and renders no audio would pass every check above.
+    # A file, not a pipe — see the bare-environment probe above.
     local wav
-    wav="$("$bin" --path="$dir" -v en --stdout "test" 2>"$errfile" | head -c 4)"
+    "$bin" --path="$dir" -v en --stdout "test" >"$staging/.espeak-audio.wav" 2>"$errfile" || true
+    wav="$(head -c 4 "$staging/.espeak-audio.wav")"
     [[ "$wav" == "RIFF" ]] || die "the shipped espeak-ng produced no audio.
        It phonemises, so the data is fine — but --stdout returned $(printf %q "$wav")
        rather than a WAV, and that is the path the short-utterance voice renders on.
@@ -642,7 +672,23 @@ if [[ "$ort_in_csproj" != "$ort_in_script" ]]; then
     die "install-gpu.sh fetches ONNX Runtime $ort_in_script but this build links $ort_in_csproj.
        The CUDA provider and libonnxruntime.so are one build in two files."
 fi
-info "no GPU provider in the archive; install-gpu.sh fetches ORT $ort_in_script to match"
+
+# AND THE HASH IS FOR THE VERSION BEING FETCHED. A pin is only a pin while it
+# belongs to the file it guards, and the natural way to break it is to bump
+# ORT_VERSION and leave the hash alone — after which every user's install fails
+# on a mismatch after a 227 MB download, and the obvious "fix" is to delete the
+# check. Two numbers that must agree, visible in one place, which is the same
+# shape as the assertion above.
+ort_pin=$(awk -F'"' '/^ORT_SHA512=/ { print $2; exit }' "$staging/install-gpu.sh")
+ort_pin_for=$(awk -F'"' '/^ORT_SHA512_FOR=/ { print $2; exit }' "$staging/install-gpu.sh")
+[[ "$ort_pin" =~ ^[0-9a-f]{128}$ ]] || die "install-gpu.sh has no usable ORT_SHA512.
+       It fetches 227 MB and dlopens it into the daemon; unpinned, TLS is the
+       whole defence, and every other download in this product is hash-checked."
+[[ "$ort_pin_for" == "$ort_in_script" ]] || die "install-gpu.sh pins a hash for ONNX Runtime
+       ${ort_pin_for:-nothing} but fetches $ort_in_script. Re-pin it — the comment in that file
+       says how, from nuget.org's own metadata, without downloading the package."
+
+info "no GPU provider in the archive; install-gpu.sh fetches ORT $ort_in_script to match, pinned by SHA-512"
 
 # --- 5. the glibc floor has not risen ----------------------------------------
 #
