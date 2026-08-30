@@ -286,7 +286,7 @@ rule below working rather than a coincidence.
 | `0.2.11` | The GPU fix, the fresh-install fix, all of P5, all of Piper P0–P5, a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) — and the moved-install startup check | **shipped 2026-08-30**, tagged `v0.2.11` |
 | `0.2.12` | Skipped | never cut |
 | `0.2.13` | Briefly the number this work carried, 2026-08-28. Reclaimed to `0.2.11` the same day | never cut |
-| `0.2.12` | S5, the safety net — the restore test in CI, the latency budget, the archive size budget, the no-audio-with-exit-0 test | **in development** |
+| `0.2.12` | S5, the safety net — the restore test in CI, the latency budgets, the archive size budget, the no-audio-with-exit-0 test, the socket mode test | **in development, and not a release on its own.** Decided 2026-08-30: it carries checks rather than anything a user can see, so it accumulates until it carries a change somebody would notice. CI packs it on every push, which is what the number is for |
 | `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
 
 **A first `0.2.11` was packed and then withdrawn the same day**, and the

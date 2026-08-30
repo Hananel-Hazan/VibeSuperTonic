@@ -165,6 +165,14 @@ from what the model was trained against. That is a budget decision with a real
 price, which is exactly why it should be visible as a number rather than left
 implicit.
 
+> **Decided 2026-08-30: keep it.** The archive is 61 MB against a 75 MiB budget,
+> so nothing forces the question, and the price is the wrong kind — a Russian
+> voice that sounds subtly wrong reaches a user as a quality complaint with no
+> cause they can name, not as an error. Revisit it if the budget is ever the
+> thing standing between a release and a feature; the number is in
+> [check-budgets.sh](../build/check-budgets.sh) and the switch is one flag in
+> [build-espeak.sh](../build/build-espeak.sh).
+
 ---
 
 <a name="fast"></a>
