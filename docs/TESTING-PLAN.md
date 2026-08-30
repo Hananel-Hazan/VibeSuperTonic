@@ -16,7 +16,7 @@ defended very well, one is defended by accident, and two are not defended at all
 | **Unit tests** | 1159, ~0.8 s, no network, no models, no native libraries | Logic. The bulk of the product's behaviour |
 | **Packer assertions** | 11 in [pack-tar.sh](../build/pack-tar.sh), run against the *composed tree* — and two of them are scripts of their own, [check-speechd-payload.sh](../build/check-speechd-payload.sh) and [check-budgets.sh](../build/check-budgets.sh) | Silent packaging defects — a stale binary, a managed apphost, 330 MB of CUDA, a missing dictionary, an archive that doubled, a vst-ctl that got slow |
 | **The parity spike** | [spike/piper-phonemes](../spike/piper-phonemes) — 327 sentences against piper's own output, with five deliberate sabotages that must all be caught | Phoneme divergence, which is wrong audio rather than a failure |
-| **CI** | [build.yml](../.github/workflows/build.yml): five jobs — `build` (Windows), `linux`, `pack` and `smoke` since 2026-08-27, and `speechd` since 2026-08-30 | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **every packer assertion, "does the archive run on Ubuntu 22.04", and "does espeak-ng still answer after we install"** |
+| **CI** | [build.yml](../.github/workflows/build.yml): six jobs — `build` (Windows), `linux`, `pack` and `smoke` since 2026-08-27, `speechd` and `parity` since 2026-08-30 | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **every packer assertion, "does the archive run on Ubuntu 22.04", "does espeak-ng still answer after we install", and "do our phonemes still equal piper's"** |
 
 **The gap this document opened with — *CI runs none of the packer's nine
 assertions, never builds espeak-ng, and never runs the parity spike* — is
@@ -282,8 +282,8 @@ The artifact-level checks only ever run on the machine that packs. Concretely:
 
 - CI does not run `pack-tar.sh`, so **none of the nine assertions run in CI**.
 - CI never builds espeak-ng, so P5's payload is unverified until a release run.
-- CI never runs the parity spike, so a phonemiser regression is invisible until
-  someone re-runs it by hand.
+- ~~CI never runs the parity spike~~ — **it does, as of 2026-08-30**, negative
+  control first.
 - **Nothing smoke-tests the finished archive.** No check anywhere proves the
   composed tree runs on a machine that is not this one — which is precisely the
   claim the glibc-floor assertion is trying to make on paper.
@@ -299,8 +299,16 @@ The artifact-level checks only ever run on the machine that packs. Concretely:
    `vst-ctl --version`, `vibesupertonicd --version`, and one espeak phonemisation
    through the shipped library. No models, no audio device, no GPU. It answers
    "does this run on a supported distro", which nothing answers today.
-3. **The parity spike in CI**, using the payload the pack job already built. It
-   is 327 sentences and needs no network.
+3. ✅ **The parity spike in CI** — **done 2026-08-30**. Its own job, keyed on the
+   same espeak cache, 2.7 seconds of actual work. It runs `--negative-control`,
+   which sabotages the phonemiser five ways and requires every one to diverge
+   BEFORE reporting the parity result — so a green tick here means the harness
+   was watched failing on the same runner, seconds earlier.
+
+   The exit codes are what make it a check rather than a report — 1 a sentence
+   diverged, 2 the payload was missing, 3 a sabotage escaped — and all three were
+   observed before the job was written: a single id changed in one sentence of
+   the committed corpus turns the run red, which is the regression this is for.
 4. **Keep the sabotage discipline** for everything above: each new check gets
    broken once, deliberately, and the breakage recorded in the commit.
 
@@ -331,14 +339,14 @@ Ranked by defect-caught per hour, not by axis.
 | 5 | ✅ **Pin the ORT nupkg hash** in `install-gpu.sh` — **done 2026-08-30**, and it found a flaky packer death on the way | safe | an hour |
 | 6 | ✅ **Pipeline-latency test** with a synthetic synthesizer — **done 2026-08-30**, [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs) | fast | half a day |
 | 7 | ✅ **`vst-ctl` startup measured**, not inferred — **done 2026-08-30**, in the same script as 3 | fast | an hour |
-| 8 | **Parity spike in CI** | valid | an hour, once 1 exists |
+| 8 | ✅ **Parity spike in CI** — **done 2026-08-30**, negative control and all | valid | an hour, once 1 exists |
 | 9 | ✅ **espeak payload size budget** — **done 2026-08-30**, in the same script as 3 | slim | 15 minutes |
 | 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
 
-**Two of the ten are left, and neither is a Speech Dispatcher blocker**: the
-parity spike in CI is cheap now that the pack job builds the payload, and the RSS
-budget needs a model and therefore a spike rather than a job. Both *safe*-axis
-items this audit opened with are now closed.
+**One of the ten is left**: the RSS budget, which needs a model and therefore a
+spike rather than a job. Both *safe*-axis items this audit opened with are
+closed, both *fast* numbers are measured, and the only *slim* item outstanding is
+the one that cannot run in CI.
 
 Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one

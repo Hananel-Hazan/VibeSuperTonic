@@ -68,8 +68,9 @@ checks against four properties — **safe, slim, fast, valid** — and is worth
 reading before adding a test, because it says where a check belongs and why.
 
 **Since 2026-08-27 CI packs and smoke-tests, and since 2026-08-30 it also
-installs a real speech-dispatcher**, which changes how a green run should be
-read. Three jobs were added to [build.yml](.github/workflows/build.yml):
+installs a real speech-dispatcher and re-runs P1's parity corpus**, which changes
+how a green run should be read. Four jobs were added to
+[build.yml](.github/workflows/build.yml):
 
 - **`pack`** builds espeak-ng (cached on the pin) and runs `pack-tar.sh`, so all
   nine assertions run on every push rather than only when a human packs.
@@ -87,6 +88,13 @@ read. Three jobs were added to [build.yml](.github/workflows/build.yml):
   "adding one module removed every other one" the default outcome of a naive
   installer and the symptom is a blind user's desktop going quiet. No audio
   device is involved: nothing is ever played.
+
+- **`parity`** (2026-08-30) re-runs [P1's corpus](spike/piper-phonemes/README.md)
+  — 327 sentences, 8 languages — against the payload the espeak cache holds. It
+  passes `--negative-control`, so five deliberate sabotages must all be caught
+  *before* the parity result is believed. What it defends is not a crash: it is
+  the same ids coming out slightly different, which reaches a user as a voice
+  that sounds subtly wrong with nothing anywhere reporting a fault. 2.7 seconds.
 
 **Nothing is installed into that container on purpose.** If the smoke job ever
 needs `libicu`, `openssl` or `libespeak-ng` added to it, that is a finding about

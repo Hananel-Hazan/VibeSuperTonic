@@ -233,6 +233,76 @@ jobs:
             build/smoke-test.sh
           retention-days: 7
 
+  # ----------------------------------------------------------------- parity
+  #
+  # DOES OUR PHONEMISER STILL AGREE WITH PIPER'S. P1 was the go/no-go for the
+  # whole Piper plan — 327 sentences, 8 languages, zero divergences — and it has
+  # been re-run by hand ever since, which means a phonemiser regression is
+  # invisible until somebody remembers. What it catches is not a crash: it is
+  # the same ids coming out slightly different, which reaches a user as a voice
+  # that sounds subtly wrong and nothing anywhere reporting a fault.
+  #
+  # It needs no Python and no network — corpus.json holds what piper itself
+  # produced, committed — so the only input is the espeak payload, keyed on the
+  # same cache the pack job fills.
+  #
+  # --negative-control FIRST, and in the same invocation: it runs the corpus
+  # once per deliberate sabotage and requires every one to diverge, then runs
+  # the parity check. A pass means something only because the harness has just
+  # been shown failing. That flag found a real hole on its own first run — a
+  # sabotage that diverged on ZERO sentences, because the corpus never exercised
+  # the code it broke.
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Cache the espeak-ng payload
+        id: espeak-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/espeak-out/espeak
+            build/espeak-out/install
+          key: espeak-${{ runner.os }}-${{ hashFiles('build/build-espeak.sh', 'piper-voices.json', 'spike/piper-phonemes/corpus.json') }}
+
+      - name: Build espeak-ng
+        if: steps.espeak-cache.outputs.cache-hit != 'true'
+        run: bash build/build-espeak.sh
+
+      # Exit codes, which is what makes this a check rather than a report:
+      # 1 a sentence diverged, 2 the payload was not found, 3 a sabotage in the
+      # negative control was NOT caught. All three were watched happening before
+      # this job was written.
+      - name: Phoneme parity against piper, with its negative control
+        env:
+          VST_ESPEAK_LIB: ${{ github.workspace }}/build/espeak-out/espeak/libespeak-ng.so.1
+          VST_ESPEAK_DATA: ${{ github.workspace }}/build/espeak-out/espeak/espeak-ng-data
+        run: |
+          if dotnet run --project spike/piper-phonemes -c Release -- --negative-control \
+               > /tmp/parity.log 2>&1; then
+            cat /tmp/parity.log
+          else
+            cat /tmp/parity.log
+            exit 1
+          fi
+
+      - name: What the parity run said
+        if: failure()
+        run: |
+          echo '## Phoneme parity failed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/parity.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
   # ---------------------------------------------------------------- speechd
   #
   # DOES THE USER'S SCREEN READER STILL WORK AFTER WE INSTALL. That is a
