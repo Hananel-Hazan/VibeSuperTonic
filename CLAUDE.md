@@ -67,8 +67,9 @@ became GPL" is what a reader will otherwise conclude retroactively.
 checks against four properties — **safe, slim, fast, valid** — and is worth
 reading before adding a test, because it says where a check belongs and why.
 
-**Since 2026-08-27 CI packs and smoke-tests**, which changes how a green run
-should be read. Two jobs were added to [build.yml](.github/workflows/build.yml):
+**Since 2026-08-27 CI packs and smoke-tests, and since 2026-08-30 it also
+installs a real speech-dispatcher**, which changes how a green run should be
+read. Three jobs were added to [build.yml](.github/workflows/build.yml):
 
 - **`pack`** builds espeak-ng (cached on the pin) and runs `pack-tar.sh`, so all
   nine assertions run on every push rather than only when a human packs.
@@ -77,6 +78,15 @@ should be read. Two jobs were added to [build.yml](.github/workflows/build.yml):
   .NET, no display, no audio device, no models and no espeak-ng installed.
   [build/smoke-test.sh](build/smoke-test.sh) is the same script you can run
   locally against any extracted release.
+
+- **`speechd`** (S5, 2026-08-30) apt-installs `speech-dispatcher` and its
+  espeak-ng module and runs
+  [restore-test.sh](spike/speechd-s4-install/restore-test.sh) — 6 scenarios,
+  40 checks. The question it answers is not "does our module work" but **does
+  the user's screen reader still work after we install**, because trap 1 makes
+  "adding one module removed every other one" the default outcome of a naive
+  installer and the symptom is a blind user's desktop going quiet. No audio
+  device is involved: nothing is ever played.
 
 **Nothing is installed into that container on purpose.** If the smoke job ever
 needs `libicu`, `openssl` or `libespeak-ng` added to it, that is a finding about
@@ -114,8 +124,9 @@ because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
 `INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
 `install-gpu.sh` to the root, and archives it.
 
-Ten assertions run against the **composed tree**, not the build outputs, and
-each exists because the failure it catches is silent:
+Eleven assertions run against the **composed tree** — one of them, the budgets,
+against the finished tarball as well — and each exists because the failure it
+catches is silent:
 
 - **All three binaries report the same version**, asked of the shipped files via
   `--version`. Guards a stale binary surviving in an output folder and a UI
@@ -214,6 +225,21 @@ logs the module as loaded — so an AppImage install points it at a symlink,
 module. Without that case the symlink falls through to AppRun's default branch
 and **opens the window, once per utterance**. `pack-appimage.sh` therefore builds
 such a symlink and asks it for both `--version` and `INIT`.
+
+- **The archive has a size budget, and so does `vst-ctl`'s startup** (S5,
+  2026-08-30). Assertion 6 runs [check-budgets.sh](build/check-budgets.sh):
+  75 MiB for the tarball against 60.7 measured, 18 MiB for `espeak/` against
+  13.2, and a startup budget of this machine's own fork/exec floor plus 35 ms.
+  The first two catch what assertions 3 and 4 cannot — those catch two *named*
+  files, and most size regressions are a package reference that dragged in a
+  native blob or a payload that quietly shipped `--full-data`. The third
+  replaces a proxy: assertion 2 proves `vst-ctl` is *native*, which is not the
+  same claim as *fast*, and a binary can stay native and acquire an ICU probe.
+  **A tarball that fails is deleted**, because an artifact that exists is one
+  somebody can ship. It is a separate script, like 3e, so that
+  [budget-sabotage.sh](build/budget-sabotage.sh) can break each budget in a
+  second instead of in a four-minute pack — which is how the 100 ms-slow-but-ELF
+  case was actually observed being caught.
 
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from

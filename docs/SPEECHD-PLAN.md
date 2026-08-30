@@ -1347,6 +1347,70 @@ being the release that broke somebody's screen reader. Everything in
   release blocker on its first run. Items 1 and 2 of
   [TESTING-PLAN.md](TESTING-PLAN.md#the-order-to-do-it-in).
 
+<a name="s5-landed"></a>
+
+#### S5 landed, 2026-08-30
+
+Five items, and **the honest accounting is that two of them were already done**
+— CI has packed and smoke-tested since 2026-08-27 — one was reinterpreted for a
+reason worth stating, and the other two are new checks with fifteen sabotages
+between them.
+
+| | |
+| --- | --- |
+| the restore test, automated | a `speechd` job in [build.yml](../.github/workflows/build.yml) that installs a real speech-dispatcher and runs [restore-test.sh](../spike/speechd-s4-install/restore-test.sh) — 6 scenarios, 40 checks |
+| the latency budget | [check-budgets.sh](../build/check-budgets.sh) measures `vst-ctl` startup; [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs) measures everything around the model |
+| the archive size budget | 75 MiB against 60.7, and 18 MiB for `espeak/` against 13.2 — same script |
+| never exit 0 with no audio | [NoAudioTests.cs](../src/VibeSuperTonic.SpeechD.Tests/NoAudioTests.cs), the module's side of the seam `RenderWav` holds up on the other |
+| CI running the packer | already true since 2026-08-27, along with the clean-container smoke test |
+
+**THE LATENCY ITEM IS NOT THE NUMBER TRAP 4 IS ABOUT, and pretending otherwise
+would be the dishonest version of this.** [S0](#s0-landed) measured the thing
+that decides whether a screen reader is usable — 383 ms for one letter, 718 ms
+for a sentence — and it needs a model, an idle machine and real hardware, so it
+stays a measurement a human takes with `vst-ctl benchmark`. What S0 *also*
+measured is the half that can be checked continuously: **6 ms of that 383 was
+everything except the model.** That 6 ms is what creeps — a chunker that goes
+quadratic, a settings reload per utterance, an extra round trip — and it is what
+these tests defend. The product decision S0 reached, reading yes and keystroke
+echo no, is not something a test can re-derive.
+
+**Two of the four latency checks never look at a clock**, which is what makes
+them worth having on a shared CI runner: how many chunks were rendered before the
+first sample (2–3, whether the document is one sentence or four hundred) and
+whether the first chunk is the opening sentence rather than the merged
+200-character one that put 1.45 s between the key press and the first word on
+the Mint box. Those are properties of the pipeline's shape. The timed pair are
+the catastrophe net behind them, and **the sabotage run moved one of the budgets**:
+a deliberate quarter-millisecond per chunk — 46 ms across a long document,
+invisible on one sentence — passed the comfortable 50 ms growth budget, so it is
+25 ms, with 25× headroom still.
+
+**The startup budget is relative, not absolute.** This machine's own fork/exec
+floor, measured with `/bin/true` at the same moment, plus 35 ms. An absolute
+number is a property of the machine as much as of the binary and would fail on a
+loaded runner while shipping a perfectly fast one. Observed 2026-08-30: floor
+4 ms, `vst-ctl` 7 ms, `vst-speechd` 5 ms — against the ~107 ms a managed apphost
+cost, which is what assertion 2 has been guarding by proxy since Phase 7.
+
+**Fifteen sabotages, all caught**, and they are the point rather than the tests:
+five against the budgets ([budget-sabotage.sh](../build/budget-sabotage.sh) — a
+20 MB blob, an unpruned payload, a vst-ctl that sleeps 100 ms and is still ELF, a
+missing phonemiser, a missing binary), four against the pipeline (the lead cap
+removed, the whole document rendered before the first sample, per-chunk cost,
+per-utterance stall), and six against the module (a header with no samples
+counted as success, a silent renderer counted as success, the fallback removed,
+the fallback running after a voice already spoke — the sentence twice — the
+both-failed log deleted, and the 702 END deleted, which is the one that wedges
+the server's queue for every module including the user's espeak-ng).
+
+**What is NOT verified: the `speechd` CI job has never run on a runner.**
+`restore-test.sh` passes 40/40 on this machine, and the job is the same script
+with an `apt-get install speech-dispatcher speech-dispatcher-espeak-ng` in front
+of it — but "the check works" and "the job works" are different claims, and the
+second one needs a push. If it fails there, the likely causes are the package
+set and the runner's `XDG_RUNTIME_DIR`, not the test.
+
 ---
 
 ## Non-goals for 0.2.13

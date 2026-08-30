@@ -1166,6 +1166,24 @@ mkdir -p "$root/dist"
 rm -f "$tarball"
 tar -czf "$tarball" -C "$root/dist/release-linux" VibeSuperTonic
 
+# --- 6. THE BUDGETS: how big the archive is, and how fast vst-ctl starts ------
+#
+# A script rather than a block here, for the reason check-speechd-payload.sh is
+# one: an assertion inside a four-minute pack can be reasoned about but not
+# cheaply BROKEN, and a check nobody has watched fail is not evidence. This one
+# runs against any composed tree and any tarball, in a second.
+#
+# It is the only check that needs the FINISHED archive, so it runs after tar —
+# and a tarball that fails it is deleted, because an artifact that exists is an
+# artifact somebody can ship.
+step "Checking the budgets…"
+if ! bash "$root/build/check-budgets.sh" "$staging" "$tarball"; then
+    rm -f "$tarball"
+    die "the archive did not pass its budgets, and has been deleted so it cannot
+       be shipped by accident. The report above says which budget and where the
+       bytes are."
+fi
+
 size="$(du -h "$tarball" | cut -f1)"
 step "Done. $size → $tarball"
 

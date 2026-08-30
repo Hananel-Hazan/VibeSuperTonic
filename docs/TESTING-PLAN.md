@@ -14,9 +14,9 @@ defended very well, one is defended by accident, and two are not defended at all
 | Layer | What it is | What it catches |
 | --- | --- | --- |
 | **Unit tests** | 1159, ~0.8 s, no network, no models, no native libraries | Logic. The bulk of the product's behaviour |
-| **Packer assertions** | 9 in [pack-tar.sh](../build/pack-tar.sh), run against the *composed tree* | Silent packaging defects — a stale binary, a managed apphost, 330 MB of CUDA, a missing dictionary |
+| **Packer assertions** | 11 in [pack-tar.sh](../build/pack-tar.sh), run against the *composed tree* — and two of them are scripts of their own, [check-speechd-payload.sh](../build/check-speechd-payload.sh) and [check-budgets.sh](../build/check-budgets.sh) | Silent packaging defects — a stale binary, a managed apphost, 330 MB of CUDA, a missing dictionary, an archive that doubled, a vst-ctl that got slow |
 | **The parity spike** | [spike/piper-phonemes](../spike/piper-phonemes) — 327 sentences against piper's own output, with five deliberate sabotages that must all be caught | Phoneme divergence, which is wrong audio rather than a failure |
-| **CI** | [build.yml](../.github/workflows/build.yml): four jobs — `build` (Windows), `linux`, and, since 2026-08-27, `pack` and `smoke` | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **and now all nine packer assertions plus "does the archive run on Ubuntu 22.04"** |
+| **CI** | [build.yml](../.github/workflows/build.yml): five jobs — `build` (Windows), `linux`, `pack` and `smoke` since 2026-08-27, and `speechd` since 2026-08-30 | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **every packer assertion, "does the archive run on Ubuntu 22.04", and "does espeak-ng still answer after we install"** |
 
 **The gap this document opened with — *CI runs none of the packer's nine
 assertions, never builds espeak-ng, and never runs the parity spike* — is
@@ -134,16 +134,24 @@ a publish that stops trimming, a payload that quietly ships `--full-data`.
 
 ### What to do
 
-1. **A total-size budget in the packer.** One number, stated with a date and a
-   reason, checked against the finished tarball; on failure, print the ten
-   biggest files so the answer is in the error rather than in a follow-up
-   investigation. Set it with headroom (say 70 MB against today's 59) so it
-   catches a doubling and not a drift.
-2. **A per-payload budget for `espeak/`**, because it has an easy accident: a
-   `--full-data` build is 25 MB of dictionaries and passes every existing check.
+1. ✅ **A total-size budget in the packer** — **done 2026-08-30**. 75 MiB against
+   60.7 measured, checked against the finished tarball, printing the ten biggest
+   files in the tree on failure. A tarball that fails it is **deleted**: an
+   artifact that exists is an artifact somebody can ship.
+2. ✅ **A per-payload budget for `espeak/`** — **done 2026-08-30**. 18 MiB
+   against 13.2 measured, which is on the useful side of the ~25 MB an unpruned
+   build costs.
 3. **An RSS budget**, which is the harder one because it needs a model. Put it in
    [spike/daemon-stress](../spike/daemon-stress) rather than in CI, and record
-   the number in the release notes the way P2's table does.
+   the number in the release notes the way P2's table does. **Still open.**
+
+Both budgets live in [check-budgets.sh](../build/check-budgets.sh) rather than
+inside the packer, for the reason `check-speechd-payload.sh` does: a check that
+can only run inside a four-minute pack is one nobody sabotages.
+[budget-sabotage.sh](../build/budget-sabotage.sh) breaks each of them against a
+copy of a composed tree — a 20 MB blob, an unpruned payload, a slow vst-ctl, a
+missing phonemiser, a missing binary — and all five were caught the day they were
+written.
 
 **And the honest note**: `ru_dict` is 4.9 MB of a 7.1 MB payload, and dropping
 `EXTRA_ru` would recover it at the cost of Russian stress placement diverging
@@ -162,9 +170,10 @@ written down somewhere and none of which is checked automatically.
 
 | Number | Budget | Where it came from | Checked? |
 | --- | --- | --- | --- |
-| `vst-ctl` startup | 6 ms AOT vs 107 ms managed | Phase 7 | **By proxy** — the packer and CI assert the binary is *native*, not that it is *fast* |
+| `vst-ctl` startup | 6 ms AOT vs 107 ms managed | Phase 7 | ✅ **Measured**, 2026-08-30 — median of 21 against this machine's own fork/exec floor + 35 ms. 7 ms observed |
+| Pipeline, request → first sample | 250 ms ceiling, 25 ms growth | This document | ✅ **Measured**, 2026-08-30 — 1 ms for a 27 KB document, and two of the four checks do not look at a clock at all |
 | Hotkey → acknowledgement | 150 ms | The port plan | No |
-| First word, Supertonic, warm | ~750 ms, ~600 of it one inference | Phase 3 | No |
+| First word, Supertonic, warm | ~750 ms, ~600 of it one inference | Phase 3 | No — and it needs a model, so it stays `vst-ctl benchmark`'s |
 | First word, Piper | 802 ms CPU / 77 ms GPU | P2 | No — `vst-ctl benchmark` measures it on demand, by hand |
 
 ### The insight that makes this testable
@@ -183,11 +192,27 @@ it is a regression the model would otherwise hide.
 
 ### What to do
 
-1. **A pipeline-latency test** with the synthetic synthesizer and a budget,
-   in `Core.Tests`. Runs in CI, no models, no audio device.
-2. **Measure `vst-ctl` startup for real** in CI — run it 20 times, take the
-   median, fail over a budget. The nativeness assertion is a proxy for this and
-   proxies drift.
+1. ✅ **A pipeline-latency test** with the synthetic synthesizer and a budget —
+   **done 2026-08-30**,
+   [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs).
+   Four checks, and the two that matter most **never look at the clock**: how
+   many chunks were rendered before the first sample (2–3, whether the document
+   is one sentence or four hundred) and whether the first chunk is the opening
+   sentence rather than a merged one. Those are properties of the pipeline's
+   shape, so they cannot flake and a fast machine cannot paper over them. The
+   timed pair are the catastrophe net behind them.
+
+   **The growth budget was tightened by its own sabotage run**, which is the
+   point of doing one: 50 ms was the comfortable number, a deliberate quarter of
+   a millisecond per chunk — 46 ms across a 184-chunk document, invisible on one
+   sentence — passed it, and 25 ms catches it with 25x headroom still.
+2. ✅ **Measure `vst-ctl` startup for real** — **done 2026-08-30**, in
+   [check-budgets.sh](../build/check-budgets.sh), so it runs on every pack and
+   therefore on every push. The budget is **relative**: this machine's own
+   fork/exec floor, measured with `/bin/true` at the same moment, plus 35 ms. An
+   absolute budget would fail on a loaded runner while shipping a fast binary,
+   and the sabotage — an ELF that sleeps 100 ms, still native, still passing
+   assertion 2 — is caught either way.
 3. **[SPEECHD-PLAN.md's S0](SPEECHD-PLAN.md#s0) is the first place a real
    first-word budget gets written down**, because it is the first feature where
    the number decides whether to ship. Whatever it measures should become the
@@ -264,14 +289,19 @@ Ranked by defect-caught per hour, not by axis.
 | --- | --- | --- | --- |
 | 1 | ✅ **CI runs `pack-tar.sh`** with a cached espeak build — **done 2026-08-27** | valid | half a day |
 | 2 | ✅ **Clean-container smoke test** on Ubuntu 22.04 — **done 2026-08-27**, and it found a release blocker on its first run | valid | half a day |
-| 3 | **Archive size budget** with a ten-biggest-files report on failure | slim | an hour |
+| 3 | ✅ **Archive size budget** with a ten-biggest-files report on failure — **done 2026-08-30**, [check-budgets.sh](../build/check-budgets.sh) | slim | an hour |
 | 4 | **Socket mode test** | safe | an hour |
 | 5 | **Pin the ORT nupkg hash** in `install-gpu.sh` | safe | an hour |
-| 6 | **Pipeline-latency test** with a synthetic synthesizer | fast | half a day |
-| 7 | **`vst-ctl` startup measured**, not inferred | fast | an hour |
+| 6 | ✅ **Pipeline-latency test** with a synthetic synthesizer — **done 2026-08-30**, [PipelineLatencyTests.cs](../src/VibeSuperTonic.Core.Tests/PipelineLatencyTests.cs) | fast | half a day |
+| 7 | ✅ **`vst-ctl` startup measured**, not inferred — **done 2026-08-30**, in the same script as 3 | fast | an hour |
 | 8 | **Parity spike in CI** | valid | an hour, once 1 exists |
-| 9 | **espeak payload size budget** | slim | 15 minutes |
+| 9 | ✅ **espeak payload size budget** — **done 2026-08-30**, in the same script as 3 | slim | 15 minutes |
 | 10 | **RSS budget** in `spike/daemon-stress` | slim | half a day |
+
+**Four of the ten are left, and none is a Speech Dispatcher blocker**: the socket
+mode test and the ORT hash pin are the two *safe*-axis items this audit opened
+with, the parity spike in CI is cheap now that the pack job builds the payload,
+and the RSS budget needs a model and therefore a spike rather than a job.
 
 Items 1 and 2 are worth more than the other eight together: they take every
 artifact-level check that exists and make it continuous, and they answer the one
