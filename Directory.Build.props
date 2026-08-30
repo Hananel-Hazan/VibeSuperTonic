@@ -25,11 +25,18 @@
       release under two different numbers — pack-zip.ps1 carried a hardcoded
       0.2.0 default for three releases past 0.2.0.
 
-      This is the LAST SHIPPED version. Per CLAUDE.md the bump is a decision the
-      user makes, never something the build infers, so a release run passes
-      -Version explicitly and this value is updated to match afterwards.
+      This is the version being BUILT, not the last one shipped, and that
+      changed on 2026-08-27 when CI started packing: the pack job runs
+      pack-tar.sh with no -v on every push, so a default naming the last release
+      would have CI produce artifacts named after a release that already exists
+      — and a local run with no -v would overwrite the genuine one in dist/.
+      So it is bumped when a version's work BEGINS, and a release run still
+      passes -Version explicitly. Per CLAUDE.md the bump is a decision the user
+      makes, never something the build infers.
+
+      0.2.11 shipped 2026-08-30 (tagged v0.2.11). This is S5's number.
     -->
-    <VstVersion>0.2.11</VstVersion>
+    <VstVersion>0.2.12</VstVersion>
 
     <!--
       And every assembly in the tree carries it. Set here rather than per-project

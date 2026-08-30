@@ -248,9 +248,9 @@ has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
 **The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
-`0.2.11`, which **shipped on 2026-08-30** — so it is now the last version shipped
-rather than the one being built, and the rule below says to bump it when the next
-version's work begins. S5 is that work, and its number has not been chosen.
+`0.2.12`, which is S5's number and is **under development**. `0.2.11` shipped on
+2026-08-30 and is tagged `v0.2.11`; the bump followed the same day, which is the
+rule below working rather than a coincidence.
 
 | Version | What it is | State |
 | --- | --- | --- |
@@ -260,7 +260,8 @@ version's work begins. S5 is that work, and its number has not been chosen.
 | `0.2.11` | The GPU fix, the fresh-install fix, all of P5, all of Piper P0–P5, a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) — and the moved-install startup check | **shipped 2026-08-30**, tagged `v0.2.11` |
 | `0.2.12` | Skipped | never cut |
 | `0.2.13` | Briefly the number this work carried, 2026-08-28. Reclaimed to `0.2.11` the same day | never cut |
-| `0.3` | Piper as a second engine — [PIPER-PLAN.md](docs/PIPER-PLAN.md). **P0–P5 are done and in the tree** | after |
+| `0.2.12` | S5, the safety net — the restore test in CI, the latency budget, the archive size budget, the no-audio-with-exit-0 test | **in development** |
+| `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
 
 **A first `0.2.11` was packed and then withdrawn the same day**, and the
 reasoning on both sides is worth keeping. (The number was later reclaimed by the
@@ -289,8 +290,8 @@ collides with nothing. What it does mean: **`dist/` may still hold a
 `0.2.13` tarball from before the renumber, and it is not a release.** Delete it
 rather than reasoning about it.
 
-`0.3` is the only number still spoken for. **Everything else is a decision to
-ask about** — propose a bump from what changed, and use
+`0.2.12` is the number being built. **Everything after it is a decision to ask
+about** — propose a bump from what changed, and use
 `AskUserQuestion`.
 
 **`<VstVersion>` names the version being built, not the last one shipped**, and
