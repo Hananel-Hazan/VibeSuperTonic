@@ -1404,12 +1404,17 @@ the fallback running after a voice already spoke — the sentence twice — the
 both-failed log deleted, and the 702 END deleted, which is the one that wedges
 the server's queue for every module including the user's espeak-ng).
 
-**What is NOT verified: the `speechd` CI job has never run on a runner.**
-`restore-test.sh` passes 40/40 on this machine, and the job is the same script
-with an `apt-get install speech-dispatcher speech-dispatcher-espeak-ng` in front
-of it — but "the check works" and "the job works" are different claims, and the
-second one needs a push. If it fails there, the likely causes are the package
-set and the runner's `XDG_RUNTIME_DIR`, not the test.
+**The `speechd` job ran on a runner the same day, and it is green.** Run #32 and
+every run since: the apt-get, a cache hit on the espeak payload, and the restore
+test itself passing in **104 seconds** — six scenarios and 40 checks against a
+speech-dispatcher installed from Ubuntu's archive rather than this laptop's.
+That was worth waiting to claim: "the check works" and "the job works" are
+different sentences, and the second one could only be settled by a push.
+
+So the question that job answers is now answered continuously: **does the user's
+screen reader still work after we install.** The 13 sabotages of the installer
+that S4 recorded are what make a green run mean something; this is what makes it
+mean something on every push rather than on the days somebody remembers.
 
 ---
 

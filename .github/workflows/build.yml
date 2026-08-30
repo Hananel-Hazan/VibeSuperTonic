@@ -217,7 +217,7 @@ jobs:
       # No -v: the default is <VstVersion> from Directory.Build.props, which is
       # what assertion 1 checks the binaries against. Passing a version here
       # would test the flag rather than the agreement.
-      - name: Pack the Linux tarball, with its ten assertions
+      - name: Pack the Linux tarball, with its eleven assertions
         run: bash build/pack-tar.sh
 
       # The script travels WITH the tarball rather than being checked out in the
