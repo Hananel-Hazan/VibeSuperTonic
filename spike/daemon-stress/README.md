@@ -54,8 +54,11 @@ answered; 40 owner-death races survived.
 
 ```bash
 python3 spike/daemon-stress/rss-budget.py --models <models-dir> \
-    [--voice piper:en_GB-cori-high] [--warmup 100] [--utterances 100]
+    [--voice piper:en_GB-cori-high] [--utterances 100] [--warmup N]
 ```
+
+Warm-up is **measured, not passed in**: it renders in batches of ten until the
+peak stops moving, then measures the next N. `--warmup N` forces a fixed one.
 
 **The one check in [TESTING-PLAN.md](../../docs/TESTING-PLAN.md) that cannot be a
 CI job.** Every other budget there is measured with no model on disk; this needs
@@ -69,7 +72,7 @@ download once. A daemon that gains 20 MB per utterance takes the machine down by
 lunchtime, and the user's report is "my computer got slow", which nobody
 attributes to a text-to-speech engine.
 
-### Two wrong versions came first, and the second one is the interesting one
+### Three wrong versions came first, and each was caught by running it
 
 **A fixed growth budget** measured from the first utterance. Growth is
 sub-linear — 30 utterances grew 52 MB, 100 grew 100 MB — so the same behaviour
@@ -82,9 +85,17 @@ decelerates and a leak does not. It reads well, and a daemon deliberately leakin
 "settling". Warm-up here is big enough to hide a real leak inside its own
 deceleration.
 
-What works is to stop measuring during warm-up: render N utterances and throw
-them away, then measure the next N. There is then nothing for a leak to hide
-behind.
+**A fixed warm-up of 100**, which is right for Supertonic — its peak stops moving
+by utterance 60 — and wrong for Piper, which is still climbing at 100 and settles
+near 200. So it reported a Piper voice as leaking **1353 kB per utterance**, and
+the same run with a 200-utterance warm-up grows by **zero**. A false leak report
+is the worst outcome available here: it sends somebody hunting a defect that does
+not exist, in a component that is fine. Warm-up is now measured — batches of ten
+until the peak has not moved for thirty utterances — which is the thing that
+differs between engines, so it is not something to assume.
+
+What works is to stop measuring during warm-up: render until it settles, throw
+that away, then measure. There is then nothing for a leak to hide behind.
 
 ### What it measured, 2026-08-30, CPU, Supertonic M1
 
@@ -94,6 +105,16 @@ behind.
 | after the first utterance | **697 MB** |
 | peak, reached by ~utterance 60 | **842 MB** |
 | at utterance 200 | 768 MB, peak still **842 MB** |
+
+And `piper:en_GB-cori-high`, which is the more expensive of the two and takes
+three times as long to settle:
+
+| | |
+| --- | --- |
+| bound, no model loaded | **658 MB** |
+| after the first utterance | **950 MB** |
+| peak, reached by ~utterance 200 | **1087 MB** |
+| 100 utterances after that | 1084 MB, peak still **1087 MB**, growth **+0 MB** |
 
 **It plateaus.** The peak stopped moving around utterance 60 and had not moved
 200 utterances later — so the early "+100 MB per 100 utterances" is warm-up, not
@@ -105,13 +126,21 @@ A daemon patched to retain 2 MB per render, built and run through the same
 harness:
 
 ```
-                       warm-up      measured 60
-  the real daemon      +67 MB       +7 MB       leak ok
-  leaking 2 MB/utt     +139 MB      +143 MB     IT LEAKS — about 2436 kB per utterance
+                       warm-up          measured
+  the real daemon      +75 MB / 100     +1 MB / 100     leak ok
+  leaking 2 MB/utt     +320 MB / 180    +117 MB / 60    IT LEAKS — about 2002 kB per utterance
 ```
 
-It reports the per-utterance size, and 2436 kB against an injected 2 MB is the
-check reading the right thing. Twenty times the separation between pass and fail.
+It reports the per-utterance size, and 2002 kB against an injected 2048 is the
+check reading the right thing rather than merely going red.
+
+**One honest wrinkle in the adaptive warm-up**: against the leaking daemon it
+declared "settled" after 180 utterances, because a GC dip held the peak still for
+three batches while memory was very much still being retained. That is fine, and
+it is why the measurement window rather than the warm-up is what decides —
+sixty utterances later the verdict was not close. A warm-up that ends early costs
+nothing; a measurement window inside warm-up is what produced the false Piper
+report above.
 
 **The budget that travels is the tail, not the ceiling.** A ceiling belongs to
 this machine's models and provider and is worth recording in release notes the

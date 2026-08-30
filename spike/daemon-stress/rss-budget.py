@@ -51,8 +51,21 @@ import argparse, json, os, shutil, socket, subprocess, sys, tempfile, time
 #
 # Peaks rather than current RSS, because VmHWM only goes up: a GC dip in the
 # wrong place would otherwise read as shrinkage.
-CEILING_MB = 1400        # warm, one engine loaded. Phase 0 measured ~830, this one peaks at 842.
-WARMUP = 100             # discarded. The peak stops moving by ~60 here; 100 is margin.
+# AND THE WARM-UP IS MEASURED, NOT GUESSED — the third thing this got wrong.
+# A fixed 100 was right for Supertonic, whose peak stops moving by utterance 60,
+# and WRONG for Piper, which is still climbing at 100 and settles around 200. A
+# 100-utterance warm-up therefore reported Piper as leaking 1353 kB per
+# utterance, which it is not: the same run with a 200-utterance warm-up grows by
+# ZERO. A false leak report is the worst outcome available here — it sends
+# somebody hunting a defect that does not exist, in a component that is fine.
+#
+# So warm-up now ends when the peak STOPS MOVING: batches of ten until VmHWM is
+# unchanged across three of them. That measures the thing that differs between
+# engines instead of assuming it, and how long it took is itself worth printing.
+CEILING_MB = 1400        # warm, one engine loaded. Phase 0 measured ~830; Supertonic peaks at 842, Piper at 1087.
+WARMUP_BATCH = 10
+WARMUP_STABLE_BATCHES = 3   # 30 utterances with no new peak
+WARMUP_CAP = 300            # a heap that has not settled by here is the finding
 TAIL_GROWTH_MB = 25      # over the measured window, AFTER warm-up. Measured: 0.
 
 
@@ -90,8 +103,8 @@ def main():
     ap.add_argument("--tree", default="dist/release-linux/VibeSuperTonic",
                     help="where vibesupertonicd and vst-ctl are (default: the packed tree)")
     ap.add_argument("--voice", default=None, help="engine-qualified id, e.g. piper:en_GB-cori-high")
-    ap.add_argument("--warmup", type=int, default=WARMUP,
-                    help="utterances rendered and ignored, so the heap is done growing")
+    ap.add_argument("--warmup", type=int, default=0,
+                    help="fixed warm-up; 0 (the default) warms up until the peak stops moving")
     ap.add_argument("--utterances", type=int, default=100,
                     help="utterances measured, after the warm-up")
     ap.add_argument("--ceiling-mb", type=int, default=CEILING_MB)
@@ -144,13 +157,34 @@ def main():
 
         warm_peak = rss_kb(proc.pid)[1] / 1024
 
-        for i in range(args.warmup):
-            render(f"Warming up, utterance number {i}.")
-            if (i + 1) % 25 == 0:
-                sample(f"warm-up {i + 1}/{args.warmup}")
+        # WARM UP UNTIL IT STOPS GROWING, rather than for a number somebody
+        # picked. Supertonic settles by ~60 utterances and Piper by ~200; a fixed
+        # 100 reports the second as a leak.
+        done = 0
+        settled = False
+        last_peak = rss_kb(proc.pid)[1] / 1024
+        stable = 0
+        while done < (args.warmup or WARMUP_CAP):
+            for _ in range(WARMUP_BATCH):
+                render(f"Warming up, utterance number {done}.")
+                done += 1
+            sample(f"warm-up {done}")
+            peak_now = rss_kb(proc.pid)[1] / 1024
+            stable = stable + 1 if peak_now <= last_peak else 0
+            last_peak = max(last_peak, peak_now)
+            if not args.warmup and stable >= WARMUP_STABLE_BATCHES:
+                settled = True
+                break
+
+        if args.warmup:
+            print(f"  --- {done} warm-up utterances as asked, measuring ---")
+        elif settled:
+            print(f"  --- the peak stopped moving after {done} utterances, measuring ---")
+        else:
+            print(f"  --- THE PEAK NEVER STOPPED MOVING in {done} utterances ---")
+            print("      That is already the shape of a leak; the measurement below says how big.")
 
         base, base_peak = (v / 1024 for v in rss_kb(proc.pid))
-        print(f"  {'--- warm-up done, measuring ---':28}")
 
         for i in range(args.utterances):
             render(f"This is utterance number {i}, and it is here to be counted.")
@@ -162,10 +196,10 @@ def main():
 
         print()
         print(f"idle {idle:.0f} MB -> warm {warm:.0f} MB -> "
-              f"after {args.warmup} warm-up {base:.0f} MB (peak {base_peak:.0f} MB) -> "
+              f"after {done} warm-up {base:.0f} MB (peak {base_peak:.0f} MB) -> "
               f"after {args.utterances} measured {end:.0f} MB (peak {end_peak:.0f} MB)")
-        print(f"peak grew +{warm_peak and base_peak - warm_peak:.0f} MB while warming up "
-              f"and +{tail:.0f} MB over the {args.utterances} measured after it")
+        print(f"peak grew +{base_peak - warm_peak:.0f} MB over {done} warm-up utterances "
+              f"and +{tail:.0f} MB over the {args.utterances} measured after them")
         print()
 
         failed = False
