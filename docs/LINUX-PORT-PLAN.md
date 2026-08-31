@@ -110,7 +110,7 @@ before changing it.
 | **The product is portable** | All state lives beside the executable. No XDG *data* path is used anywhere. Phase 4b specified `$XDG_CONFIG_HOME` and was wrong — [the correction](LINUX-PORT-ARCHIVE.md#portable) |
 | **Two keys, and the primary one always speaks** | Ctrl+backtick reads the selection *now*, interrupting anything playing — it never means stop. Ctrl+tilde stops, from any state. The one-key press-to-speak/press-again-to-stop contract survives only as the `toggle` verb, for the tray — see [the hotkey contract](#the-hotkey-contract) |
 | **The UI is its own process** — 2026-08-16 | `vibesupertonic-ui`, not a window inside the daemon. It is the Linux convention (PipeWire/`pavucontrol`, NetworkManager/`nm-applet`, CUPS, systemd) and the only shape that keeps the daemon startable with no display. See [Phase 6, decision 1](#phase-6-pass2) |
-| **CLI and GUI at parity** — 2026-08-16 | Anything the window can do, `vst-ctl` can do, through the *same verb*. The GUI never gets a private path to the daemon. This is [R-1](#constraints) restated as a product rule |
+| **CLI and GUI at parity** — 2026-08-16 | Anything the window can do, `vst-ctl` can do, through the *same verb*. The GUI never gets a private path to the daemon. This is [R-1](#constraints) restated as a product rule. **One exception exists and it is unresolved — see below** |
 | **Nothing autostarts** — 2026-08-16 | No entry in `~/.config/autostart`. The daemon starts on the first hotkey press via [R-5](LINUX-PORT-ARCHIVE.md#r-5); the UI starts only when the user opens it. Consequence accepted: **no tray icon until first use** — [the arrangement](#startup) |
 | **The daemon owns the tray icon** — 2026-08-16 | It has to exist while the UI is closed. StatusNotifierItem is D-Bus, not X11, so this does not cost the daemon its headless property — but it must subscribe to the event stream like any other client, never read pipeline state directly |
 | **A first-run window, triggered by "no models present"** — 2026-08-16 | One screen carries the OpenRAIL-M acceptance, the model download, and the explanation that the daemon self-starts from now on. No marker file: the folder may be read-only |
@@ -154,7 +154,43 @@ before changing it.
 | — · Rebase onto the Windows work | **Done 2026-08-24.** Twelve Linux commits replayed onto `origin/Dev`; five conflicts, all resolved in favour of the newer side rather than ours: upstream's Core `BenchmarkStore` (now file-path keyed), its `out bool gpuActive` on `Helper.LoadTextToSpeech`, its `Spread` field on a failed row, its 0.2.8 `<VstVersion>`, and its per-component About tab — which kept our prose. Build green, **956 tests** |
 | — · **Releases 0.2.8, 0.2.9, 0.2.10** | **All shipped, and the two things only a person could do are [both done](#battery-verified) — 2026-08-24.** 0.2.8 the tarball, 0.2.9 the AppImage beside it, 0.2.10 the portable-home fix and its store remedy. Both artifacts of each are in `dist/`, and `<VstVersion>` is `0.2.10` |
 | 9 · [AppImage](#phase-9) | **Done — shipped as 0.2.9 on 2026-08-24.** The gate passed by more than expected (+14.7 ms), the store left the executable's directory, the packer builds from the tarball's own tree, and the hotkey client is copied out and kept current. The one piece of planned work that disappeared was the container build — [measured away](#glibc-floor) |
-| — · [Piper](PIPER-PLAN.md) | **Past the go/no-go and past the product work — [P5 is next](PIPER-PLAN.md#next).** P0 through P4 all landed 2026-08-25: the graph runs byte-identically to `python -m piper`, phoneme parity passed at 327 sentences across 8 languages with **0 divergences**, and the numbers are in. Ships as 0.3. P3 is the first phase that touches `src/` |
+| — · [Piper](PIPER-PLAN.md) | **Done — P0 through P5, and it shipped inside 0.2.11 rather than as 0.3.** The graph runs byte-identically to `python -m piper`, phoneme parity passed at 327 sentences across 8 languages with **0 divergences** and now runs in CI, and the archive carries the phonemiser it needs |
+| — · [Speech Dispatcher](SPEECHD-PLAN.md) | **Done — S0 through S5, shipped in 0.2.11.** A native module, a voice list, an installer that refuses to silence a screen reader, and the safety net that made all of it checkable |
+| — · [Testing](TESTING-PLAN.md) | **All ten items done 2026-08-30.** Seven run continuously in six CI jobs; the RSS budget is a spike, because it needs a model and an idle machine |
+
+<a name="voice-parity"></a>
+
+### The one place CLI and GUI are not at parity — open, 2026-08-30
+
+**`vst-ctl` cannot choose a voice.** `voice install` downloads one, `voice
+remove` deletes one, `--voice` speaks with one for a single request — and
+nothing sets the default. The window is the only writer of `VoiceId`.
+
+That is not an oversight; it is two recorded decisions meeting:
+
+- **CLI and GUI at parity**, the row above, 2026-08-16.
+- **One writer for the voice choice**, 2026-08-25, in [P5](PIPER-PLAN.md#p5-open):
+  the Voices tab's Use button and the Tune tab's picker must not be able to
+  disagree, so neither writes the keys directly — they share
+  `SettingsFile.SetVoice`, and Phase 4b's "no `config set` verb" keeps the
+  daemon out of it entirely.
+
+The shipped `INSTALL.txt` used to paper over this by claiming `vst-ctl` can do
+"anything the window can do", which was simply false; **corrected 2026-08-30** to
+say what each program is for. So nothing SHIPS a false promise now, and the
+design question is still open:
+
+**If it should be resolved**, the cheap version is to move `SetVoice` from
+`VibeSuperTonic.Ui` into Core — where `SettingsScope` already lives for exactly
+this reason, "both sides need the same rules" — and give `vst-ctl` a `voice use
+ID` verb that calls it. That keeps ONE implementation of what choosing a voice
+means while allowing two callers, which is what the 2026-08-25 decision actually
+protects; its own doc comment already says "two writers, one rule". What it costs
+is a genuine third process able to write `settings.json`, and the races that
+implies are worth a thought rather than a shrug.
+
+**A user with no display is the case that decides it**: they can install a Piper
+voice from the terminal and cannot select it.
 
 <a name="windows-check"></a>
 

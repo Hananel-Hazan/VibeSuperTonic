@@ -824,8 +824,14 @@ No runtime to install. All three binaries carry what they need.
   vibesupertonicd     the daemon: holds the warm model, owns the audio device
                       and the tray icon. Long-lived, started on the first
                       hotkey press. Nothing autostarts it.
-  vibesupertonic-ui   the window: Reader, Tune, Pronunciations, Status.
-  vst-ctl             the command-line client. Anything the window can do.
+  vibesupertonic-ui   the window: Reader, Voices, Tune, Pronunciations, Status.
+                      It is where a voice is CHOSEN and where settings are
+                      written — one writer, so two places cannot disagree about
+                      what you picked.
+  vst-ctl             the command-line client: speak, stop, render to a WAV,
+                      install and remove voices, measure this machine, read the
+                      daemon's state. It does not choose the default voice or
+                      edit settings.json; the window does that.
   espeak/             the phonemiser the Piper voices need. Not something you
                       install — it is here, and nothing needs configuring.
 

@@ -69,7 +69,7 @@ down that this release is the first to actually need.
 | **Does `install.sh` launch the first-run window, or does the user?** An installer over `ssh` must not try to open a window | [Port plan, open decisions](LINUX-PORT-PLAN.md#open-decisions) | `speechd-install.sh` inherits it **and is worse**: the person configuring a screen reader is disproportionately likely to be in a TTY or over ssh, and disproportionately unable to see a window that did open. It must never require one. |
 | **The Piper session is always CPU**, and `vst-ctl benchmark` measures Supertonic only | [P3](PIPER-PLAN.md#p3-open), [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | Still not a blocker, and now it has a number attached: whatever [trap 4](#t4) measures is measured on the CPU path, so a "too slow" verdict may be a provider verdict rather than a product one. Say which was measured. |
 | **There is no CLI way to choose a voice** — the window is the only writer of `VoiceId` | [P5](PIPER-PLAN.md#p5-open) | `render --voice` settles the per-utterance half, because speechd sends `$VOICE` on every call and never touches a setting. The *default* stays the window's, and that is now a defensible line rather than an omission. |
-| ⚠ **The Voices tab has never been looked at** | [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | [S3](#s3) generates the module's voice list from the same installed-voice state the tab shows, so they are one surface. The tab is owed a human eye before the 0.2.13 pack regardless — it has been owed for two releases. |
+| ~~⚠ **The Voices tab has never been looked at**~~ **Closed 2026-08-28** | [P4](PIPER-PLAN.md#p4-open), [P5](PIPER-PLAN.md#p5-open) | Looked at and used. Three defects an afternoon of real use found and every green test had missed: a speaker that snapped back to 0, two tabs that could disagree about the voice, and a button that said nothing on the rows it appeared on. |
 | **`ru_dict` is 4.9 MB of a 7.1 MB espeak payload** | [P5](PIPER-PLAN.md#p5-open) | Not this release. Recorded here only because 0.2.13 is the first release where "slim" is a stated goal — see [TESTING-PLAN.md](TESTING-PLAN.md#slim), which gives the archive a budget rather than an opinion. |
 
 ### Deferrals that stay deferred, and why
@@ -1455,19 +1455,21 @@ the runner and been "fixed" by loosening it.
 
 ## Open questions, to answer with a measurement rather than a preference
 
-1. **Is the first-word latency good enough for a screen reader?** [Trap 4](#t4).
-   Measure against espeak-ng on the same machine, on CPU, warm. This decides
-   whether the feature is "a system voice" or "a system voice for reading, not
-   for echo".
+1. ~~**Is the first-word latency good enough for a screen reader?**~~
+   **Answered by [S0](#s0-landed), 2026-08-27**, and it decided the shape of the
+   whole feature: 718 ms for a sentence and 383 ms for a single letter against
+   espeak-ng's 4 ms. So it ships **for reading**, and keystroke echo stays on
+   espeak — "a system voice for reading, not for echo" is the outcome, stated in
+   the product rather than discovered by a user.
 2. **What does `$RATE` have to be** for speechd's slider to feel linear against
    P3's calibration curve? [Trap 5](#t5).
 3. **Does the Piper path hold up under a screen reader's utterance rate** —
    dozens of short utterances a minute, each one a process spawn? Route B exists
    for this answer being no.
-4. **What does the FUSE mount cost per utterance** when the module is driven
-   through the AppImage rather than the tarball? [Trap 13](#t13). If it is tens
-   of milliseconds it is noise; if it is hundreds it decides that AppImage users
-   need an extracted launcher.
+4. ~~**What does the FUSE mount cost per utterance**~~ **Answered by
+   [S0](#s0-landed): 22 ms**, against 2 ms for the same call outside the image —
+   20 ms, or 5% of one inference. Noise, so no extracted launcher is needed and
+   AppImage users pay nothing they would notice.
 5. **Does the deferred `totalStep` lever actually halve the first word**, and is
    the quality step audible on a one-word utterance? [Inherited](#inherited).
    Cheap to try, and it is the only lever left on the number [S0](#s0) gates on.

@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using VibeSuperTonic.Core.Settings;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Text;
 
@@ -47,6 +48,18 @@ public sealed class PronunciationsTab : UserControl
     private readonly TextBlock _status = Ui.Label("");
 
     private readonly List<JsonObject> _rules = [];
+
+    /// <summary>
+    /// Whether a reload may replace these rules.
+    ///
+    /// <para><b>This tab re-reads on every visit, and a tab switch IS a
+    /// visit.</b> So writing three rules, glancing at the Voices tab and coming
+    /// back used to discard all three — no warning, no dialog, and nothing a
+    /// user would connect to the thing they did. It is the same defect as the
+    /// Tune tab's reverting rate, in the one tab that was never given the
+    /// guard.</para>
+    /// </summary>
+    private readonly PendingEdits _edits = new();
     private JsonObject _root = new();
     private string? _path;
     private bool _loading;
@@ -60,14 +73,19 @@ public sealed class PronunciationsTab : UserControl
 
         foreach (var box in new[] { _match, _replace, _notes })
         {
-            box.TextChanged += (_, _) => WriteBack();
+            box.TextChanged += (_, _) => WriteBack();     // WriteBack marks the edit
             box.LostFocus += (_, _) => RefreshLabels();
         }
 
         foreach (var check in new[] { _wholeWord, _caseSensitive, _ruleEnabled })
             check.IsCheckedChanged += (_, _) => { WriteBack(); RefreshLabels(); };
 
-        _enabledAll.IsCheckedChanged += (_, _) => { if (!_loading) Preview(); };
+        _enabledAll.IsCheckedChanged += (_, _) =>
+        {
+            if (_loading) return;
+            _edits.Edited();
+            Preview();
+        };
         _sample.TextChanged += (_, _) => Preview();
 
         var add = new Button { Content = "Add" };
@@ -79,8 +97,14 @@ public sealed class PronunciationsTab : UserControl
         var save = new Button { Content = "Save" };
         save.Click += async (_, _) => await SaveAsync();
 
+        // The one button that is allowed to lose work, because it is the one
+        // somebody pressed to lose it.
         var revert = new Button { Content = "Revert" };
-        revert.Click += async (_, _) => await RefreshAsync();
+        revert.Click += async (_, _) =>
+        {
+            _edits.Discard(() => { });
+            await RefreshAsync();
+        };
 
         Content = new ScrollViewer
         {
@@ -146,18 +170,29 @@ public sealed class PronunciationsTab : UserControl
             return;
         }
 
-        _loading = true;
-        _rules.Clear();
-        if (_root["Rules"] is JsonArray array)
-            foreach (var node in array)
-                if (node is JsonObject rule) _rules.Add(rule);
+        // ONLY WHEN THERE IS NOTHING TO LOSE. This runs on every visit to the
+        // tab, which includes switching away and back, and it used to clear the
+        // list unconditionally.
+        bool filled = _edits.Load(() =>
+        {
+            _loading = true;
+            _rules.Clear();
+            if (_root["Rules"] is JsonArray array)
+                foreach (var node in array)
+                    if (node is JsonObject rule) _rules.Add(rule);
 
-        _enabledAll.IsChecked = _root.Bool("Enabled") ?? true;
-        RebuildList(select: _rules.Count > 0 ? 0 : -1);
-        _loading = false;
+            _enabledAll.IsChecked = _root.Bool("Enabled") ?? true;
+            RebuildList(select: _rules.Count > 0 ? 0 : -1);
+            _loading = false;
+        });
 
-        _status.Text = $"{_rules.Count} rule{(_rules.Count == 1 ? "" : "s")} in {_path}"
-                     + (c.DataDirWritable ? "" : " — this data directory is NOT writable, so a save will fail");
+        // And SAY which of the two is on screen. A tab that silently ignores the
+        // file is as confusing as one that silently discards the edit.
+        _status.Text = filled
+            ? $"{_rules.Count} rule{(_rules.Count == 1 ? "" : "s")} in {_path}"
+              + (c.DataDirWritable ? "" : " — this data directory is NOT writable, so a save will fail")
+            : $"{_rules.Count} rule{(_rules.Count == 1 ? "" : "s")}, and these are YOUR unsaved edits "
+              + $"rather than what is in {_path}. Save keeps them; Revert discards them.";
         Preview();
     }
 
@@ -170,6 +205,8 @@ public sealed class PronunciationsTab : UserControl
 
         try { SettingsFile.Write(_path, _root); }
         catch (Exception ex) { _status.Text = $"could not write {_path}: {ex.Message}"; return; }
+
+        _edits.Saved();
 
         // The daemon reloads on mtime by itself; asking makes the answer
         // immediate and gives it somewhere to report a rule that will not
@@ -198,6 +235,7 @@ public sealed class PronunciationsTab : UserControl
             ["Notes"] = "",
         });
 
+        _edits.Edited();
         RebuildList(select: _rules.Count - 1);
         _match.Focus();
     }
@@ -207,6 +245,7 @@ public sealed class PronunciationsTab : UserControl
         int index = _list.SelectedIndex;
         if (index < 0 || index >= _rules.Count) return;
 
+        _edits.Edited();
         _rules.RemoveAt(index);
         RebuildList(select: Math.Min(index, _rules.Count - 1));
         Preview();
@@ -277,6 +316,8 @@ public sealed class PronunciationsTab : UserControl
 
         int index = _list.SelectedIndex;
         if (index < 0 || index >= _rules.Count) return;
+
+        _edits.Edited();
 
         var rule = _rules[index];
         rule["Match"] = _match.Text ?? "";

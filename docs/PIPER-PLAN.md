@@ -134,9 +134,13 @@ The voices are a **separate** licence axis and are unchanged by any of this —
 **P0–P5 are done.** Piper is a working second engine, packaged, and every phase's
 record is below. What is left is not a phase of this plan:
 
-1. **Look at the Voices tab.** It has never been seen by a human eye — carried
-   open through P4 and P5, and it is the one thing between here and a release
-   that no assertion covers. Every verb behind it is verified; its layout is not.
+1. ~~**Look at the Voices tab.**~~ **Done 2026-08-28, by using it.** It was
+   carried open through P4 and P5 as the one thing no assertion covered — and a
+   human eye found three defects in an afternoon that every green test had
+   missed: a speaker that snapped back to 0 after Use, two tabs that could
+   disagree about the voice, and a Use button on rows where it said nothing.
+   All fixed. The tab has now also been used to install and choose voices in
+   anger, which is the evidence "look at it" was asking for.
 2. **Ship it.** The next release is `0.2.13`
    ([SPEECHD-PLAN.md](SPEECHD-PLAN.md)), and it will be built from a tree that
    contains all of this — so it ships espeak-ng and it is the release where
@@ -1272,7 +1276,7 @@ over the same socket. **Someone should open the tab once before 0.3 ships.**
 
 | Open | Owner | Why it is not a blocker |
 | --- | --- | --- |
-| ⚠ **The Voices tab has never been looked at.** Constructed, registered, no exceptions; its rows, its filters and its licence dialog have not been seen by a human eye | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`, so what is unproven is layout rather than behaviour |
+| ~~⚠ **The Voices tab has never been looked at.**~~ **Closed 2026-08-28** — see [what P5 left open](#p5-open) |  — | — |
 | ⚠ **The Windows build has never been run, only compiled.** Unchanged from P3, and now with more to check: `LinuxSettings.VoiceId` is a key Windows must carry through `[JsonExtensionData]` untouched | Whoever ships next | Nothing Windows-side changed behaviourally; the new key is additive and the engine reads `DefaultVoice`, which P4 leaves alone for a Piper choice |
 | **The Piper session is still always CPU**, and still borrows the Supertonic decision's thread count | P5 or later | Unchanged from P3. `config` now *says so* — a note when the daemon is speaking Piper against a Supertonic-measured profile — which was the reporting half of the job |
 | **`vst-ctl benchmark` still measures Supertonic only** | Later | `BenchmarkMachine.Engine` now records which engine a profile describes, and `StalenessAgainst` compares it, so the day a Piper sweep lands nothing has to be retrofitted. Absent on pre-P4 profiles, and treated as "no claim" rather than as a mismatch |
@@ -1411,7 +1415,7 @@ with all five of its own sabotages caught first.
 
 | Open | Owner | Why it is not a blocker |
 | --- | --- | --- |
-| ⚠ **The Voices tab has still never been looked at**, carried from [P4](#p4-open) and now one release closer to shipping | Whoever ships next, before the pack | Every verb behind it is verified through `vst-ctl`; what is unproven is layout. [0.2.13](SPEECHD-PLAN.md#s3) answers LIST VOICES from the same installed-voice state, so the two are one surface |
+| ~~⚠ **The Voices tab has still never been looked at**~~ **Closed 2026-08-28**: looked at, used, and three defects found and fixed that no test had | — | — |
 | ⚠ **The Windows build has still never been run**, also from P4 | Whoever ships next | Nothing Windows-side changed; `pack-zip.ps1` ships no catalog and no phonemiser, which is correct — Piper on Windows is not this round |
 | **There is no CLI way to choose a voice.** `vst-ctl voice install` downloads one and nothing selects it; the window is the only writer of `VoiceId` | [0.2.13](SPEECHD-PLAN.md#inherited) | Deliberate — one writer for that choice, decided 2026-08-25. But `INSTALL.txt` says vst-ctl can do "anything the window can do", and that is now false. 0.2.13's `render --voice` settles the per-utterance half, since speechd sends a voice on every call and never touches a setting |
 | **The catalog is pinned to `v1.0.0` and nothing watches upstream** | Later | Regenerating is one command and the tests assert the result |
@@ -1605,9 +1609,10 @@ after the licence question is answered would be paying for nothing.
   shipping voices upstream does not, which is a hosting and provenance question,
   not a technical one. Revisit only after P4.
 - ~~**Which voices ship in the catalog's default view.**~~ **Decided 2026-08-24:
-  a curated, hash-pinned ~30, highest quality tier first.** What is still open is
-  *which* thirty — a product answer, made once, with each MODEL_CARD read
-  ([trap 7](#traps)).
+  a curated, hash-pinned list, highest quality tier first** — and ~~which
+  thirty~~ was overtaken by events: the shipped catalog carries **65**, after
+  every English voice was added in P4's follow-up. The reviewing rule survives
+  the number ([trap 7](#traps)); what does not survive it is calling this open.
 - **Whether Piper eventually becomes the Linux default** on resident-set grounds
   alone. 830 MB against ~63 MB is the kind of gap that deletes the port plan's
   open question about releasing the ONNX session on an idle timeout. Not for this
