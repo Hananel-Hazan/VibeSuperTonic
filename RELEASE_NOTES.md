@@ -1,3 +1,50 @@
+# VibeSuperTonic v0.2.13
+
+*Two numbers on screen that did not describe what the daemon was doing.*
+
+Both were reported from a running install rather than found by a test, and both
+had been true since scoped settings arrived in 0.2.11.
+
+```
+VibeSuperTonic-0.2.13-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.13-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **The benchmark measured a step count nothing was running.** If you set
+  `TotalStep` for one engine or one voice — the Tune tab's scope selector — the
+  file's top-level value stops being what your voice uses. Synthesis knew that.
+  Four things that only wanted the *number* did not: the Status tab, the
+  benchmark's record of the machine it measured, the staleness guard, and the
+  decision made at startup.
+
+  The visible symptom was a warning that could not be satisfied: *"the benchmark
+  was measured at TotalStep 6, this daemon runs 12"*, on an install where every
+  utterance ran at 6. The guard was comparing the global against the global, so
+  the one mismatch that existed was the one it could not see. It never reached
+  the audio — only the screens that claim to describe the audio.
+
+- **The re-measure button could not clear its own warning.** Pressing "Measure
+  this machine" ran the sweep, stored the profile and applied it — and the banner
+  stayed exactly as it was, because it is drawn once per window and nothing
+  redrew it. A warning that survives the fix it asked for teaches you that the
+  fix does not work. It now re-asks after a sweep it requested; a banner you
+  dismissed still stays dismissed across a daemon restart, which is what that
+  latch was there for.
+
+## Everything else
+
+Unchanged from 0.2.12, including the licence position: the Linux archive as a
+whole is GPL-3.0-or-later because it carries espeak-ng, this repository's source
+stays MIT, and nothing up to 0.2.10 is affected.
+
+## Windows
+
+Unchanged, as every release since 0.2.9 has been.
+
+---
+
 # VibeSuperTonic v0.2.12
 
 *Four things you can see, and a great deal you cannot.*
