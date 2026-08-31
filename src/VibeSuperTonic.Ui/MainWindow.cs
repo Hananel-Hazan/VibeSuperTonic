@@ -145,6 +145,14 @@ public sealed class MainWindow : Window
         {
             _tabs.SelectedIndex = 2;
             await _tune.RunBenchmarkAsync();
+
+            // AND THEN ASK AGAIN. Reported 2026-08-30: the banner says the
+            // measurement no longer describes this machine, offers a button,
+            // the button works — and the banner stays exactly as it was,
+            // because Show() runs once per window and nothing re-ran it. A
+            // warning that survives the fix it asked for teaches the user that
+            // the fix does not work.
+            await RefreshBannerAsync();
         };
 
         _shell = new DockPanel
@@ -237,6 +245,21 @@ public sealed class MainWindow : Window
     /// there, which is the same check the daemon makes and needs no marker file
     /// and no write.
     /// </summary>
+    /// <summary>
+    /// Re-ask what the install looks like and redraw the banner — which hides
+    /// itself when there is nothing left to report.
+    ///
+    /// <para>Deliberately NOT on the reconnect path: the one-shot latch below
+    /// exists so a daemon restart cannot bring back a banner somebody dismissed.
+    /// This is the other case — the user pressed the button the banner offered,
+    /// so re-showing its answer is the whole point.</para>
+    /// </summary>
+    private async Task RefreshBannerAsync()
+    {
+        var config = await _client.SendAsync(new Request { Verb = RequestVerb.Config });
+        if (config?.Config is { } c) _banner.Show(c.Install);
+    }
+
     private async Task ShowFirstRunIfNeededAsync()
     {
         // Both readers are done from ONE config call. They run at the same two

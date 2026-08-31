@@ -731,7 +731,10 @@ public sealed partial class DaemonServer : IDisposable
         _config.Pronunciations.Enabled,
         EffectiveVoice,
         EffectiveLanguage,
-        _config.Settings.TotalStep,
+        // The steps the EFFECTIVE VOICE runs at, not the file's top level: a
+        // Status tab that reports a number no utterance uses is worse than one
+        // that reports nothing.
+        _config.TotalStepFor(EffectiveVoice),
         _config.Settings.MaxChunkChars,
         _config.Settings.MinChunkChars,
         _config.Settings.InterChunkSilenceMs,
@@ -759,7 +762,7 @@ public sealed partial class DaemonServer : IDisposable
         if (stored is null) return null;
 
         var now = MachineFacts.Current(
-            _config.ModelsRoot, _config.Settings.TotalStep, EffectiveVoice, EffectiveLanguage);
+            _config.ModelsRoot, _config.TotalStepFor(EffectiveVoice), EffectiveVoice, EffectiveLanguage);
 
         var staleness = stored.StalenessAgainst(now);
 
@@ -852,7 +855,7 @@ public sealed partial class DaemonServer : IDisposable
                 notes.Add("could not read /proc/stat, so the machine's load before the sweep is unknown.");
 
             var machine = MachineFacts.Current(
-                _config.ModelsRoot, _config.Settings.TotalStep,
+                _config.ModelsRoot, _config.TotalStepFor(EffectiveVoice),
                 EffectiveVoice, EffectiveLanguage, Math.Max(load, 0));
 
             var options = _config.Synthesis(EffectiveVoice, EffectiveLanguage);

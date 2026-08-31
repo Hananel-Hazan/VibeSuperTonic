@@ -398,6 +398,27 @@ public sealed class HostConfig
     /// which is every install until somebody uses the scope selector — so the
     /// common path allocates nothing and behaves exactly as it did.</para>
     /// </summary>
+    /// <summary>
+    /// The diffusion steps THIS VOICE runs at, which is not always the file's
+    /// top-level number.
+    ///
+    /// <para><b>Reported 2026-08-30, and it made the benchmark measure a
+    /// configuration nothing uses.</b> Scoped settings arrived in 0.2.11, so
+    /// <c>TotalStep</c> can be set per engine or per voice — and four places
+    /// went on reading the global one: what <c>config</c> reports, what the
+    /// benchmark records, what the staleness guard re-tests, and what the
+    /// startup decision is made from. On an install with
+    /// <c>PerEngine.supertonic.TotalStep 6</c> under a global 12, every
+    /// utterance ran at 6 while all four of those said 12 — and the guard whose
+    /// whole job is to notice "the measurement no longer describes this daemon"
+    /// compared 12 against 12 and reported everything was fine.</para>
+    ///
+    /// <para>Synthesis has always used the scoped value
+    /// (<see cref="Utterance"/>); this is the same answer for everything that
+    /// only wanted the number.</para>
+    /// </summary>
+    public int TotalStepFor(string? voice) => SettingsFor(voice).TotalStep;
+
     public LinuxSettings SettingsFor(string? voice)
     {
         if (_rawSettings is null) return Settings;

@@ -212,8 +212,12 @@ DaemonLog.Write(gpuUnavailable is null
     : $"gpu: CUDA unavailable — {gpuUnavailable}");
 
 var storedProfile = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(dataDir));
-var machineNow = MachineFacts.Current(modelsRoot, config.Settings.TotalStep,
-    voice ?? config.Settings.DefaultVoice, language ?? config.Settings.Language);
+// The steps the voice in force runs at — see HostConfig.TotalStepFor. Reading
+// the global here made the startup decision describe a configuration that a
+// scoped TotalStep meant nothing was using.
+var startupVoice = voice ?? config.ConfiguredVoice;
+var machineNow = MachineFacts.Current(modelsRoot, config.TotalStepFor(startupVoice),
+    startupVoice, language ?? config.Settings.Language);
 var startupDecision = ExecutionDecision.Decide(
     storedProfile,
     machineNow,

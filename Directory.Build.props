@@ -34,9 +34,10 @@
       passes -Version explicitly. Per CLAUDE.md the bump is a decision the user
       makes, never something the build infers.
 
-      0.2.11 shipped 2026-08-30 (tagged v0.2.11). This is S5's number.
+      0.2.12 shipped 2026-08-30 (tagged v0.2.12) and is installed on the user's
+      machine. This is the number after it.
     -->
-    <VstVersion>0.2.12</VstVersion>
+    <VstVersion>0.2.13</VstVersion>
 
     <!--
       And every assembly in the tree carries it. Set here rather than per-project

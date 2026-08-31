@@ -193,4 +193,76 @@ public sealed class ScopedSettingsTests : IDisposable
         Assert.Equal(90, config.SessionOptionsFor("piper:en_GB-cori-high").MaxChunkChars);
         Assert.Equal(0, config.SessionOptionsFor("piper:en_GB-cori-high").InterChunkSilenceMs);
     }
+
+    // ------------------------------------------- the number the benchmark uses
+
+    /// <summary>
+    /// REPORTED FROM A REAL INSTALL, 2026-08-30. The user's settings.json held a
+    /// global <c>TotalStep</c> of 12 with <c>PerEngine.supertonic 6</c> under it,
+    /// and the voice in force was <c>supertonic:F5</c>. So every utterance ran at
+    /// SIX steps while the Status tab, the benchmark's record, the staleness
+    /// guard and the startup decision all said TWELVE.
+    ///
+    /// <para>The banner's whole job is to notice that a stored measurement no
+    /// longer describes what the daemon does. It compared the global against the
+    /// global, found them equal, and reported that everything was fine — while
+    /// the measurement described a step count nothing was running.</para>
+    ///
+    /// <para>Synthesis was right the entire time, which is why this was invisible:
+    /// the wrong number never reached the audio, only every screen that claimed
+    /// to describe it.</para>
+    /// </summary>
+    [Fact]
+    public void The_step_count_reported_is_the_one_this_voice_actually_runs()
+    {
+        Settings("""
+            {
+              "TotalStep": 12,
+              "VoiceId": "supertonic:F5",
+              "PerEngine": { "supertonic": { "TotalStep": 6 } }
+            }
+            """);
+        var config = Loaded();
+
+        Assert.Equal(6, config.TotalStepFor("supertonic:F5"));
+        Assert.Equal(6, config.Utterance("supertonic:F5", "en").Synthesis is SupertonicOptions o ? o.TotalStep : -1);
+
+        // And a voice the override does not cover still gets the file's own.
+        Assert.Equal(12, config.TotalStepFor("piper:en_US-ljspeech-high"));
+    }
+
+    /// <summary>
+    /// The same rule one level down: a per-VOICE override beats its engine's,
+    /// and it is what the machine facts have to record for that voice.
+    /// </summary>
+    [Fact]
+    public void A_per_voice_step_count_wins_over_its_engines()
+    {
+        Settings("""
+            {
+              "TotalStep": 12,
+              "PerEngine": { "supertonic": { "TotalStep": 6 } },
+              "PerVoice":  { "M4": { "TotalStep": 4 } }
+            }
+            """);
+        var config = Loaded();
+
+        Assert.Equal(4, config.TotalStepFor("supertonic:M4"));
+        Assert.Equal(6, config.TotalStepFor("supertonic:M1"));
+        Assert.Equal(12, config.TotalStepFor("piper:en_US-ljspeech-high"));
+    }
+
+    /// <summary>
+    /// And with no overrides at all — every install that has never touched the
+    /// scope selector — the answer is the file's, so nothing changed for them.
+    /// </summary>
+    [Fact]
+    public void With_no_overrides_the_reported_step_count_is_the_files()
+    {
+        Settings("""{ "TotalStep": 8 }""");
+        var config = Loaded();
+
+        Assert.Equal(8, config.TotalStepFor("supertonic:M4"));
+        Assert.Equal(8, config.TotalStepFor(null));
+    }
 }
