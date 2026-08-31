@@ -13,13 +13,20 @@
 
 ---
 
-Portable Windows SAPI 5 TTS engine wrapping Supertone's [Supertonic](https://github.com/supertone-inc/supertonic) neural TTS. Ten English voices that show up in any SAPI 5 client — Balabolka, NVDA, Microsoft Narrator, System.Speech, Edge Read Aloud, NaturallySpeaking, Lingoes, and so on.
+**Two products from one repository**, sharing a platform-neutral core:
+
+- **Windows** — a portable SAPI 5 TTS engine wrapping Supertone's [Supertonic](https://github.com/supertone-inc/supertonic) neural TTS. Ten English voices that show up in any SAPI 5 client — Balabolka, NVDA, Microsoft Narrator, System.Speech, Edge Read Aloud, NaturallySpeaking, Lingoes, and so on.
+- **Linux** — a background daemon with a global hotkey that speaks whatever text you have selected, a window to follow along in, **two engines** (Supertonic and [Piper](https://github.com/rhasspy/piper), 65 hash-pinned voices across 35 languages), and a **Speech Dispatcher module**, so the same voices are available to Orca and anything else on the desktop that speaks. [Jump to Linux](#linux).
 
 The engine is written in pure C# / .NET 10 and registers via .NET ComHosting. The portable folder can live anywhere — USB stick, OneDrive, network share — and a one-time UAC prompt registers the voice tokens. A full Control Panel (the same `VibeSuperTonic.exe`) handles install, integrity checks, knob tuning, live monitoring, and uninstall.
 
 ## Status
 
-**v0.2.x** — out of "spike" stage. Working install with 10 voices, full SAPI event surface (word boundaries, sentence boundaries, bookmarks, end-of-stream), per-fragment SSML rate control, sentence-level skip support, pipelined synthesis for smooth long-form playback, GPU acceleration via DirectML, and pitch-preserving DSP time-stretch (Sonic — pitch-synchronous overlap-add) up to 2.0×. See [Roadmap](#roadmap) for what's next.
+**Windows — v0.2.x**, out of "spike" stage. Working install with 10 voices, full SAPI event surface (word boundaries, sentence boundaries, bookmarks, end-of-stream), per-fragment SSML rate control, sentence-level skip support, pipelined synthesis for smooth long-form playback, GPU acceleration via DirectML, and pitch-preserving DSP time-stretch (Sonic — pitch-synchronous overlap-add) up to 2.0×.
+
+**Linux — shipping since 0.2.8**, as a tarball and an AppImage. The most recent release is **0.2.11**, which is where Piper and the Speech Dispatcher module arrived. See [Roadmap](#roadmap) for what is next, and [Linux](#linux) for what it is.
+
+> **Licence note for the Linux artifacts.** From 0.2.11 the Linux archive contains espeak-ng, so **the archive as a whole is GPL-3.0-or-later**. This repository's own source stays MIT, and every release up to and including 0.2.10 contains no espeak-ng and is unaffected. Details in [License](#license).
 
 ## Features
 
@@ -209,6 +216,91 @@ Not supported (Supertonic model limitations):
 - `<prosody pitch>` — model has no pitch parameter
 - `<phoneme>` — model is graphemic (synthesizes from spelling)
 
+<a name="linux"></a>
+
+## Linux
+
+A different product with the same voice. There is no SAPI on Linux, so instead
+of an engine other applications load, this is a **daemon** that owns the model
+and the audio device, a **global hotkey** that speaks whatever you have
+selected, and a **window** to follow along in.
+
+```bash
+tar -xzf VibeSuperTonic-<version>-linux-x64.tar.gz
+cd VibeSuperTonic
+./install.sh          # binds the hotkeys and adds a menu entry; nothing autostarts
+```
+
+Or the AppImage: one file, `chmod +x`, run it. Models and data live beside it.
+
+**Stop the daemon before replacing either** — Linux lets you overwrite a running
+executable, and the result is a new binary on disk with the old one still
+answering every hotkey press. `install.sh` does it for you; by hand it is
+`./vst-ctl shutdown`.
+
+### What you get
+
+| | |
+| --- | --- |
+| `vibesupertonicd` | the daemon: warm model, audio device, tray icon. Started by the first hotkey press |
+| `vibesupertonic-ui` | Reader, Voices, Tune, Pronunciations, Status |
+| `vst-ctl` | the command-line client: speak, stop, render to a WAV, install voices, benchmark |
+| `vst-speechd` | the Speech Dispatcher module — see below |
+
+Press the hotkey with text selected and it reads it, highlighting each word as it
+goes; click a word in the Reader to jump there. The daemon measures the machine
+once (`vst-ctl benchmark`) and picks a thread count and provider from the result
+rather than guessing.
+
+### Two engines
+
+**Supertonic** is the same model the Windows engine uses: ten styles, 31
+languages, ~830 MB resident, and it is what the hotkey speaks by default.
+
+**Piper** is a second engine, added in 0.2.11 — one voice per download, each
+trained for one language, from a catalog of **65 voices across 35 languages**
+pinned by SHA-256. The Voices tab downloads them and shows each voice's licence
+*before* anything is fetched, because five of the English voices are
+NonCommercial. Multi-speaker voices (LibriTTS has 904) pick a speaker per voice.
+
+Both engines answer the same rate control, and settings can be scoped to **all
+voices, one engine, or one voice** in the Tune tab.
+
+### Screen readers
+
+`speechd-install.sh` registers a Speech Dispatcher module, after which
+VibeSuperTonic appears in Orca's list of synthesizers — and in anything else on
+the desktop that speaks through speechd. On the AppImage the same thing is
+`./VibeSuperTonic.AppImage speechd-install`.
+
+Two things it deliberately will not do. It **refuses to register an install with
+no voices downloaded**, because a synthesizer that appears in the list and cannot
+speak is worse than one that is absent. And it **puts every other module back**,
+including espeak-ng: a user configuration replaces the system one rather than
+extending it, so a naive installer removes every other voice on the machine, and
+the symptom is a blind user's desktop going quiet.
+
+**Keystroke echo stays on espeak.** Measured: 383 ms for a single letter against
+espeak-ng's 4 ms. The neural voices are excellent for reading a document and are
+not an echo, so the module routes character and key events to the bundled
+espeak-ng and everything else to the neural voice. That is a product decision
+taken from a measurement, not a limitation nobody noticed.
+
+### Requirements
+
+- glibc 2.34 or newer — Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+
+- PulseAudio or PipeWire
+- X11, or Wayland on KDE/wlroots. **GNOME/Wayland cannot work**: selection
+  capture needs `ext-data-control`, which GNOME declines to implement on
+  security grounds
+- No runtime to install. All four binaries carry what they need
+
+Every release is extracted into a bare `ubuntu:22.04` container in CI and started
+there — no .NET, no display, no audio device, no models — so "it runs on a
+supported distro" is a test rather than a claim.
+
+---
+
 ## Architecture
 
 ```
@@ -297,7 +389,7 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 - **DSP rate cap 2.0×** — Sonic's crossfade quality degrades sharply past that as the source pitch periods are sampled too sparsely. Lifting it would need a different algorithm class (e.g., a true PSOLA with explicit F0 tracking, or a commercial Élastique-class library).
 - **Engine speed locked at 1.0×** — the Supertonic model under-renders the trailing phoneme above 1.0×. All speedup goes through the DSP path instead.
 - **First-byte latency 2-5 s on CPU** (less on GPU) — model is heavy on first load.
-- **English only** — Supertonic supports 31 languages but voice tokens for other languages aren't registered yet.
+- **Windows is English only** — Supertonic supports 31 languages but voice tokens for other languages aren't registered yet. On Linux the Tune tab sets the language per voice, and Piper adds 35 more.
 - **No pitch / phoneme override** — Supertonic is graphemic with no pitch parameter.
 - **Multi-adapter GPU selection via Windows Settings** — DirectML's device-id mapping doesn't match any single DXGI enumeration on all systems, so the in-app picker was removed in favor of Windows Graphics Settings.
 
@@ -317,8 +409,10 @@ The first run downloads the Supertonic ONNX models (~380 MB) from Hugging Face i
 - [ ] Phase 5: signed binaries (avoids SmartScreen prompt on first run)
 - [x] **Phase 6: shared `VibeSuperTonic.Core`** *(0.2.7)* — the text pipeline, DSP, model manifest/downloader and telemetry contract extracted into one platform-neutral assembly with 187 tests, so the engine and the Control Panel stop keeping duplicate copies of the same logic in sync by hand. Fixed two live word-boundary offset bugs on the way out.
 - [x] **Phase 6: verification harness in the box** *(0.2.7.4)* — `tools\VibeSuperTonic.TestHarness.exe`, which drives the engine through a real SAPI client and checks the offsets a highlight depends on. It found a bug on its first run that five releases had shipped.
-- [ ] Phase 6: Linux port — background daemon, global hotkey, reads the highlighted text. **Working end to end on Mint** (`docs/LINUX-PORT-PLAN.md`): daemon, `vst-ctl` client, selection capture, hotkeys, per-machine benchmark, a Reader window with a live highlight and click-a-word-to-jump, a tray icon, and a first-run screen that downloads the voices. Packaging is the remaining phase, so there is no Linux release to download yet. The model renders ~25% faster on Linux than on Windows on the same machine.
-- [ ] Phase 7: Piper as a second voice family, beside Supertonic and never replacing it — ~130 voices across 40+ languages, ~63 MB per voice against Supertonic's ~830 MB resident, and an upstream that is still maintained. Investigated 2026-08-19 and planned in `docs/PIPER-PLAN.md`; not started. The route runs Piper's ONNX graph on the runtime already in the box rather than embedding Piper itself, so the shipping engine still takes no new dependency — the one GPL component, espeak-ng phonemization, stays in its own process. Two research phases decide whether it happens at all.
+- [x] **Phase 6: Linux port** *(shipped 0.2.8 as a tarball, 0.2.9 added the AppImage)* — background daemon, global hotkey, reads the highlighted text (`docs/LINUX-PORT-PLAN.md`): daemon, `vst-ctl` client, selection capture, hotkeys, per-machine benchmark, a Reader window with a live highlight and click-a-word-to-jump, a tray icon, and a first-run screen that downloads the voices. The model renders ~25% faster on Linux than on Windows on the same machine.
+- [x] **Phase 7: Piper as a second voice family** *(shipped 0.2.11, Linux only)* — beside Supertonic and never replacing it: **65 hash-pinned voices across 35 languages**, ~63 MB per voice against Supertonic's ~830 MB resident. It runs Piper's ONNX graph on the runtime already in the box rather than embedding Piper, so the engine takes no new dependency — and the two research phases that could have ended it both passed: the graph renders byte-identically to `python -m piper`, and phoneme parity against piper's own output is **327 sentences, 8 languages, zero divergences**, re-run on every push. `docs/PIPER-PLAN.md`.
+- [x] **Phase 8: Speech Dispatcher module** *(shipped 0.2.11, Linux only)* — the voices reach Orca and every other speechd client, through a native module rather than a shell wrapper. It refuses to register an install with no voices, and it puts every other module back, because adding one to a user configuration otherwise removes them all. `docs/SPEECHD-PLAN.md`.
+- [ ] Windows catches up: the audit in `docs/WINDOWS-PLAN.md` found ten things, four of them fixed. What is left is a benchmark tab that ranks presets on noise, a DirectML default that has never been shown to win, split-bitness upgrade safety, and two settings schemas that already disagree.
 
 ## Contributing
 
@@ -335,12 +429,17 @@ The project's design notes and lessons learned (SAPI interop quirks, EngineSiteS
 
 ## License
 
-- **Code**: MIT — see [LICENSE](LICENSE)
-- **Supertonic models**: [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-3) (Supertone's terms). The launcher does not redistribute the models — it downloads them at install time so end users accept the license directly.
+- **This repository's code**: MIT — see [LICENSE](LICENSE). No `.cs` file has changed licence.
+- **The Linux archive as a whole, from 0.2.11 onward: GPL-3.0-or-later**, because it distributes espeak-ng as the phonemiser the Piper voices need. `LICENSE-PHONEMIZER.txt` inside the archive carries the terms and the written offer for its source, which is reproducible from `build/build-espeak.sh`. MIT is GPL-compatible, so the source stays MIT and the *archive* is what carries the stronger terms. **Releases up to and including 0.2.10 contain no espeak-ng and are unaffected — this is not retroactive**, and the Windows ZIP ships no phonemiser and is not affected at all.
+- **Supertonic models**: [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-3) (Supertone's terms). Nothing redistributes the models — they download at install time so end users accept the licence directly.
+- **Piper voices**: each carries its own, shown in the Voices tab before anything downloads. Several are NonCommercial; the catalog records the licence per voice and the packer refuses one that states none.
 - **ONNX Runtime / DirectML**: MIT (Microsoft)
 
 ## Credits
 
 - [Supertone](https://supertone.ai/) for the [Supertonic](https://github.com/supertone-inc/supertonic) neural TTS model
 - Microsoft for SAPI 5, ONNX Runtime, and DirectML
+- [Rhasspy](https://github.com/rhasspy/piper) for Piper and its voices, and the voice contributors each `MODEL_CARD` names
+- [espeak-ng](https://github.com/espeak-ng/espeak-ng), which is what turns text into the phonemes a Piper voice was trained on
+- The [Speech Dispatcher](https://freebsoft.org/speechd) project, whose module protocol is what puts these voices in front of a screen reader
 - The .NET ComHosting team for making pure-C# COM servers tractable

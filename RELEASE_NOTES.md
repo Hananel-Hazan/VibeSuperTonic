@@ -1,3 +1,77 @@
+# VibeSuperTonic v0.2.12
+
+*Four things you can see, and a great deal you cannot.*
+
+The visible half is small and all in the window: the Tune tab's dropdowns were
+showing the debugger's view of their own contents, and the Pronunciations tab
+threw away unsaved rules when you switched tabs. The invisible half is the
+reason this release exists — the project's checks now cover what it ships, and
+every one of them has been watched failing.
+
+```
+VibeSuperTonic-0.2.12-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.12-x86_64.AppImage      56 MB
+```
+
+Same licence position as 0.2.11: the Linux archive as a whole is
+GPL-3.0-or-later because it carries espeak-ng, this repository's source stays
+MIT, and nothing up to 0.2.10 is affected.
+
+## Fixed
+
+- **The Tune tab's dropdowns were unreadable.** Every picker on that tab — the
+  scope, the engine, the language, the voice, the speaker — displayed
+  `PickerRow { Value = All, Label = All voices }` instead of the label it was
+  holding. A toolkit renders a list item through `ToString()` unless it is given
+  a template, and the type had never been asked what it should look like.
+- **The Pronunciations tab discarded unsaved rules on a tab switch.** These tabs
+  re-read on every visit, and selecting a different tab and coming back is a
+  visit — so writing three rules and glancing at the Voices tab lost all three,
+  with no warning and nothing to connect it to. It now keeps them and says on
+  screen that what you are looking at is unsaved.
+- **The scope selector showed a settings key.** "Only piper:en_GB-cori-high" is
+  what the file needs to write; it now says "Only cori-high", which is what the
+  voice is called two rows above it.
+- **`INSTALL.txt` promised something false** — that `vst-ctl` can do "anything
+  the window can do". It cannot choose a voice, and now says what each program
+  is actually for.
+
+## Under the floor
+
+None of this changes what the product does. All of it changes what happens when
+somebody breaks it.
+
+- **The archive has a size budget**, and so does the phonemiser payload, and so
+  does `vst-ctl`'s startup time — the last of which replaces a proxy, since
+  "the binary is native" is not the same claim as "the binary is fast".
+- **The 227 MB the optional GPU pack downloads is now hash-pinned**, to the
+  SHA-512 nuget.org itself publishes. It is `dlopen`ed into the speech daemon,
+  and it was the one download in the product that did not follow the product's
+  own rule.
+- **The daemon's socket is checked to be private to you** — 0600 in a 0700
+  directory, in both places the path can land.
+- **Phoneme parity with piper runs on every push**, negative control first: five
+  deliberate sabotages must all be caught before the 327-sentence result is
+  believed.
+- **A real speech-dispatcher is installed in CI** and asked whether espeak-ng
+  still answers after our installer has run, and after it has been removed.
+- **The daemon's memory was measured**: it plateaus. Supertonic peaks at 842 MB
+  by about the sixtieth utterance and does not move; Piper at 1087 MB by the two
+  hundredth. Neither leaks, and the harness that says so was checked against a
+  daemon deliberately made to leak.
+
+**A flaky packer bug was found on the way** and is worth naming, because it
+could have shipped a broken archive silently: a shell pipeline that ended in
+`head -c 4` killed the packer with no message at all, at random, depending on
+how fast the machine was that day.
+
+## Windows
+
+Unchanged, as 0.2.9 through 0.2.11 were. Everything here is Linux; the Windows
+ZIP ships from the same version number and the same source.
+
+---
+
 # VibeSuperTonic v0.2.11
 
 *Linux gets a second engine, a screen-reader voice, and — because of the first
