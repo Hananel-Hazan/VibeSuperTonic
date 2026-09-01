@@ -292,8 +292,15 @@ internal static unsafe class WaylandNative
         wl_display_flush(display);
         close(fds[1]);
 
-        var sb = new StringBuilder();
         var buf = new byte[16 * 1024];
+
+        // ONE DECODER ACROSS EVERY read(), NOT ONE PER READ — see
+        // Utf8PipeDecoder, which is where that is explained and where it is
+        // tested. Decoding each block on its own mangled a character wherever
+        // one straddled a 16 KB boundary, and reached the user as a word eaten
+        // in the middle of a sentence.
+        var text = new Utf8PipeDecoder();
+
         long deadline = Environment.TickCount64 + timeoutMs;
 
         // Bounded, unlike the spike. A selection transfer is a round trip through
@@ -312,12 +319,12 @@ internal static unsafe class WaylandNative
 
                 nint n = read(fds[0], p, (nuint)buf.Length);
                 if (n <= 0) break;                           // EOF, or a failure
-                sb.Append(Encoding.UTF8.GetString(buf, 0, (int)n));
+                text.Feed(buf, (int)n);
             }
         }
 
         close(fds[0]);
-        return sb.ToString();
+        return text.Finish();
     }
 
     // ------------------------------------------------- descriptor construction

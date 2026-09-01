@@ -1,3 +1,65 @@
+# VibeSuperTonic v0.2.14
+
+*A word eaten in the middle of a sentence, once every 16 KB of selected text.*
+
+Reported from daily use as "SuperTonic is eating some words in the middle of the
+sentence". Found by measurement rather than by reading: the selection path was
+the last component still untested after synthesis, chunking, playback and the
+GPU had each been ruled out with numbers.
+
+```
+VibeSuperTonic-0.2.14-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.14-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **A Wayland selection longer than 16 KB could come back with a mangled word.**
+  The compositor hands the selection over a pipe, and `read(2)` returns whatever
+  bytes have arrived — it has no idea where characters begin. Each block was
+  decoded on its own, so a multi-byte character straddling a block boundary had
+  both halves turned into U+FFFD. The model has no id for those, so they render
+  as nothing: the word around them is heard as eaten, and no screen anywhere
+  reports a fault.
+
+  Measured on a 35,000-character selection: the words at byte 16384 and 32768
+  came back as `w2048<?><?>`. One decoder now carries the partial sequence
+  across reads, which is the whole fix.
+
+  **This is ordinary prose, not an exotic alphabet.** Curly quotes, en and em
+  dashes, ellipses and accented letters are all multi-byte, so anything pasted
+  from a browser or a word processor is exposed. Whether it bites depends on
+  where the boundary falls, which is why it survived from 0.2.10 — it passes for
+  every ASCII selection and for most others, and the deterministic way to see it
+  is to place a continuation byte at exactly 16384.
+
+  X11 sessions were never affected: that path receives the whole property as one
+  array and decodes it once. Speech Dispatcher and `vst-ctl speak` were never
+  affected either — neither reads the selection.
+
+## Checks
+
+Four tests, in `Utf8PipeDecoderTests`. The mechanism was extracted from the
+P/Invoke so that a test can chop a string at *every* offset rather than at a
+lucky one — the defect's whole character is that most offsets are fine.
+Reverting the decode to its per-block form fails two of the four, which is the
+rule this project keeps: a check that has never been observed failing is not
+evidence.
+
+1,431 tests pass.
+
+## Everything else
+
+Unchanged from 0.2.13, including the licence position: the Linux archive as a
+whole is GPL-3.0-or-later because it carries espeak-ng, this repository's source
+stays MIT, and nothing up to 0.2.10 is affected.
+
+## Windows
+
+Unchanged, as every release since 0.2.9 has been.
+
+---
+
 # VibeSuperTonic v0.2.13
 
 *Two numbers on screen that did not describe what the daemon was doing.*
