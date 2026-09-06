@@ -1,3 +1,94 @@
+# VibeSuperTonic v0.2.15
+
+*A speed control that could not be heard, a warning that could not be cleared,
+and a word cut in half by the margin.*
+
+Three defects reported from the running install on 2026-09-06, all of them
+silent: every one saves correctly, reads back correctly, and is wrong only where
+a person is listening or looking.
+
+```
+VibeSuperTonic-0.2.15-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.15-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **"Piper does not obey the speed change."** The Tune tab wrote *every* field it
+  showed into whichever scope was selected, so one deliberate override pinned all
+  nine. The reporting install's `PerEngine.piper` was a complete snapshot of the
+  tab — `EngineSpeed`, `DspRate`, `VolumeTrimDb`, both chunk sizes,
+  `InterChunkSilenceMs` and a `TotalStep`. After that, editing "All voices" saved
+  correctly, read back correctly, and changed nothing anybody could hear, because
+  every value the global boxes set was shadowed by a copy of itself.
+
+  A scope now keeps only what it does not already inherit — a voice compared
+  against its engine, not against the file. Two consequences beyond the fix: an
+  override becomes undoable by typing the inherited value back, and an existing
+  file cleans itself on the next save in that scope.
+
+  The daemon's Piper rate arithmetic was never at fault. It plans a
+  `length_scale` off each voice's measured curve and always did.
+
+- **A greyed-out box is no longer treated as an answer.** The tab disables
+  Language and Model steps for a Piper voice — it has neither — and then saved
+  them anyway. That is how a Piper scope acquired a `TotalStep`, and it is the
+  first half of the warning below.
+
+- **"The recorded measurements no longer describe this machine", and the
+  Re-measure button could not clear it.** Three sweeps in the user's log ended
+  `no configuration could be measured: FileNotFoundException: Voice style not
+  found for 'en_US-hfc_male-medium'`.
+
+  The benchmark is a Supertonic measurement — every profile is stamped
+  `Engine: "supertonic"` and there is no Piper sweep — but it took its voice and
+  its step count from whatever voice was *in force*. With a Piper voice selected
+  it asked for a Supertonic style named after a Piper voice, so every row failed;
+  meanwhile the staleness guard compared the stored profile's `TotalStep` against
+  a Piper scope's, which is a number no Piper voice has ever run at. A warning
+  with an unusable remedy.
+
+  The sweep, what it records, what the guard re-tests and what the startup
+  decision is made from all now name a Supertonic voice. A Piper scope can no
+  longer shadow `TotalStep` or `Language` at all — filtered on the read, so this
+  takes effect on files that already carry the key, with nothing to re-save.
+
+- **The half 0.2.13 left behind.** That release changed what the sweep *records*
+  to the effective voice's step count and left what it *runs* reading the file's
+  top level, so on any install with a scoped `TotalStep` the rows measured one
+  configuration and the profile was stamped with another. Both halves come from
+  one place now.
+
+- **A word broken across a line is read as one word again.** Copying
+  "Alternative Ground-Truth Configu-\nrations" out of a paper was read as
+  "configyoo" and then "rations". Nothing in the pipeline joined them: the
+  chunker collapses the newline to a space, so the phonemiser was handed
+  `Configu-` and `rations` and said exactly that.
+
+  Every justified PDF, every two-column paper and every hard-wrapped mail
+  hyphenates at the margin, and reading those aloud is what this product is for.
+  The join is deliberately the conservative half — a lowercase letter after the
+  break is the tail of a split word, a capital is far more often a compound that
+  wrapped (`Ground-\nTruth`) or a new sentence, and a hyphen inside a line is a
+  real hyphen. Paragraph breaks are never joined.
+
+  U+00AD, the invisible soft hyphen, is dropped too. The sanitizer's ranges stop
+  at U+009F and never reached it, so a character nobody can see was turning one
+  spoken word into two with no line break to explain it.
+
+  It runs before the pronunciation rules, so a rule for a word still matches one
+  the margin had cut in half.
+
+## Known, and not fixed here
+
+- **Speech Dispatcher has no speed control.** The module never forwards
+  `SET RATE` for a neural voice — only the espeak fallback gets it — and the
+  `render` verb computes an utterance plan and then drops its stretch factor and
+  volume scale. Through Orca, the rate slider does nothing and `VolumeTrimDb`
+  never applies. Reported alongside the above and left for its own change.
+
+---
+
 # VibeSuperTonic v0.2.14
 
 *A word eaten in the middle of a sentence, once every 16 KB of selected text.*

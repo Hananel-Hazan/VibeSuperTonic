@@ -761,8 +761,13 @@ public sealed partial class DaemonServer : IDisposable
         var stored = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(_config.DataDir));
         if (stored is null) return null;
 
+        // THE VOICE THE SWEEP MEASURES, not the one that is speaking. The sweep
+        // is a Supertonic measurement, so comparing it against a Piper voice's
+        // step count reports a difference that means nothing and offers a
+        // re-measure that cannot run — see HostConfig.BenchmarkVoice.
+        string benchmarkVoice = _config.BenchmarkVoiceFor(EffectiveVoice);
         var now = MachineFacts.Current(
-            _config.ModelsRoot, _config.TotalStepFor(EffectiveVoice), EffectiveVoice, EffectiveLanguage);
+            _config.ModelsRoot, _config.TotalStepFor(benchmarkVoice), benchmarkVoice, EffectiveLanguage);
 
         var staleness = stored.StalenessAgainst(now);
 
@@ -854,11 +859,16 @@ public sealed partial class DaemonServer : IDisposable
             else if (load < 0)
                 notes.Add("could not read /proc/stat, so the machine's load before the sweep is unknown.");
 
+            // Both from the SAME voice, and a Supertonic one. Reading the
+            // effective voice here asked for a Supertonic style named after a
+            // Piper voice — "Voice style not found for 'en_US-hfc_male-medium'",
+            // every row, on every sweep the reporting user ran.
+            string benchmarkVoice = _config.BenchmarkVoiceFor(EffectiveVoice);
             var machine = MachineFacts.Current(
-                _config.ModelsRoot, _config.TotalStepFor(EffectiveVoice),
-                EffectiveVoice, EffectiveLanguage, Math.Max(load, 0));
+                _config.ModelsRoot, _config.TotalStepFor(benchmarkVoice),
+                benchmarkVoice, EffectiveLanguage, Math.Max(load, 0));
 
-            var options = _config.Synthesis(EffectiveVoice, EffectiveLanguage);
+            var options = _config.Synthesis(benchmarkVoice, EffectiveLanguage);
             var writeLock = new object();
 
             Log($"benchmark: sweeping {BenchmarkSweep.Candidates(machine.LogicalProcessors).Count} " +

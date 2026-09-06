@@ -212,10 +212,13 @@ DaemonLog.Write(gpuUnavailable is null
     : $"gpu: CUDA unavailable — {gpuUnavailable}");
 
 var storedProfile = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(dataDir));
-// The steps the voice in force runs at — see HostConfig.TotalStepFor. Reading
-// the global here made the startup decision describe a configuration that a
-// scoped TotalStep meant nothing was using.
-var startupVoice = voice ?? config.ConfiguredVoice;
+// The Supertonic voice the sweep measures, and the steps IT runs at — see
+// HostConfig.BenchmarkVoice and TotalStepFor. These facts are compared against a
+// stored profile, and a profile is always a Supertonic measurement, so asking
+// the voice in force is only right while that voice is Supertonic: with a Piper
+// voice selected it put up "measured at TotalStep 12, this daemon runs 6" about
+// a step count no Piper voice has ever had.
+var startupVoice = config.BenchmarkVoiceFor(voice);
 var machineNow = MachineFacts.Current(modelsRoot, config.TotalStepFor(startupVoice),
     startupVoice, language ?? config.Settings.Language);
 var startupDecision = ExecutionDecision.Decide(

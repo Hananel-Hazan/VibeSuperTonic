@@ -549,23 +549,95 @@ public sealed class HostConfig
         string.IsNullOrWhiteSpace(Settings.VoiceId) ? Settings.DefaultVoice : Settings.VoiceId.Trim();
 
     /// <summary>
+    /// The Supertonic voice the BENCHMARK measures — which is not always the
+    /// voice that is speaking.
+    ///
+    /// <para><b>The sweep is a Supertonic measurement and always has been.</b>
+    /// <c>MachineFacts.Current</c> stamps every profile <c>Engine:
+    /// "supertonic"</c> and there is no Piper sweep, so its voice, its step count
+    /// and its speed have to come from a Supertonic voice or the profile
+    /// describes something that was never run.</para>
+    ///
+    /// <para><b>Reported 2026-09-06, and it made a warning nothing could
+    /// clear.</b> The sweep took its voice from whatever was in force, so with a
+    /// Piper voice selected it asked for a Supertonic style named after a Piper
+    /// voice — <c>Voice style not found for 'en_US-hfc_male-medium'</c>, every
+    /// row, three sweeps in the user's log — while the staleness guard beside it
+    /// compared the stored profile's <c>TotalStep</c> against a Piper scope's.
+    /// The banner said re-measure, the button could not, and both halves were the
+    /// same mistake.</para>
+    ///
+    /// <para><c>DefaultVoice</c> is the fallback because it is only ever written
+    /// for a Supertonic voice (see <c>SettingsFile.SetVoice</c>) and defaults to
+    /// a style — so it is the last Supertonic voice this install used, and on an
+    /// install that has never chosen one it is still a style the sweep can name.
+    /// </para>
+    /// </summary>
+    /// <param name="voice">
+    /// The voice in force — a <c>--voice</c> override, or null for the
+    /// configured one. It is USED when it is Supertonic, so a machine swept
+    /// while speaking M4 records M4.
+    /// </param>
+    public string BenchmarkVoiceFor(string? voice)
+    {
+        string effective = string.IsNullOrWhiteSpace(voice) ? ConfiguredVoice : voice.Trim();
+        if (!IsPiper(effective)) return effective;
+
+        string style = string.IsNullOrWhiteSpace(Settings.DefaultVoice)
+            ? "M1"
+            : Settings.DefaultVoice.Trim();
+
+        return new VoiceId(VoiceEngine.Supertonic,
+            IsPiper(style) ? "M1" : VoiceId.Parse(style).Bare).ToString();
+    }
+
+    /// <summary>The configured voice's answer. See <see cref="BenchmarkVoiceFor"/>.</summary>
+    public string BenchmarkVoice => BenchmarkVoiceFor(null);
+
+    /// <summary>
+    /// Whether an id names a Piper voice — by its qualifier, or by an unqualified
+    /// name that matches an installed Piper voice, which is the same test
+    /// <see cref="SettingsFor"/> makes.
+    /// </summary>
+    private bool IsPiper(string id)
+    {
+        var parsed = VoiceId.Parse(id);
+        return parsed.Engine == VoiceEngine.Piper
+               || (parsed.MayBePiper && PiperVoices.Config(parsed.Bare) is not null);
+    }
+
+    /// <summary>
     /// The Supertonic half of <see cref="Utterance"/>, kept separate because the
     /// benchmark sweep wants exactly this and has no use for a stretch factor.
+    ///
+    /// <para><b>Resolved through this voice's scope, not the file's top level.</b>
+    /// 0.2.13 changed what the sweep RECORDS to the effective voice's step count
+    /// and left what it RUNS reading the global — so on any install with a scoped
+    /// <c>TotalStep</c>, the rows measured one configuration and the profile was
+    /// stamped with another. Two halves of one answer must come from one place.
+    /// </para>
     /// </summary>
-    public SynthesisOptions Synthesis(string? voice, string? language) =>
-        new SupertonicOptions(
+    public SynthesisOptions Synthesis(string? voice, string? language)
+    {
+        var s = SettingsFor(voice);
+        float synthSpeed = ReferenceEquals(s, Settings)
+            ? _synthSpeed
+            : SpeechRate.Compute(s.EngineSpeed, s.DspRate, s.RateClampCeiling).SynthSpeed;
+
+        return new SupertonicOptions(
             // Bare, for the same reason Utterance unwraps: a Supertonic style
             // names models/voice_styles/<style>.json, and "supertonic:M1" is not
             // a filename.
             VoiceId.Parse(voice ?? ConfiguredVoice).Bare,
-            SupertonicLanguages.Normalize(language ?? Settings.Language),
-            Settings.TotalStep,
+            SupertonicLanguages.Normalize(language ?? s.Language),
+            s.TotalStep,
             // The CLAMPED speed, not EngineSpeed: the model is only well behaved
             // in roughly [0.9, ceiling], and whatever was asked for beyond that
             // is the stretch's job. Handing the raw value here would ask the
             // model for a rate it degrades at and then stretch it again.
-            _synthSpeed,
-            Settings.SynthesisSilenceSec);
+            synthSpeed,
+            s.SynthesisSilenceSec);
+    }
 
     private static long MtimeTicks(string path)
     {

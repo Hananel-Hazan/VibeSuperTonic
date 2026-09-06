@@ -546,10 +546,13 @@ public sealed class TuneTab : UserControl
         }
 
         // A SAVE HERE THAT CHANGES NOTHING AUDIBLE IS THE WORST OUTCOME on this
-        // tab, and it is easy to reach: saving a scope writes every field into
-        // it, so one deliberate override leaves the whole tab shadowed for that
-        // voice. Then "all voices" is edited, saved, read back correctly — and
-        // the voice goes on sounding exactly as it did.
+        // tab. It used to be easy to reach — saving a scope wrote every field
+        // into it, so one deliberate override left the whole tab shadowed for
+        // that voice, and this is what reached the user as "piper does not obey
+        // the speed change". SettingsScope.Save now keeps only what the scope
+        // does not inherit, so a scope holds what somebody meant by it. This note
+        // stays because a hand-edited file can still shadow anything, and because
+        // a deliberate override IS a reason a global edit will not be heard.
         var shadowed = SettingsScope.Shadowed(_file, engine, voiceKey);
         _scopeNote.Text = shadowed.Count == 0
             ? "The values every voice starts from."
@@ -684,20 +687,37 @@ public sealed class TuneTab : UserControl
         // only when something is actually written into them.
         var (scopeEngine, scopeVoice) = ScopeNames();
         var kind = ScopeKind();
-        var target = kind == SettingsScopeKind.All
-            ? root
-            : SettingsScope.Target(root, kind, scopeEngine, scopeVoice);
 
-        target.Set("Language", Text(_fields["Language"]));
+        // WHAT THE SCOPE IS ASKED TO HOLD, collected before anything is written.
+        // SettingsScope.Save then keeps only the values the scope does not
+        // already inherit — see it for the report this answers: writing every
+        // field into a scope pinned all nine of them, and left the "All voices"
+        // boxes unable to change how that voice sounded.
+        var scoped = new Dictionary<string, JsonNode?>();
+
+        void Offer(string key, JsonNode? value)
+        {
+            // A GREYED-OUT BOX IS NOT AN ANSWER. Language and Model steps are
+            // disabled for a Piper voice because it has neither, and saving them
+            // anyway is how PerEngine.piper acquired the TotalStep that made the
+            // benchmark warn about a step count nothing runs. Left untouched
+            // rather than cleared: with "All voices" selected the box is still
+            // disabled, and the file's own value is what Supertonic speaks at.
+            if (!_fields[key].IsEnabled) return;
+
+            if (SettingsScope.IsScoped(key)) scoped[key] = value;
+            // Unscoped numbers always belong to the file: a thread budget or a
+            // provider is about this machine, and a voice cannot have its own.
+            else if (value is null) root.Remove(key);
+            else root.Set(key, value);
+        }
+
+        Offer("Language", Text(_fields["Language"]));
 
         foreach (var (key, label, _) in Numbers)
         {
-            // Unscoped numbers always belong to the file: a thread budget or a
-            // provider is about this machine, and a voice cannot have its own.
-            var into = SettingsScope.IsScoped(key) ? target : root;
-
             string raw = _fields[key].Text?.Trim() ?? "";
-            if (raw.Length == 0) { into.Remove(key); continue; }
+            if (raw.Length == 0) { Offer(key, null); continue; }
 
             if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
             {
@@ -707,13 +727,12 @@ public sealed class TuneTab : UserControl
 
             // Integers stay integers on the wire. A TotalStep of 8.0 parses
             // everywhere but reads as a mistake in a file people open.
-            into.Set(key, value == Math.Floor(value) ? JsonValue.Create((long)value) : JsonValue.Create(value));
+            Offer(key, value == Math.Floor(value)
+                ? JsonValue.Create((long)value)
+                : JsonValue.Create(value));
         }
 
-        // An override section that ended up empty is deleted rather than left as
-        // an empty object: "this voice has settings" must mean it has some.
-        if (kind != SettingsScopeKind.All && target.Count == 0)
-            SettingsScope.Clear(root, kind, scopeEngine, scopeVoice);
+        SettingsScope.Save(root, kind, scopeEngine, scopeVoice, scoped);
 
         root.Set("ClipboardFallback", JsonValue.Create(_clipboardFallback.IsChecked == true));
         root.Set("GpuOnBattery", JsonValue.Create(_gpuOnBattery.IsChecked == true));
