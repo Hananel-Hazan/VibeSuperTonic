@@ -1,60 +1,161 @@
 # VibeSuperTonic v0.2.16
 
-*The screen reader's speed control, which reached the wrong voice.*
+*Four ways a press could do nothing, and nothing anywhere said so.*
 
-The one thing 0.2.15 listed as known and unfixed. Through Orca the rate slider
-did nothing to the voice a user was actually listening to.
+All four reported from daily use between 2026-09-01 and 2026-09-06. Every one is
+silent by construction: the product had never recorded a single instance of any
+of them.
 
 ```
 VibeSuperTonic-0.2.16-linux-x64.tar.gz     61 MB
 VibeSuperTonic-0.2.16-x86_64.AppImage      56 MB
 ```
 
-## Fixed
+## The hotkey, if you use a non-Latin keyboard layout
 
-- **`SET RATE` now reaches the neural voice.** The Speech Dispatcher module
-  forwarded speech-dispatcher's rate only to its espeak fallback, and
-  `vst-ctl render` had no way to carry one — so the setting a screen reader user
-  changes most often reached the one voice they were not listening to. `render`
-  takes `--rate N`, −100…100, and the module sends it.
+**Read the release note for this one even if nothing else applies to you.**
 
-  It **adjusts** what `settings.json` already asks for rather than replacing it:
-  someone who set 1.2x in the Tune tab and never moved the slider still hears
-  1.2x. Rate 0 changes nothing at all, so a screen reader sounds exactly like the
-  hotkey — and rate 0 sends no flag, so a module talking to an older daemon does
-  not have every utterance refused for an unknown option.
+`Ctrl+`` was dead in any window whose keyboard layout was not Latin. Plasma
+matches a **keysym**, and on a `us,il` machine the same physical key emits two
+different ones:
 
-  **Both voices read one map.** The rate becomes words per minute by
-  espeak-ng's own curve — 175 at 0, 80 and 450 at the ends — and the neural voice
-  takes the same curve divided by its default. That is deliberate: trap 16 makes
-  the espeak fallback answer whenever the neural voice cannot, between one
-  utterance and the next, and two rate curves would make a fallback change the
-  *pace* as well as the voice. A user would hear two things change and be unable
-  to tell which failure they were listening to.
+```
+keycode 49 = grave asciitilde | semicolon asciitilde
+             └─ us ─┘           └─ il (Hebrew) ─┘
+```
 
-- **`render` stopped throwing away half of its own plan.** It computed an
-  utterance plan and then streamed the raw model output, so the DSP half of the
-  rate and the user's `VolumeTrimDb` reached the hotkey and never reached a
-  screen reader. Both are applied now, per chunk, in the same order the speaking
-  session uses.
+With KDE's per-window layout switching (`SwitchMode=Window`) it followed the
+application rather than the clock — dead in the browser the user typed Hebrew in,
+alive in a freshly opened Kate. **Stop kept working**, because `asciitilde` is the
+shifted keysym in both groups, which is why "I press stop and then read and it
+still will not read" read like a wedged daemon and was not one.
 
-  For Piper this was inaudible at ordinary speeds and total past the model's
-  saturation point — which is exactly where a screen reader user lives.
+Read is now bound to **both keysyms of the same physical key**, tab-separated, so
+the same finger movement works in either layout:
+
+```
+Read=Ctrl+`\tCtrl+;
+```
+
+A different key would have been the easy fix and would have cost everyone their
+muscle memory for a fault one keysym wide. The alternate is only written when it
+is itself unbound.
+
+**Existing installs must re-run `bind`** — `<AppImage> bind`, or `install.sh` for
+a tarball — **and then log out and back in.** kglobalaccel lives inside kwin on
+Plasma 6 and cannot be asked to re-read its configuration without risking the
+compositor.
+
+## A press the busy application swallowed
+
+Reading a selection is a round trip through the *owning* application's event
+loop. Both selection sources allowed **300 ms for the whole transfer**, so a
+browser or an Electron app mid-render, mid-GC or mid-extension-host lost the
+press. Measured by freezing an owner's event loop, a **0.5 s stall was already
+enough**:
+
+```
+                 before            after
+responsive        21 ms  speaks     25 ms  speaks
+stalled 0.5 s    322 ms  lost      528 ms  speaks
+stalled 1.5 s    322 ms  lost     1519 ms  speaks
+stalled 4.0 s    322 ms  lost     2024 ms  refused, naming a busy application
+```
+
+It now waits 2 s for the owner to say anything at all, then 1 s between chunks,
+under a 5 s ceiling — so a slow but working application completes and a wedged one
+still fails in bounded time. The message said the owner "may have closed", which
+was a diagnosis of a different failure.
+
+**And a timeout is no longer mistaken for an end of file.** One `break` covered
+both, so a transfer abandoned part way came back as a *complete success* — half a
+passage spoken with nothing reporting a fault. A short read is now spoken with a
+notice saying so.
+
+X11 had the identical bug; the number now lives in one place.
+
+## A press lost while the daemon was still starting
+
+`vst-ctl` waited a flat 5 s for a daemon it had started. Across 81 launches in one
+install's log the median was 0.85 s — but every morning's first start re-execs for
+the CUDA provider pack and took **4.07–4.67 s**, with nine landing inside a second
+of the budget. When it blew, the press was simply lost; the daemon then finished
+starting, so the *next* press worked.
+
+The client now waits **while the process is alive**, under a 30 s ceiling, and
+gives up early when it dies. A crashing daemon is reported in 1.5 s with its exit
+code instead of after 5 s blaming the clock.
+
+## A voice that installed and then went to the wrong engine
+
+```
+17:24:26  voice install: en_US-hfc_female-medium installed
+17:24:41  engine: piper -> supertonic
+17:24:41  utterance failed: Voice style not found for 'en_US-hfc_female-medium'
+```
+
+Five presses in a row. The store cached its list against the timestamp of
+`piper/`; an install creates `piper/<id>/`, which moves it, and then downloads the
+files *into* that directory, which does not. Anything that asked mid-download
+cached the set without the new voice and never looked again — until the daemon
+restarted. The tell is in the log: that install line is missing the
+"; calibrating" the voice before it has, because the calibration could not see it
+either.
+
+The cache key now folds in each voice directory's own timestamp, which also covers
+a voice copied in by hand.
+
+## A GPU turned off by a missing file
+
+Same incident, the next line:
+
+```
+inference: CUDA failed in use (FileNotFoundException: Voice style not found ...)
+inference: CUDA -> CPU (no GPU available — FileNotFoundException: Voice style not found)
+```
+
+"No GPU available — Voice style not found" is not a sentence about a GPU. The
+mid-render fallback caught bare `Exception`, so any fault latched CUDA off for the
+life of the process and the user ran on the CPU with that reported as the reason.
+
+Exceptions that cannot be a provider fault no longer trigger it — deliberately a
+deny-list, because the fallback exists to survive faults nobody predicted and
+naming what a GPU failure looks like would re-introduce the silence it was added
+for. And a net for the rest: **if the CPU retry fails the same way, the GPU was
+demonstrably not at fault**, so the latch comes off and the real error travels.
+
+## Speech Dispatcher finally has a speed control
+
+The one thing 0.2.15 listed as known and unfixed. The module forwarded
+`SET RATE` only to its espeak fallback and `vst-ctl render` had no way to carry
+one, so through Orca the rate slider did nothing to the voice you were listening
+to. `render` takes `--rate N`, −100…100, and it **adjusts** what `settings.json`
+asks for rather than replacing it. Rate 0 changes nothing and sends no flag, so a
+module talking to an older daemon is unaffected.
+
+Both voices read one map — espeak-ng's own 80/175/450 curve — so a fallback
+mid-session changes the timbre and not the pace.
+
+**`render` also stopped throwing away half its own plan**: it computed an
+utterance plan and streamed the raw model output, so the DSP half of the rate and
+your `VolumeTrimDb` reached the hotkey and never reached a screen reader.
+
+## And the silence itself
+
+A refused press left no trace on either side: the message goes to a stderr that a
+desktop shortcut discards, and the daemon did not log refusals at all. It does
+now, along with both paths that ignore a press and any capture that had to change
+what it read.
 
 ## Worth knowing
 
-- **Supertonic caps at 0.5x and 2.0x of your configured speed**, because that is
-  the range its pitch-preserving time-stretch is honest over. Measured across the
-  slider: rate −50 and +50 land exactly on the curve, and −100 and +100 clamp.
-  espeak reaches 2.57x at the top of the range, so the fast end of Orca's slider
-  is faster on the fallback voice than on Supertonic.
-
-  A Piper voice does not have this limit in the same place: it gives the whole
-  request to `length_scale` until the model saturates — measured per voice, 1.84x
-  to 2.67x — and only then asks the stretch for the rest.
-
-- The rate is per utterance and is **never written to `settings.json`**. A screen
-  reader's slider is not an edit to the file the Tune tab owns.
+- **Supertonic caps at 0.5x and 2.0x** of your configured speed through a screen
+  reader, which is the honest range of its time-stretch. espeak reaches 2.57x, so
+  the fast end of Orca's slider is faster on the fallback voice. A Piper voice
+  gives the whole request to `length_scale` until the model saturates instead.
+- The selection capture can now block for up to 2 s when the owning application is
+  busy. That is deliberate: waiting out a busy application beats answering
+  instantly with nothing.
 
 ---
 
