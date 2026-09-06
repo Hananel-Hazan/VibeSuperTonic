@@ -75,6 +75,60 @@ public static class SpeechRate
         return (synthSpeed, stretchFactor);
     }
 
+    // ------------------------------------------------- a screen reader's rate
+
+    /// <summary>
+    /// espeak-ng's own defaults, which speech-dispatcher's <c>SET RATE</c> is
+    /// calibrated against on every machine that has ever run a screen reader.
+    ///
+    /// <para>Not ours to pick. A person who has spent a year at rate 40 in Orca
+    /// chose that number against every other module they have, and a module that
+    /// meant something different by it would be one they had to re-learn.</para>
+    /// </summary>
+    public const int SpeechdDefaultWpm = 175;
+    public const int SpeechdMinWpm = 80;
+    public const int SpeechdMaxWpm = 450;
+
+    /// <summary>
+    /// speech-dispatcher's −100…100 as words per minute, by the linear map
+    /// espeak-ng's own module uses.
+    /// </summary>
+    /// <param name="rate">
+    /// Clamped rather than refused. A client is free to send nonsense, and a
+    /// module that errors on a parameter is a module the server DROPS — which
+    /// reaches the user as a screen reader with no voice.
+    /// </param>
+    public static int SpeechdWordsPerMinute(int rate)
+    {
+        rate = Math.Clamp(rate, -100, 100);
+        return rate < 0
+            ? SpeechdDefaultWpm + rate * (SpeechdDefaultWpm - SpeechdMinWpm) / 100
+            : SpeechdDefaultWpm + rate * (SpeechdMaxWpm - SpeechdDefaultWpm) / 100;
+    }
+
+    /// <summary>
+    /// The same rate as a MULTIPLIER on whatever the settings already ask for —
+    /// what a neural voice can act on, having no words per minute of its own.
+    ///
+    /// <para><b>Reported 2026-09-06.</b> The Speech Dispatcher module forwarded
+    /// <c>SET RATE</c> only to its espeak fallback, so through Orca the rate
+    /// slider did nothing to the voice the user was actually listening to.</para>
+    ///
+    /// <para><b>Derived from the wpm map rather than invented beside it</b>, and
+    /// that is the point. Trap 16 makes the espeak fallback answer whenever the
+    /// neural voice cannot, between one utterance and the next. Two rate curves
+    /// would make a fallback change the PACE as well as the voice, so a user
+    /// would hear two things change and be unable to tell which failure they were
+    /// listening to. One map means a fallback changes timbre and nothing
+    /// else.</para>
+    ///
+    /// <para>It multiplies rather than replaces: someone who set 1.2x in the Tune
+    /// tab and never moved the slider hears 1.2x, and moving the slider is an
+    /// adjustment on that.</para>
+    /// </summary>
+    public static double SpeechdRateScale(int rate) =>
+        SpeechdWordsPerMinute(rate) / (double)SpeechdDefaultWpm;
+
     /// <summary>
     /// <c>VolumeTrimDb</c> as a linear scale, clamped to the same −12…+6 dB the
     /// engine allows. Positive values can clip, which is why the ceiling is well

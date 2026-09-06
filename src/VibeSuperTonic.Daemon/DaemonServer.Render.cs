@@ -1,3 +1,4 @@
+using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Text;
@@ -96,7 +97,12 @@ public sealed partial class DaemonServer
             return;
         }
 
-        var plan = _config.Utterance(request.Voice, request.Language);
+        // THE SCREEN READER'S RATE, and this verb is the only one that takes one
+        // — see Request.Rate. It multiplies whatever settings.json asks for, so a
+        // client that sends nothing is unchanged.
+        var plan = _config.Utterance(
+            request.Voice, request.Language,
+            request.Rate is { } speechdRate ? SpeechRate.SpeechdRateScale(speechdRate) : 1.0);
         int rate = engines.SampleRate;
 
         // The format, before any audio. A caller writing a WAV header needs the
@@ -126,6 +132,22 @@ public sealed partial class DaemonServer
                 // this connection is one of a handful the daemon serves.
                 short[] pcm = await Task.Run(
                     () => engines.Synthesize(chunk, plan.Synthesis, token), token);
+
+                // THE REST OF THE PLAN, WHICH THIS VERB USED TO THROW AWAY.
+                // Reported 2026-09-06: `render` computed an utterance plan and
+                // then streamed the raw model output, so the DSP half of the rate
+                // and the user's volume trim reached the hotkey and never reached
+                // a screen reader. The session applies both per chunk; so does
+                // this, in the same order, because the two paths speak the same
+                // settings and must not disagree about what they mean.
+                //
+                // For Piper the stretch is 1.0 until the model saturates, so
+                // dropping it was inaudible at ordinary speeds and total past the
+                // wall — which is exactly where a screen reader user lives.
+                if (Math.Abs(plan.StretchFactor - 1.0) > 0.001)
+                    pcm = TimeStretch.Stretch(pcm, plan.StretchFactor, rate);
+
+                SpeechRate.ApplyGain(pcm, renderOptions.VolumeScale);
 
                 for (int at = 0; at < pcm.Length; at += RenderChunkSamples)
                 {

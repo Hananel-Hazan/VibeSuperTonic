@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.SpeechD;
 
 namespace VibeSuperTonic.SpeechD;
@@ -78,26 +79,62 @@ internal sealed class Voices
     /// <c>language=de</c> through to the synthesiser. Null for a Piper voice,
     /// where the model IS the language.
     /// </param>
-    internal Process StartNeural(string text, string? voice, string? language = null)
+    /// <param name="rate">
+    /// speech-dispatcher's -100..100, forwarded so the neural voice answers the
+    /// screen reader's speed control.
+    ///
+    /// <para><b>Reported 2026-09-06 as "piper does not obey the speed change."</b>
+    /// This method took no rate at all, so <c>SET RATE</c> reached only the
+    /// espeak fallback below — the voice a user is not listening to — and Orca's
+    /// slider did nothing to the one they were. It is passed as the speechd
+    /// number rather than a factor because the daemon owns what a rate means and
+    /// the range is documented and bounded.</para>
+    /// </param>
+    internal Process StartNeural(string text, string? voice, string? language = null, int rate = 0)
     {
         var psi = Base(CtlPath);
-        psi.ArgumentList.Add("render");
-        psi.ArgumentList.Add("--out");
-        psi.ArgumentList.Add("-");
+        foreach (string argument in NeuralArguments(text, voice, language, rate))
+            psi.ArgumentList.Add(argument);
+        return Start(psi);
+    }
+
+    /// <summary>
+    /// The command line <see cref="StartNeural"/> runs, separated out so it can
+    /// be asserted without starting a process — which is the only way the rate
+    /// reaching <c>vst-ctl</c> is testable at all.
+    /// </summary>
+    internal static IReadOnlyList<string> NeuralArguments(
+        string text, string? voice, string? language, int rate)
+    {
+        var arguments = new List<string> { "render", "--out", "-" };
+
+        // Sent only when it says something. A daemon too old to know --rate
+        // refuses an unknown flag, and every utterance would then fall through to
+        // espeak — so the ordinary case, a client that never set a rate, keeps
+        // the command line it has always had.
+        if (rate != 0)
+        {
+            arguments.Add("--rate");
+            arguments.Add(rate.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
         if (!string.IsNullOrWhiteSpace(voice))
         {
-            psi.ArgumentList.Add("--voice");
-            psi.ArgumentList.Add(voice);
+            arguments.Add("--voice");
+            arguments.Add(voice);
         }
 
         if (!string.IsNullOrWhiteSpace(language))
         {
-            psi.ArgumentList.Add("--language");
-            psi.ArgumentList.Add(language);
+            arguments.Add("--language");
+            arguments.Add(language);
         }
 
-        psi.ArgumentList.Add(text);
-        return Start(psi);
+        // Last, and never a flag: the text arrives from whatever window has
+        // focus, so it is not ours to trust. ArgumentList means it is never
+        // parsed by a shell — the same reasoning as the `--` on the espeak line.
+        arguments.Add(text);
+        return arguments;
     }
 
     /// <summary>
@@ -135,14 +172,15 @@ internal sealed class Voices
     /// speech-dispatcher's -100..100 onto espeak's words per minute, the way
     /// speech-dispatcher's own espeak module does it: 175 at 0, and the ends of
     /// the range at 80 and 450.
+    ///
+    /// <para><b>Delegated to Core rather than kept here, and the sharing is the
+    /// point.</b> The neural voice reads the same map as a multiplier — see
+    /// <see cref="SpeechRate.SpeechdRateScale"/> — so that a [trap 16] fallback,
+    /// which happens between one utterance and the next, changes the timbre and
+    /// not the pace. Two copies of these three numbers would let that property
+    /// rot silently the first time one of them was edited.</para>
     /// </summary>
-    internal static int EspeakWordsPerMinute(int rate)
-    {
-        rate = Math.Clamp(rate, -100, 100);
-        return rate < 0
-            ? 175 + rate * (175 - 80) / 100
-            : 175 + rate * (450 - 175) / 100;
-    }
+    internal static int EspeakWordsPerMinute(int rate) => SpeechRate.SpeechdWordsPerMinute(rate);
 
     private static ProcessStartInfo Base(string file) => new()
     {

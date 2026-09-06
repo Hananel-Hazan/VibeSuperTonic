@@ -224,6 +224,27 @@ public sealed record Request
     public string? Language { get; init; }
 
     /// <summary>
+    /// A speech-dispatcher rate, −100…100, adjusting the configured speed for
+    /// this utterance only. Null means "as configured", which is what every
+    /// other client sends.
+    ///
+    /// <para><b>Reported 2026-09-06.</b> The Speech Dispatcher module forwarded
+    /// <c>SET RATE</c> only to its espeak fallback, and <c>render</c> had no way
+    /// to carry it — so through Orca the rate slider did nothing to the voice the
+    /// user was listening to. The rate is per utterance rather than a setting
+    /// because that is what it is on the wire: speechd sends it on a SET that may
+    /// arrive between any two messages, and writing it into settings.json would
+    /// make a screen reader's slider quietly edit the file the Tune tab
+    /// owns.</para>
+    ///
+    /// <para>The number, not a multiplier: the range is documented and bounded,
+    /// and <see cref="VibeSuperTonic.Core.Audio.SpeechRate.SpeechdRateScale"/> is
+    /// the one place it becomes a factor — shared with the espeak fallback's own
+    /// map so a fallback mid-session does not also change the pace.</para>
+    /// </summary>
+    public int? Rate { get; init; }
+
+    /// <summary>
     /// Where to start, for <see cref="RequestVerb.Seek"/>. A character index into
     /// the text being read, in the same coordinates every reported boundary uses.
     /// Ignored by every other verb.

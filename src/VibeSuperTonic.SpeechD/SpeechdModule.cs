@@ -264,7 +264,8 @@ internal sealed class SpeechdModule
             }
 
             spoke = SpeakWith(
-                () => _voices.StartNeural(text, pick?.RenderVoice, pick?.RenderLanguage), "neural");
+                () => _voices.StartNeural(text, pick?.RenderVoice, pick?.RenderLanguage, _rate),
+                "neural");
         }
 
         // TRAP 16. Anything that went wrong with the neural voice — no daemon, a

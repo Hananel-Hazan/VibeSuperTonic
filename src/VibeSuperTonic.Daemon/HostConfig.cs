@@ -478,7 +478,16 @@ public sealed class HostConfig
         };
     }
 
-    public UtterancePlan Utterance(string? voice, string? language)
+    /// <param name="rateScale">
+    /// A caller's adjustment ON the configured rate, 1.0 for none.
+    ///
+    /// <para>Exists for the Speech Dispatcher path, where the rate is the screen
+    /// reader's and arrives per utterance — see
+    /// <see cref="SpeechRate.SpeechdRateScale"/>. It MULTIPLIES rather than
+    /// replaces, so a person who set 1.2x in the Tune tab and never moved Orca's
+    /// slider still hears 1.2x.</para>
+    /// </param>
+    public UtterancePlan Utterance(string? voice, string? language, double rateScale = 1.0)
     {
         // The one place the qualified form is unwrapped. Everything downstream —
         // the options record, the store, the calibration file, the engine router
@@ -486,15 +495,22 @@ public sealed class HostConfig
         var requested = VoiceId.Parse(voice ?? ConfiguredVoice);
         string voiceId = requested.Bare;
 
+        // A caller that sends nonsense must not be able to ask for a rate the
+        // arithmetic below cannot answer. Bounded well outside anything the
+        // speechd map produces (0.457 to 2.571), so it is a guard rather than a
+        // second policy.
+        if (double.IsNaN(rateScale) || rateScale <= 0) rateScale = 1.0;
+        rateScale = Math.Clamp(rateScale, 0.1, 10.0);
+
         // THE SETTINGS THIS VOICE ACTUALLY RUNS ON. Identical to the global ones
         // unless somebody has scoped something to this engine or this voice, and
         // reference-equal in that case, so the rate below is the same arithmetic
         // it always was for every install that has no overrides.
         var scoped = SettingsFor(voice);
-        double rate = ReferenceEquals(scoped, Settings)
+        double rate = (ReferenceEquals(scoped, Settings)
             ? _requestedRate
             : (scoped.EngineSpeed > 0 ? scoped.EngineSpeed : SpeechRate.DefaultEngineSpeed)
-              * (scoped.DspRate > 0 ? scoped.DspRate : 1.0f);
+              * (scoped.DspRate > 0 ? scoped.DspRate : 1.0f)) * rateScale;
 
         if (requested.MayBePiper && PiperVoices.Config(voiceId) is { } piperVoice)
         {
@@ -520,11 +536,19 @@ public sealed class HostConfig
                     : null);
         }
 
-        if (ReferenceEquals(scoped, Settings))
+        if (ReferenceEquals(scoped, Settings) && rateScale == 1.0)
             return new UtterancePlan(Synthesis(voiceId, language), _supertonicStretch, "supertonic", null);
 
+        // THE SCALE GOES TO THE DSP HALF, not to the model's. Supertonic degrades
+        // past its ceiling, so the model keeps the quality point the settings
+        // chose and the pitch-preserving stretch absorbs the screen reader's
+        // adjustment — which is the same division of labour DspRate already has.
+        // Compute clamps the stretch to [0.5, 2.0], so the extremes of speechd's
+        // range are served as far as the DSP can honestly go and no further.
         var (synthSpeed, stretch) = SpeechRate.Compute(
-            scoped.EngineSpeed, scoped.DspRate, scoped.RateClampCeiling);
+            scoped.EngineSpeed,
+            (float)((scoped.DspRate > 0 ? scoped.DspRate : 1.0f) * rateScale),
+            scoped.RateClampCeiling);
 
         return new UtterancePlan(
             new SupertonicOptions(

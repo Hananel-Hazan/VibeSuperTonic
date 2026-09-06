@@ -104,6 +104,26 @@ if (langAt >= 0)
     language = args[langAt + 1];
 }
 
+// --rate, the screen reader's, -100..100. Only `render` reads it: the hotkey
+// speaks at whatever settings.json says, and a rate on the press path would be a
+// second place the speed is decided. It is a per-utterance adjustment because
+// that is what speechd sends — a SET that can arrive between any two messages —
+// and writing it to settings.json would make Orca's slider edit the file the
+// Tune tab owns.
+int? rate = null;
+int rateAt = Array.IndexOf(args, "--rate");
+if (rateAt >= 0)
+{
+    if (rateAt + 1 >= args.Length
+        || !int.TryParse(args[rateAt + 1], System.Globalization.NumberStyles.Integer,
+                         System.Globalization.CultureInfo.InvariantCulture, out int parsedRate))
+    {
+        Console.Error.WriteLine("--rate needs a whole number from -100 to 100, e.g. `--rate 30`");
+        return 2;
+    }
+    rate = parsedRate;
+}
+
 // render's destination. "-" is stdout, which is what a Speech Dispatcher module
 // asks for: the module's whole job is `... | $PLAY_COMMAND`, and a temp file in
 // the middle of that is latency a screen reader pays on every utterance.
@@ -125,9 +145,13 @@ if (outAt >= 0)
 int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
 int outValueAt = outAt >= 0 ? outAt + 1 : -1;
 int langValueAt = langAt >= 0 ? langAt + 1 : -1;
+// -100 does not start with "--", so without excluding its index a negative rate
+// is spoken as text — the same trap --voice documents one option above.
+int rateValueAt = rateAt >= 0 ? rateAt + 1 : -1;
 var positional = args
     .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
-                     && i != voiceValueAt && i != outValueAt && i != langValueAt)
+                     && i != voiceValueAt && i != outValueAt && i != langValueAt
+                     && i != rateValueAt)
     .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
@@ -213,6 +237,10 @@ var request = new Request
     // Supertonic's language for this utterance. Null leaves the daemon's
     // configured one alone, which is every caller but the speechd module.
     Language = language,
+
+    // The screen reader's rate for this utterance, and only for `render`. Null
+    // is "as configured", which is every caller but the speechd module.
+    Rate = rate,
 
     // The session travels with the request, because the daemon may not have one.
     // This process was started by the keybinding, the tray or a shell — all
@@ -444,6 +472,9 @@ static void PrintUsage() =>
                        chooses the engine
           --language C speak Supertonic in this language (de, fr, ja); a Piper
                        voice ignores it, since the model is the language
+          --rate N     render at a speech-dispatcher rate, -100..100, adjusting
+                       whatever settings.json asks for. `render` only; 0 changes
+                       nothing. This is what carries a screen reader's speed.
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less);
                        also removes a voice that is the configured default
