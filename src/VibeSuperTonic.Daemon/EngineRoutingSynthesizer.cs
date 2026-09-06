@@ -32,6 +32,13 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
 {
     private readonly ISynthesizer _supertonic;
     private readonly PiperVoiceStore _store;
+
+    /// <summary>
+    /// The installed Piper voices, for the paths that change them. Exposed so
+    /// <c>voice install</c> and <c>voice remove</c> can say "the store just
+    /// changed" rather than waiting for a timestamp to notice.
+    /// </summary>
+    public PiperVoiceStore Voices => _store;
     private readonly Func<string, ISynthesizer> _buildPiper;
     private readonly Func<SpeechStateProbe> _sessionIdle;
     private readonly Action<string> _log;

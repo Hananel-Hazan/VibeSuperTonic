@@ -368,6 +368,19 @@ public sealed partial class DaemonServer
             // the voice.
             _config.PiperVoices.Config(voice.Id);
 
+            // THE STORE MUST SEE IT BEFORE ANYTHING ASKS. The download lands two
+            // files INSIDE piper/<id>/, which does not change piper/'s own
+            // timestamp — so a scan that ran during the download cached the set
+            // without this voice and had no reason to look again. Observed
+            // 2026-09-01: the voice below installed, was invisible to the router
+            // fifteen seconds later, and five presses in a row went to Supertonic
+            // with a Piper voice id. The calibration a line down could not see it
+            // either, which is why that install has no "; calibrating".
+            //
+            // PiperVoiceStore.StoreStamp now notices this on its own; this makes
+            // it certain on the one path that KNOWS the store just changed.
+            _engines?.Voices.Invalidate();
+
             bool calibrating = _engines?.StartCalibration(voice.Id, line =>
             {
                 lock (writeLock)
@@ -445,6 +458,11 @@ public sealed partial class DaemonServer
         var result = installer.Remove(wanted.Bare);
         if (result.Ok)
         {
+            // Same reason as the install path: the directory is gone and nothing
+            // may go on answering with it. Removing DOES move piper/'s own
+            // timestamp, so this is belt and braces rather than a fix — but the
+            // two paths should not differ in whether they say so.
+            _engines?.Voices.Invalidate();
             _engines?.ForgetCalibration(wanted.Bare);
             Log($"voice remove: {result.Message}");
         }

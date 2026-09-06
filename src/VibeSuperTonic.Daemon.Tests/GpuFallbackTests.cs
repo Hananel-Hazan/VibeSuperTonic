@@ -344,4 +344,98 @@ public class GpuFallbackTests : IDisposable
             $"…, 20% of {Environment.ProcessorCount} logical processors, never benchmarked",
             reason);
     }
+
+    // ------------------------- failures that are not the GPU's fault (2026-09-01)
+
+    /// <summary>
+    /// REPORTED FROM A REAL LOG, 2026-09-01. A voice that was not on disk turned
+    /// the GPU off for the rest of the session:
+    ///
+    /// <code>
+    /// inference: CUDA failed in use (FileNotFoundException: Voice style not found
+    ///   for 'en_US-hfc_female-medium'); falling back to the CPU and not retrying
+    ///   until restart
+    /// inference: CUDA, 2 threads -> CPU, 2 threads (no GPU available —
+    ///   FileNotFoundException: Voice style not found for 'en_US-hfc_female-medium')
+    /// </code>
+    ///
+    /// <para>"No GPU available — Voice style not found" is not a sentence about a
+    /// GPU. The catch here was a bare <c>catch (Exception)</c>, so every fault
+    /// during a render read as the provider failing — and the user then ran on the
+    /// CPU, slower, with <c>vst-ctl config</c> reporting a nonsense reason, until
+    /// they next restarted the daemon.</para>
+    /// </summary>
+    [Fact]
+    public void A_missing_file_is_not_the_gpu_failing()
+    {
+        var log = new List<string>();
+        var gpu = Fake.Rendering(() => throw new FileNotFoundException(
+            "Voice style not found for 'en_US-hfc_female-medium'"));
+        int rebuilds = 0;
+
+        var switcher = Build(gpu, (_, _) => { rebuilds++; return Fake.Rendering(() => new short[10]); }, log);
+
+        Assert.Throws<FileNotFoundException>(
+            () => switcher.Synthesize("hello", Options));
+
+        // It never pretended this was the GPU: no rebuild, no latch, and nothing
+        // in the log claiming the provider failed.
+        Assert.Equal(0, rebuilds);
+        Assert.DoesNotContain(log, l => l.Contains("failed in use"));
+        Assert.Equal(ExecutionProviders.Cuda, switcher.Decision.Provider);
+    }
+
+    /// <summary>A bad argument is the caller's fault too, and must travel intact.</summary>
+    [Fact]
+    public void An_invalid_argument_is_not_the_gpu_failing()
+    {
+        var log = new List<string>();
+        var gpu = Fake.Rendering(() => throw new ArgumentException("speaker 900 is out of range"));
+        int rebuilds = 0;
+
+        var switcher = Build(gpu, (_, _) => { rebuilds++; return Fake.Rendering(() => new short[10]); }, log);
+
+        Assert.Throws<ArgumentException>(
+            () => switcher.Synthesize("hello", Options));
+        Assert.Equal(0, rebuilds);
+        Assert.Equal(ExecutionProviders.Cuda, switcher.Decision.Provider);
+    }
+
+    /// <summary>
+    /// THE SAFETY NET, for the faults no deny-list can name. If the CPU fails the
+    /// same way the GPU did, the GPU was demonstrably not the problem — so the
+    /// latch comes off rather than costing the user their GPU on false evidence.
+    /// </summary>
+    [Fact]
+    public void A_cpu_that_fails_the_same_way_proves_the_gpu_was_innocent()
+    {
+        var log = new List<string>();
+        static short[] Boom() => throw new InvalidDataException("the model file is corrupt");
+        var gpu = Fake.Rendering(Boom);
+
+        var switcher = Build(gpu, (_, _) => Fake.Rendering(Boom), log);
+
+        Assert.Throws<InvalidDataException>(
+            () => switcher.Synthesize("hello", Options));
+
+        Assert.Contains(log, l => l.Contains("was not the problem"));
+    }
+
+    /// <summary>
+    /// And a real GPU fault still latches, which is the behaviour 0.2.11 added and
+    /// none of the above may weaken.
+    /// </summary>
+    [Fact]
+    public void A_genuine_provider_fault_still_falls_back_and_stays_fallen_back()
+    {
+        var log = new List<string>();
+        var gpu = Fake.Rendering(() => throw new InvalidOperationException(
+            "[ErrorCode:Fail] CUDA failure 100: no CUDA-capable device is detected"));
+
+        var switcher = Build(gpu, (_, _) => Fake.Rendering(() => new short[10]), log);
+
+        Assert.NotEmpty(switcher.Synthesize("hello", Options));
+        Assert.Equal(ExecutionProviders.Cpu, switcher.Decision.Provider);
+        Assert.Contains(log, l => l.Contains("failed in use"));
+    }
 }

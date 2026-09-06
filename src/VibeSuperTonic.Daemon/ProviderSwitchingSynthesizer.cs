@@ -419,13 +419,78 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         catch (Exception ex) when (
             provider != ExecutionProviders.Cpu &&
             ex is not OperationCanceledException &&
-            !cancellationToken.IsCancellationRequested)
+            !cancellationToken.IsCancellationRequested &&
+            CouldBeTheProvider(ex))
         {
+            var previous = _decision;
             var cpu = FallBackToCpu(ex, provider);
             if (cpu is null) throw;
             onFallback?.Invoke();
-            return call(cpu);
+
+            try
+            {
+                return call(cpu);
+            }
+            catch (Exception again) when (again.GetType() == ex.GetType())
+            {
+                // THE CPU FAILED THE SAME WAY, WHICH IS PROOF THE GPU WAS NOT AT
+                // FAULT. Latching it off for the life of the process on that
+                // evidence is how a broken voice id cost a user their GPU until
+                // they next restarted the daemon. Put it back and let the real
+                // error travel.
+                Unlatch(previous, again);
+                throw;
+            }
         }
+    }
+
+    /// <summary>
+    /// Could this exception plausibly BE the execution provider failing?
+    ///
+    /// <para><b>Reported 2026-09-01, from a real log.</b> A
+    /// <c>FileNotFoundException: Voice style not found for
+    /// 'en_US-hfc_female-medium'</c> — a voice that was not where it was looked
+    /// for, nothing whatever to do with CUDA — was caught by the bare
+    /// <c>catch (Exception)</c> here and turned the GPU off for the rest of the
+    /// session. The daemon then reported its provider as
+    /// <c>"no GPU available — FileNotFoundException: Voice style not found"</c>,
+    /// which is not a sentence about a GPU.</para>
+    ///
+    /// <para><b>A deny-list, not an allow-list, and deliberately.</b> The whole
+    /// point of the fallback is to survive faults nobody predicted — a driver
+    /// reset, an out-of-memory, a provider that throws something ORT has never
+    /// documented. Naming what a GPU failure looks like would re-introduce the
+    /// silence it exists to prevent. So the default stays "assume it might be the
+    /// GPU", and only the kinds that CANNOT be are excluded: a file that is not
+    /// there, a directory that is not there, and a caller passing something
+    /// invalid. Those are the ones observed being misread.</para>
+    /// </summary>
+    internal static bool CouldBeTheProvider(Exception ex) => ex switch
+    {
+        FileNotFoundException => false,
+        DirectoryNotFoundException => false,
+        ArgumentException => false,
+        _ => true,
+    };
+
+    /// <summary>
+    /// Undo a fallback that the evidence has just refuted, and say so where the
+    /// last line said the opposite.
+    /// </summary>
+    private void Unlatch(ExecutionDecision previous, Exception proof)
+    {
+        lock (_gate)
+        {
+            _gpuUnavailable = null;
+            _log($"inference: the CPU failed the same way ({proof.GetType().Name}), so " +
+                 $"{ExecutionProviders.Display(previous.Provider)} was not the problem — " +
+                 "it stays available and the error below is the real one");
+        }
+
+        // Between utterances, never inside one: this is called from a render that
+        // is about to throw, so the session is rebuilt on the next idle check
+        // rather than underneath the failure.
+        ReevaluateWhenIdle();
     }
 
     /// <summary>

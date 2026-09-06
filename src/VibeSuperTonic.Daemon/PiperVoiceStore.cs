@@ -137,12 +137,28 @@ public sealed class PiperVoiceStore
         return curve;
     }
 
+    /// <summary>
+    /// Forget everything and look again on the next question.
+    ///
+    /// <para>For the paths that KNOW the store changed — installing or removing a
+    /// voice — so the answer is right on the next press rather than whenever a
+    /// timestamp happens to move.</para>
+    /// </summary>
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _everScanned = false;
+            _mtime = long.MinValue;
+        }
+    }
+
     private void Rescan()
     {
         long mtime;
         try
         {
-            mtime = Directory.Exists(_root) ? Directory.GetLastWriteTimeUtc(_root).Ticks : long.MinValue;
+            mtime = StoreStamp();
         }
         catch
         {
@@ -188,5 +204,44 @@ public sealed class PiperVoiceStore
 
             _voices = found;
         }
+    }
+
+    /// <summary>
+    /// A number that changes whenever the installed set could have changed.
+    ///
+    /// <para><b>The parent directory's timestamp is not enough, and that reached
+    /// a user.</b> Installing a voice creates <c>piper/&lt;id&gt;/</c> — which
+    /// does bump <c>piper/</c> — and then downloads two files INTO it over
+    /// several seconds, which does not. So a rescan triggered during the download
+    /// saw the new directory, found it incomplete, cached the set without it and
+    /// recorded the new timestamp; when the files landed, nothing about
+    /// <c>piper/</c> had changed and the voice stayed invisible until the daemon
+    /// restarted.</para>
+    ///
+    /// <para>Observed 2026-09-01: <c>en_US-hfc_female-medium</c> finished
+    /// installing at 17:24:26 and fifteen seconds later the router sent it to
+    /// SUPERTONIC — <c>Voice style not found for 'en_US-hfc_female-medium'</c>,
+    /// five utterances in a row. Its install line is missing the "; calibrating"
+    /// the voice installed before it has, because the calibration could not see
+    /// it either.</para>
+    ///
+    /// <para>So the stamp folds in each voice directory's own timestamp. That
+    /// also covers a voice dropped in by hand, which INSTALL.txt invites and
+    /// <see cref="Invalidate"/> cannot know about. It is a stat per voice on a
+    /// path that already enumerates them, against a set that is tens of entries
+    /// at most.</para>
+    /// </summary>
+    private long StoreStamp()
+    {
+        if (!Directory.Exists(_root)) return long.MinValue;
+
+        long stamp = Directory.GetLastWriteTimeUtc(_root).Ticks;
+        foreach (string dir in Directory.GetDirectories(_root))
+        {
+            // Rotated in rather than summed: two directories changing in opposite
+            // directions must not be able to cancel out.
+            stamp = unchecked(stamp * 31 + Directory.GetLastWriteTimeUtc(dir).Ticks);
+        }
+        return stamp;
     }
 }
