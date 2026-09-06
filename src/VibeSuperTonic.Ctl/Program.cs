@@ -35,7 +35,29 @@ using VibeSuperTonic.Core.Synthesis;
 // ssh, on a server, and before any window exists — and because the Tune and
 // Voices tabs call these same verbs rather than having paths of their own.
 
-const int AutoStartBudgetMs = 5000;
+// HOW LONG TO WAIT FOR A DAEMON WE JUST STARTED.
+//
+// This was a flat 5000 ms, and it was losing presses. Measured across 81 launches
+// in a real install's log: p50 0.85 s, but every morning's first start re-execs
+// for the CUDA provider pack and takes 4.07-4.67 s — nine of the 81 landed inside
+// one second of the budget, on an operation observed to vary by 2.6 s between
+// identical runs. When it blew, the client printed to a stderr the desktop
+// shortcut discards, exited 1, and the press was simply lost; the daemon then
+// finished starting, so the NEXT press worked. That is a hotkey that "sometimes
+// does nothing" with nothing anywhere recording it.
+//
+// The number was never the right lever. What the client actually wants to know is
+// "is the thing I started still coming?", so it now waits WHILE THE PROCESS IS
+// ALIVE and gives up early when it dies — a crash is reported in about a second
+// instead of after five, and a slow honest start is waited out instead of being
+// abandoned 300 ms short.
+const int AutoStartCeilingMs = 30000;
+
+// How long to keep trying after the process we started has exited. It is not
+// necessarily a failure: a daemon is free to fork and let its parent go, and
+// giving up the instant the parent exits would break that arrangement for a
+// saving of one second.
+const int AfterExitGraceMs = 1500;
 
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
@@ -292,17 +314,16 @@ if (socket is null)
         return 1;
     }
 
-    if (!TryStartDaemon(out string startError, out string? startedFrom))
+    if (!TryStartDaemon(out string startError, out string? startedFrom, out var started))
     {
         Console.Error.WriteLine($"no daemon listening on {path} and could not start one: {startError}");
         return 1;
     }
 
-    socket = WaitForDaemon(path, AutoStartBudgetMs);
+    socket = WaitForDaemon(path, started, out string waitOutcome);
     if (socket is null)
     {
-        Console.Error.WriteLine(
-            $"started a daemon but it did not accept a connection within {AutoStartBudgetMs} ms");
+        Console.Error.WriteLine($"started a daemon but it never accepted a connection: {waitOutcome}");
 
         // The AppImage case has one failure this sentence cannot name, and it is
         // the one a user cannot diagnose: no FUSE means the image never mounted,
@@ -622,15 +643,49 @@ static Socket? Connect(string path)
     }
 }
 
-static Socket? WaitForDaemon(string path, int budgetMs)
+/// <summary>
+/// Wait for the daemon we just started to accept a connection.
+///
+/// <para><b>Bounded by the process, not by a stopwatch.</b> See
+/// <c>AutoStartCeilingMs</c> for the presses the old flat budget lost. Polling
+/// the socket is unchanged; what is new is that the wait ends for a REASON — the
+/// daemon answered, the daemon died, or it is still not listening after the
+/// ceiling — and the reason is reported instead of a bare number.</para>
+/// </summary>
+static Socket? WaitForDaemon(string path, Process? started, out string outcome)
 {
-    var deadline = Environment.TickCount64 + budgetMs;
-    while (Environment.TickCount64 < deadline)
+    long begin = Environment.TickCount64;
+    long ceiling = begin + AutoStartCeilingMs;
+    long? exitedAt = null;
+
+    while (true)
     {
-        if (Connect(path) is { } socket) return socket;
+        if (Connect(path) is { } socket) { outcome = ""; return socket; }
+
+        long now = Environment.TickCount64;
+
+        // It died. Say so quickly rather than sitting out the ceiling: a daemon
+        // that cannot start is a different problem from one that is slow, and the
+        // sentence a user needs is different too.
+        if (started is not null && started.HasExited)
+        {
+            exitedAt ??= now;
+            if (now - exitedAt.Value >= AfterExitGraceMs)
+            {
+                outcome = $"it exited with code {started.ExitCode} after " +
+                          $"{(exitedAt.Value - begin) / 1000.0:0.0} s without listening on {path}";
+                return null;
+            }
+        }
+
+        if (now >= ceiling)
+        {
+            outcome = $"still not listening on {path} after {AutoStartCeilingMs / 1000} s";
+            return null;
+        }
+
         Thread.Sleep(50);
     }
-    return null;
 }
 
 /// <summary>
@@ -678,9 +733,10 @@ static string AppImageStartHint(string image)
 /// The AppImage the daemon was launched from, or null for an ordinary install.
 /// Carried out so the caller can say something useful when nothing connects.
 /// </param>
-static bool TryStartDaemon(out string error, out string? startedFrom)
+static bool TryStartDaemon(out string error, out string? startedFrom, out Process? started)
 {
     startedFrom = null;
+    started = null;
     // Three places, in order of how specific they are.
     //
     //   1. $VST_DAEMON, which is a person overriding everything.
@@ -736,6 +792,7 @@ static bool TryStartDaemon(out string error, out string? startedFrom)
 
         var proc = Process.Start(psi);
         if (proc is null) { error = "Process.Start returned null"; return false; }
+        started = proc;
 
         proc.OutputDataReceived += (_, _) => { };
         proc.ErrorDataReceived += (_, _) => { };

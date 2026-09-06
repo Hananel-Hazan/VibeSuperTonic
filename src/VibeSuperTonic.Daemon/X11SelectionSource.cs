@@ -54,14 +54,17 @@ public sealed class X11SelectionSource : ISelectionSource
     public const int MaxChars = 100 * 1024;
 
     /// <summary>
-    /// How long to wait for the owning window to answer.
+    /// How long to wait for the owning window to answer. See
+    /// <see cref="SelectionWait"/>, which is where the number lives and why.
     ///
-    /// <para>Selection transfer is a round trip through another application's
-    /// event loop, so a busy or wedged owner can simply never reply. 300 ms is
-    /// short enough to stay inside the acknowledgement budget and long enough
-    /// that a loaded Firefox still makes it.</para>
+    /// <para><b>This was 300 ms, and the comment here used to say that was "long
+    /// enough that a loaded Firefox still makes it".</b> Measured on 2026-09-06
+    /// by freezing a selection owner's event loop: half a second of the owner
+    /// being busy already lost the press, and browsers and Electron apps stall
+    /// that long routinely. The claim was wrong and the press was the price.
+    /// </para>
     /// </summary>
-    private static readonly TimeSpan Timeout = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan Timeout = TimeSpan.FromMilliseconds(SelectionWait.OwnerReplyMs);
 
     /// <summary>
     /// Bytes to ask for in one go — 32-bit units, so this is 4 MB.
@@ -268,8 +271,10 @@ public sealed class X11SelectionSource : ISelectionSource
 
         if (!WaitForSelectionNotify(dpy, window, utf8, out XEvent reply))
             return SelectionResult.None(
-                "the window holding the selection did not answer within " +
-                $"{Timeout.TotalMilliseconds:F0} ms.");
+                $"the window holding the selection did not answer within " +
+                $"{Timeout.TotalMilliseconds / 1000.0:0.#} s. It is most likely busy — browsers " +
+                "and Electron apps stall their event loop for hundreds of milliseconds at a " +
+                "time. Press again in a moment, or copy the text elsewhere and select it there.");
 
         // The owner exists but cannot express the selection as UTF-8 text.
         // Some Java/Swing and a few Electron windows behave this way; the

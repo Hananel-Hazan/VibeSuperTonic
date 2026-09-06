@@ -1,9 +1,55 @@
 namespace VibeSuperTonic.Daemon;
 
 /// <summary>
+/// How long to wait on the application that owns the selection — <b>one
+/// statement of it, read by both the Wayland and the X11 source</b>.
+///
+/// <para><b>Reported 2026-09-06:</b> "I hit the hotkey on text in Firefox or
+/// VS Code and it is not read... then I copy it to Kate, select all, hit the
+/// hotkey, and it reads it." Handing over a selection is a round trip through
+/// the OWNING application's event loop. Kate is a light native app and answers
+/// in about 15 ms every time; a browser or an Electron app stalls its loop for
+/// hundreds of milliseconds under load — rendering, GC, an extension host, a
+/// large file.</para>
+///
+/// <para>Both sources allowed 300 ms and both lost the press. Measured by
+/// freezing a selection owner's event loop: a <b>0.5 s stall was already
+/// enough</b>. The X11 source's own comment claimed 300 ms was "long enough that
+/// a loaded Firefox still makes it", which is the belief this measurement
+/// refutes.</para>
+///
+/// <para><b>Shared so the two cannot drift.</b> They are the same question asked
+/// of two protocols, and a user on X11 has exactly the bug a user on Wayland
+/// has.</para>
+/// </summary>
+public static class SelectionWait
+{
+    /// <summary>
+    /// Wait for the owner to answer at all. Two seconds: it covers the stalls
+    /// that were losing presses, still fails in a time a person will sit
+    /// through, and costs nothing in the ordinary case — a responsive owner
+    /// answers in tens of milliseconds.
+    /// </summary>
+    public const int OwnerReplyMs = 2000;
+
+    /// <summary>
+    /// Once it is talking, how long a gap between chunks is still "working".
+    /// Shorter than the first reply, because an owner that has started writing
+    /// has its data ready.
+    /// </summary>
+    public const int BetweenChunksMs = 1000;
+
+    /// <summary>
+    /// The ceiling on one transfer, so an owner that trickles forever cannot
+    /// hold the press open. R-9's 100 KB cap bounds the size; this bounds time.
+    /// </summary>
+    public const int TotalMs = 5000;
+}
+
+/// <summary>
 /// Where a bare <c>toggle</c> gets its text.
 ///
-/// A seam rather than a call because it is Phase 4's whole job — reading the X11
+/// A seam rather than a call because it is Phase 4's whole job — reading the
 /// PRIMARY selection without stealing it back from the window that owns it
 /// [R-6], and refusing to read a whole book [R-9]. Phase 3 needs the daemon to
 /// work end to end before that exists, so it ships with
@@ -19,12 +65,19 @@ public interface ISelectionSource
     /// <summary>
     /// Capture the current selection.
     ///
-    /// <para><b>Synchronous on purpose.</b> The implementation blocks on
-    /// <c>SelectionNotify</c> with a 300 ms cap, which is inside the
-    /// acknowledgement budget (28 ms of it is spent so far) and far below the
-    /// ~600 ms floor before the first sound. An async seam here would buy
-    /// nothing and would put the capture on a different thread from the gate
-    /// decision that depends on it.</para>
+    /// <para><b>Synchronous on purpose.</b> An async seam here would buy nothing
+    /// and would put the capture on a different thread from the gate decision
+    /// that depends on it.</para>
+    ///
+    /// <para><b>It can now block for as long as <see cref="SelectionWait"/>
+    /// allows, and that is a deliberate reversal.</b> This used to say the cap
+    /// was 300 ms and "inside the acknowledgement budget". It was — and it was
+    /// also short enough that a busy Firefox or VS Code lost the press
+    /// entirely, silently, which is the failure R-5 exists to prevent. Waiting
+    /// out a busy application beats answering instantly with nothing, so the
+    /// press may now take a moment when the owner is slow. It is unchanged in
+    /// the ordinary case: a responsive owner answers in tens of
+    /// milliseconds.</para>
     /// </summary>
     /// <param name="display">
     /// The X display to read from — <c>$DISPLAY</c> as the *client* saw it, not

@@ -90,7 +90,58 @@ internal static unsafe class WaylandNative
 
     /// <summary>What a capture attempt saw at the protocol level.</summary>
     internal readonly record struct WaylandCapture(
-        bool Connected, bool ProtocolPresent, bool HadOffer, string? Text, string? Error);
+        bool Connected, bool ProtocolPresent, bool HadOffer, string? Text, string? Error,
+        bool TimedOut = false);
+
+/// <summary>
+/// How long to wait on the application that owns the selection, split into the
+/// two questions that are actually being asked.
+/// </summary>
+/// <param name="FirstByteMs">
+/// Wait for the owner to write ANYTHING. This is "is this application going to
+/// answer at all", and it is the one that has to tolerate a busy event loop: a
+/// responsive owner answers in 15-35 ms (measured), while Firefox and VS Code
+/// stall for hundreds of milliseconds under load.
+/// </param>
+/// <param name="IdleMs">
+/// Once it is talking, how long a gap between chunks is still "working". Shorter
+/// than the first-byte wait because an owner that has started writing has its
+/// data ready.
+/// </param>
+/// <param name="TotalMs">
+/// The ceiling on the whole transfer, so an owner that trickles bytes forever
+/// cannot hold the press open. R-9's 100 KB cap bounds the size; this bounds the
+/// time.
+/// </param>
+internal readonly record struct ReceiveBudget(int FirstByteMs, int IdleMs, int TotalMs)
+{
+    /// <summary>
+    /// The shipped budget.
+    ///
+    /// <para><b>2 s for the first byte, measured rather than guessed.</b> The
+    /// value this replaces was 300 ms for the entire transfer, and freezing a
+    /// selection owner's event loop showed a 0.5 s stall was already enough to
+    /// lose the press. Browsers and Electron apps routinely stall that long. Two
+    /// seconds covers them while still failing in a time a person will sit
+    /// through — and it costs nothing in the ordinary case, which returns in
+    /// tens of milliseconds.</para>
+    /// </summary>
+    public static ReceiveBudget Default { get; } = new(
+        FirstByteMs: SelectionWait.OwnerReplyMs,
+        IdleMs: SelectionWait.BetweenChunksMs,
+        TotalMs: SelectionWait.TotalMs);
+}
+
+/// <summary>
+/// What one transfer produced, and <b>whether it finished</b>.
+///
+/// <para>The distinction is the point. The loop this comes from used to
+/// <c>break</c> on a timeout exactly as it did on end-of-file, so a caller could
+/// not tell an abandoned transfer from a complete one: nothing arriving was
+/// reported as "the owner closed", and a partial read was reported as a
+/// success.</para>
+/// </summary>
+internal readonly record struct ReceiveResult(string Text, bool TimedOut, bool SawEof);
 
     /// <summary>
     /// Read one selection. <paramref name="primary"/> false reads the clipboard.
@@ -102,7 +153,7 @@ internal static unsafe class WaylandNative
     /// a 300 ms budget — measured at 30 ms including process start, so a fraction
     /// of that in-process.</para>
     /// </summary>
-    internal static WaylandCapture Capture(bool primary, int timeoutMs)
+    internal static WaylandCapture Capture(bool primary, ReceiveBudget budget)
     {
         lock (Gate)
         {
@@ -171,8 +222,8 @@ internal static unsafe class WaylandNative
                             ? "the selection offered no types at all"
                             : $"the selection offers no text type (offered: {string.Join(", ", offered)})");
 
-                string text = Receive(display, chosen, mime, timeoutMs);
-                return new WaylandCapture(true, true, true, text, null);
+                var received = Receive(display, chosen, mime, budget);
+                return new WaylandCapture(true, true, true, received.Text, null, received.TimedOut);
             }
             finally
             {
@@ -272,10 +323,10 @@ internal static unsafe class WaylandNative
         return null;
     }
 
-    private static string Receive(IntPtr display, IntPtr offer, string mime, int timeoutMs)
+    private static ReceiveResult Receive(IntPtr display, IntPtr offer, string mime, ReceiveBudget budget)
     {
         int* fds = stackalloc int[2];
-        if (pipe(fds) != 0) return "";
+        if (pipe(fds) != 0) return new ReceiveResult("", TimedOut: false, SawEof: false);
 
         IntPtr args = Zeroed(IntPtr.Size * 2);
         IntPtr mimeStr = Utf8(mime);
@@ -301,30 +352,107 @@ internal static unsafe class WaylandNative
         // in the middle of a sentence.
         var text = new Utf8PipeDecoder();
 
-        long deadline = Environment.TickCount64 + timeoutMs;
-
-        // Bounded, unlike the spike. A selection transfer is a round trip through
-        // another application's event loop and a wedged owner can simply never
-        // write — the X11 source caps the same wait at 300 ms for the same reason.
+        // The loop lives in Pump, which is where it is explained and where it is
+        // tested. Everything here is the part that needs a compositor: poll a
+        // descriptor and feed the decoder. Pump owns the deadlines and the
+        // decision about what ended the transfer, because that decision is what
+        // was wrong and a decision no test can reach is a decision nobody
+        // checks — this exact conflation survived a first round of tests.
+        ReceiveResult result;
         fixed (byte* p = buf)
         {
-            while (true)
-            {
-                int remaining = (int)(deadline - Environment.TickCount64);
-                if (remaining <= 0) break;
+            byte* pinned = p;
+            result = Pump(
+                budget,
+                allowedMs =>
+                {
+                    PollFd pfd = new() { Fd = fds[0], Events = POLLIN };
+                    int ready = poll(&pfd, 1, allowedMs);
+                    if (ready == 0) return new ChunkResult(ChunkOutcome.Timeout, 0);
+                    if (ready < 0) return new ChunkResult(ChunkOutcome.Timeout, 0);
 
-                PollFd pfd = new() { Fd = fds[0], Events = POLLIN };
-                int ready = poll(&pfd, 1, remaining);
-                if (ready <= 0) break;                       // timeout or error
+                    nint n = read(fds[0], pinned, (nuint)buf.Length);
+                    if (n == 0) return new ChunkResult(ChunkOutcome.Eof, 0);
+                    if (n < 0) return new ChunkResult(ChunkOutcome.Error, 0);
 
-                nint n = read(fds[0], p, (nuint)buf.Length);
-                if (n <= 0) break;                           // EOF, or a failure
-                text.Feed(buf, (int)n);
-            }
+                    text.Feed(buf, (int)n);
+                    return new ChunkResult(ChunkOutcome.Data, (int)n);
+                },
+                () => text.Finish());
         }
 
         close(fds[0]);
-        return text.Finish();
+        return result;
+    }
+
+    /// <summary>What one attempt at reading from the owner produced.</summary>
+    internal enum ChunkOutcome { Data, Eof, Timeout, Error }
+
+    internal readonly record struct ChunkResult(ChunkOutcome Outcome, int Bytes);
+
+    /// <summary>Read once, blocking at most <c>allowedMs</c>.</summary>
+    internal delegate ChunkResult ReadChunk(int allowedMs);
+
+    /// <summary>
+    /// The transfer loop: TWO DEADLINES, NOT ONE, AND THAT IS THE WHOLE FIX.
+    ///
+    /// <para><b>Reported 2026-09-06:</b> "I hit the hotkey on text in Firefox or
+    /// VS Code and it is not read... then I copy it to Kate, select all, press,
+    /// and it reads it." Handing over a selection is a round trip through the
+    /// OTHER application's event loop, and a browser or an Electron app stalls
+    /// that loop for hundreds of milliseconds — rendering, GC, an extension host
+    /// — while Kate answers in about 15 ms every time.</para>
+    ///
+    /// <para>The single 300 ms budget this replaces was a deadline for the WHOLE
+    /// transfer, so a busy owner blew it and the press did nothing. Measured by
+    /// freezing an owner's event loop: a 0.5 s stall was already enough.</para>
+    ///
+    /// <para>So: wait <see cref="ReceiveBudget.FirstByteMs"/> for the owner to
+    /// say anything at all, then <see cref="ReceiveBudget.IdleMs"/> between
+    /// chunks once it is talking, under an overall ceiling. A slow but working
+    /// owner completes; a wedged one still fails in bounded time.</para>
+    ///
+    /// <para><b>And a timeout is not an end of file.</b> The loop this replaces
+    /// used one <c>break</c> for both, so the caller got whatever had arrived
+    /// with no way to tell a finished transfer from an abandoned one: nothing was
+    /// reported as "the owner closed" and a partial read as a complete success.
+    /// </para>
+    /// </summary>
+    /// <param name="clock">Injected so the deadlines are testable without sleeping.</param>
+    internal static ReceiveResult Pump(
+        ReceiveBudget budget, ReadChunk read, Func<string> finish, Func<long>? clock = null)
+    {
+        clock ??= () => Environment.TickCount64;
+
+        long begin = clock();
+        long ceiling = begin + budget.TotalMs;
+        long next = begin + budget.FirstByteMs;
+
+        while (true)
+        {
+            long deadline = Math.Min(next, ceiling);
+            int remaining = (int)(deadline - clock());
+            if (remaining <= 0) return new ReceiveResult(finish(), TimedOut: true, SawEof: false);
+
+            var chunk = read(remaining);
+            switch (chunk.Outcome)
+            {
+                case ChunkOutcome.Data:
+                    // It is talking. Each chunk earns the next idle window, still
+                    // under the overall ceiling.
+                    next = clock() + budget.IdleMs;
+                    continue;
+
+                case ChunkOutcome.Eof:
+                    return new ReceiveResult(finish(), TimedOut: false, SawEof: true);
+
+                case ChunkOutcome.Timeout:
+                    return new ReceiveResult(finish(), TimedOut: true, SawEof: false);
+
+                default:
+                    return new ReceiveResult(finish(), TimedOut: false, SawEof: false);
+            }
+        }
     }
 
     // ------------------------------------------------- descriptor construction

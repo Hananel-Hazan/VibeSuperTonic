@@ -992,7 +992,13 @@ public sealed partial class DaemonServer : IDisposable
         lock (_gateLock)
         {
             if (!_gate.PressToRead(Environment.TickCount64))
+            {
+                // Debounce. Logged like any other press that produces no speech —
+                // it is the expected outcome of a double tap, and it is also what
+                // a key repeating under a stuck modifier looks like.
+                Log($"press ignored: within the {ToggleGate.DefaultDebounceMs} ms debounce window");
                 return Response.Success(ToggleAction.Ignored);
+            }
         }
 
         string? text = request.Text;
@@ -1008,6 +1014,12 @@ public sealed partial class DaemonServer : IDisposable
             if (!selection.Ok) return Refuse(selection.Reason!);
             text = selection.Text;
             notice = selection.Notice;
+
+            // A capture that had to change what it read — truncated by R-9, or cut
+            // short by an owner that stopped sending. Both reach the user as a
+            // passage that ends early, which is exactly the shape nobody reports
+            // as a bug because it sounds like the selection was short.
+            if (notice is { Length: > 0 }) Log($"selection: {notice}");
 
             // Already reading exactly this? Then the press means nothing and
             // must do nothing.
@@ -1027,6 +1039,7 @@ public sealed partial class DaemonServer : IDisposable
                 string.Equals(text, _session.CurrentText, StringComparison.Ordinal))
             {
                 lock (_gateLock) _gate.NoteState(_session.State);
+                Log($"press ignored: already reading this selection ({text!.Length} chars, {_session.State})");
                 return Response.Success(ToggleAction.Ignored);
             }
         }
@@ -1207,9 +1220,25 @@ public sealed partial class DaemonServer : IDisposable
     /// is not a state change, and leaving the optimistic Preparing behind would
     /// make the next press read as a stop.
     /// </summary>
+    /// <summary>
+    /// Decline a request, and <b>say so where somebody can find it</b>.
+    ///
+    /// <para><b>The logging is the point, and its absence cost a diagnosis.</b>
+    /// A refusal travels back to <c>vst-ctl</c>, which prints it to stderr — and
+    /// on the hotkey path there is no stderr: a desktop shortcut discards it. So
+    /// every refusal was invisible on both sides at once, and a press that did
+    /// nothing left no trace anywhere. Asked on 2026-09-06 why the key sometimes
+    /// does nothing, the honest answer was that the product had never recorded a
+    /// single instance of it.</para>
+    ///
+    /// <para>R-5 says a press must never be silent. A refused press is still a
+    /// press, and one line in the log is the difference between a user who can
+    /// report what happened and one who can only say "sometimes".</para>
+    /// </summary>
     private Response Refuse(string message)
     {
         lock (_gateLock) _gate.NoteState(_session.State);
+        Log($"refused: {message}");
         return Response.Fail(message);
     }
 
