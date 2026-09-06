@@ -417,13 +417,39 @@ _vst_kb_preflight() {
 #                └─ us ─┘           └─ il (Hebrew) ─┘
 #
 # asciitilde is the shifted keysym in BOTH groups, so stop works whichever layout
-# is active. `grave` exists only in the Latin group, so READ is the fragile one
-# here — if it stops working while typing Hebrew, that is why, and the fix is a
-# different key rather than a different spelling of this one.
+# is active. `grave` exists only in the Latin group, so READ is the fragile one.
+#
+# THAT PREDICTION CAME TRUE, AND IT COST WEEKS. Written here 2026-08-22 as "if it
+# stops working while typing Hebrew, that is why" — and then reported on
+# 2026-09-06 as a hotkey that "sometimes does nothing", chased through the daemon,
+# the selection capture and the autostart before anyone re-read this paragraph.
+# Two real bugs were found and fixed on the way; neither was the one the user had.
+#
+# The reason it hid so well is in the line above: STOP kept working. The user's
+# own words were "I hit the hotkey for stopping and then the hotkey to read and
+# it is still not reading" — which reads as a daemon that is stuck, and is
+# actually one key arriving and the other not. SwitchMode=Window puts a different
+# layout on every window, so it follows the app rather than the clock: dead in the
+# browser they type Hebrew in, alive in a freshly opened Kate.
+#
+# THE FIX IS A SECOND SPELLING, NOT A DIFFERENT KEY. The note above said a
+# different key, which would have cost every existing user their muscle memory for
+# a fault that is one keysym wide. The PHYSICAL key is the same in both groups —
+# keycode 49 — so binding both keysyms it can emit makes the same finger movement
+# work in either layout. Plasma stores alternates tab-separated, which is what
+# ALT below becomes.
+#
+# A layout that maps keycode 49 to something else again would still be dark, and
+# the honest answer for that is a key of the user's choosing in System Settings.
 
 VST_KB_KDE_DESKTOP_ID="vibesupertonic.desktop"
 VST_KB_KDE_ACTIONS=("Read" "Stop")
 VST_KB_KDE_ACCELS=('Ctrl+`' 'Ctrl+~')
+
+# Alternate spellings of THE SAME PHYSICAL KEY, per action, empty where none is
+# needed. `Ctrl+;` is keycode 49 under the Hebrew group; Stop needs none because
+# asciitilde is already shared by both.
+VST_KB_KDE_ALT_ACCELS=('Ctrl+;' '')
 VST_KB_KDE_ACTION_NAMES=("Speak selection" "Stop speaking")
 
 # A .desktop Exec field, quoted only when it needs to be. The freedesktop spec
@@ -576,6 +602,7 @@ _vst_kde_bind() {   # <install-dir>
 
     for i in "${!VST_KB_KDE_ACTIONS[@]}"; do
         accel="${VST_KB_KDE_ACCELS[$i]}"
+        alt="${VST_KB_KDE_ALT_ACCELS[$i]:-}"
         conflicts="$(_vst_kde_conflicts "$accel")"
         if [[ -n "$conflicts" ]]; then
             _vst_kb_warn "$accel is already bound to:"
@@ -590,9 +617,23 @@ _vst_kde_bind() {   # <install-dir>
             bound=$((bound+1))
         fi
 
+        # The alternate rides along only when the primary was taken, and only
+        # when it is itself free — a second spelling that collides with somebody
+        # else's shortcut is a second way to steal one.
+        written="$accel"
+        if [[ -n "$accel" && -n "$alt" ]]; then
+            if [[ -n "$(_vst_kde_conflicts "$alt")" ]]; then
+                _vst_kb_warn "$alt is already bound elsewhere, so ${VST_KB_NAMES[$i]} has only $accel"
+                _vst_kb_warn "— it will not fire while a non-Latin keyboard layout is active."
+            else
+                written="$accel"$'\t'"$alt"
+                _vst_kb_info "${VST_KB_NAMES[$i]}: $accel and $alt (the same physical key in either layout)"
+            fi
+        fi
+
         _vst_kde_write --file kglobalshortcutsrc \
             --group services --group "$VST_KB_KDE_DESKTOP_ID" \
-            --key "${VST_KB_KDE_ACTIONS[$i]}" "$accel"
+            --key "${VST_KB_KDE_ACTIONS[$i]}" "$written"
     done
 
     # Without this the service id does not resolve and the shortcut is inert.
