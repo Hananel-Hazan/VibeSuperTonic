@@ -131,8 +131,10 @@ public sealed record SnapWindow(IReadOnlyList<string> Argv, IReadOnlyDictionary<
         return new SnapWindow(argv, expanded);
     }
 
+    // Joined with '/', never Path.Combine: a snap path is POSIX whatever the
+    // platform, and Core's tests run on Windows too.
     private static string InSnap(string path, string snapRoot) =>
-        path.StartsWith('/') ? path : Path.Combine(snapRoot, path);
+        path.StartsWith('/') ? path : snapRoot.TrimEnd('/') + "/" + path;
 
     private static string Unquote(string value) =>
         value.Length >= 2 && (value[0] == '\'' || value[0] == '"') && value[^1] == value[0]

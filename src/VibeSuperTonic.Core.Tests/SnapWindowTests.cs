@@ -150,7 +150,7 @@ public sealed class SnapWindowTests
 
             var window = SnapWindow.Resolve(root, NoEnv, out var why);
             Assert.Null(why);
-            Assert.Equal(Path.Combine(root, "vibesupertonic-ui"), window!.Argv[^1]);
+            Assert.Equal(root + "/vibesupertonic-ui", window!.Argv[^1]);
         }
         finally
         {
