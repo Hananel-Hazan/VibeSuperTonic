@@ -121,7 +121,12 @@ compose_and_build() {
     rm -f "$out"
     mode=()
     (( destructive )) && mode=(--destructive-mode)
-    (cd "$project" && snapcraft pack "${mode[@]}" --output "$out") || die "snapcraft pack failed"
+    # snapcraft refuses to write outside its project directory, so the snap
+    # lands there first and is moved to dist/ after. Found by CI's first run.
+    built="$project/$(basename "$out")"
+    rm -f "$built"
+    (cd "$project" && snapcraft pack "${mode[@]}" --output "$built") || die "snapcraft pack failed"
+    [[ -f "$built" ]] && mv -f "$built" "$out"
     [[ -f "$out" ]] || die "snapcraft reported success and produced no $out"
 }
 

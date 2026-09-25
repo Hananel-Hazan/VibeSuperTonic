@@ -106,7 +106,9 @@ public sealed class FlatpakPeerTests
     {
         var peer = new FlatpakPeer(Id, Inside: true);
 
-        Assert.Equal($"/run/user/1000/app/{Id}/vibesupertonic/ctl.sock",
+        // Path.Combine for the part SocketPath has always joined that way, so the
+        // test holds on the Windows runner too. The Flatpak part is always '/'.
+        Assert.Equal(Path.Combine($"/run/user/1000/app/{Id}", "vibesupertonic", "ctl.sock"),
                      Protocol.SocketPath("/run/user/1000", _ => true, peer));
 
         // And the host side names the same file, which is the whole point.
@@ -117,7 +119,7 @@ public sealed class FlatpakPeerTests
     [Fact]
     public void Without_a_flatpak_the_socket_is_where_it_always_was()
     {
-        Assert.Equal("/run/user/1000/vibesupertonic/ctl.sock",
+        Assert.Equal(Path.Combine("/run/user/1000", "vibesupertonic", "ctl.sock"),
                      Protocol.SocketPath("/run/user/1000", _ => true, flatpak: null));
     }
 

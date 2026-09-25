@@ -90,7 +90,7 @@ public sealed record FlatpakPeer(string AppId, bool Inside)
         if (!dir.EndsWith(InstallSuffix, StringComparison.Ordinal)) return null;
 
         string deploy = dir[..^InstallSuffix.Length];
-        string? metadata = readFile(Path.Combine(deploy, "metadata"));
+        string? metadata = readFile(deploy + "/metadata");
         string? appId = metadata is null ? null : AppIdFromMetadata(metadata);
         return appId is null ? null : new FlatpakPeer(appId, Inside: false);
     }
@@ -143,7 +143,9 @@ public sealed record FlatpakPeer(string AppId, bool Inside)
     /// session's <c>$XDG_RUNTIME_DIR</c>. The same path inside and outside.
     /// </summary>
     public string SharedRuntimeDir(string xdgRuntimeDir) =>
-        Path.Combine(xdgRuntimeDir, "app", AppId);
+        // '/' rather than Path.Combine: a Flatpak path is a Linux path, and Core's
+        // tests run on Windows too, where Path.Combine would write backslashes.
+        xdgRuntimeDir.TrimEnd('/') + "/app/" + AppId;
 
     private static string? TryReadAllText(string path)
     {
