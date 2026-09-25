@@ -231,7 +231,7 @@ active_declarations() {
 # script's own command line as readily as the daemon, and during the Linux port
 # it killed a test harness outright.
 stop_speechd() {
-    local exe target pid stopped=0 self="$$"
+    local exe target pid self="$$" killed=() alive=()
     for exe in /proc/[0-9]*/exe; do
         target="$(readlink "$exe" 2>/dev/null || true)"
         case "$target" in
@@ -242,26 +242,50 @@ stop_speechd() {
                 # it would take down every user's speech, which is the failure
                 # this whole script is written to avoid.
                 [[ "$(stat -c %u "/proc/$pid" 2>/dev/null || echo -1)" == "$(id -u)" ]] || continue
-                kill "$pid" 2>/dev/null || true
-                stopped=1
+                kill "$pid" 2>/dev/null && killed+=("$pid")
                 ;;
         esac
     done
-    if (( stopped )); then
-        # Wait for it to actually go. NOT with `pgrep -x speech-dispatcher`:
-        # "speech-dispatcher" is 17 characters, pgrep matches the 15-character
-        # comm name and REFUSES a longer pattern outright — so that loop would
-        # exit on the first iteration and the config would be rewritten under a
-        # server that had not finished dying. Found by the S4 harness, which hit
-        # it as "Speech Dispatcher already running".
-        local waited=0
-        while (( waited < 50 )) && kill -0 "$pid" 2>/dev/null; do
+    if (( ${#killed[@]} == 0 )); then
+        say "  no speech-dispatcher of yours was running"
+        return 0
+    fi
+
+    # Wait for EVERY one we signalled to go, not for whichever pid the loop
+    # happened to see last: that was a speech-dispatcher skipped as someone
+    # else's as often as one of ours, and then the wait watched the wrong
+    # process while ours was still dying. NOT with `pgrep -x speech-dispatcher`
+    # either: "speech-dispatcher" is 17 characters, pgrep matches the
+    # 15-character comm name and REFUSES a longer pattern outright, so that loop
+    # exited at once. Found by the S4 harness, as "already running".
+    #
+    # And past 5 s, SIGKILL. A socket-activated speech-dispatcher that is still
+    # dying keeps its service active, so systemd starts no new one, and every
+    # client queues on a socket nothing will ever read: the whole desktop's
+    # speech hangs. The suspected cause of the hang on the first snap install
+    # (2026-09-25), where the one being stopped still had a removed module
+    # loaded. A speech-dispatcher killed outright costs nothing; the next
+    # request starts a fresh one.
+    local waited=0
+    while (( waited < 50 )); do
+        alive=()
+        for pid in "${killed[@]}"; do kill -0 "$pid" 2>/dev/null && alive+=("$pid"); done
+        (( ${#alive[@]} )) || break
+        sleep 0.1; waited=$((waited + 1))
+    done
+    if (( ${#alive[@]} )); then
+        warn "  speech-dispatcher (pid ${alive[*]}) did not exit within 5 s of SIGTERM; killing it"
+        kill -9 "${alive[@]}" 2>/dev/null || true
+        waited=0
+        while (( waited < 20 )); do
+            alive=()
+            for pid in "${killed[@]}"; do kill -0 "$pid" 2>/dev/null && alive+=("$pid"); done
+            (( ${#alive[@]} )) || break
             sleep 0.1; waited=$((waited + 1))
         done
-        say "  stopped the running speech-dispatcher (it restarts on the next request)"
-    else
-        say "  no speech-dispatcher of yours was running"
+        (( ${#alive[@]} == 0 )) || warn "  and pid ${alive[*]} is STILL running"
     fi
+    say "  stopped the running speech-dispatcher (it restarts on the next request)"
 }
 
 # The first client call after a restart hung long enough to hit a 20 s timeout,
@@ -271,6 +295,47 @@ stop_speechd() {
 warm_speechd() {
     command -v spd-say >/dev/null 2>&1 || return 0
     timeout 30 spd-say -O >/dev/null 2>&1 || true
+}
+
+# Whether $1 is one of the remaining arguments. Pure bash: `printf | grep -qx`
+# is the early-exiting pipeline CLAUDE.md forbids, and under pipefail its 141
+# reads as "not found".
+in_list() {
+    local want="$1" item; shift
+    for item in "$@"; do [[ "$item" == "$want" ]] && return 0; done
+    return 1
+}
+
+# Put back what was there before us, from $created and $backup. Shared by
+# --remove and by an install that has to undo itself.
+restore_config() {
+    if [[ -n "$backup" && -f "$backup" ]]; then
+        # There WAS a config before us. Putting it back beats editing ours,
+        # because it restores settings we never understood.
+        cp "$backup" "$conf"
+        say "  restored $conf from $backup"
+    elif (( created )); then
+        # We created it, which means before us speechd was reading the system
+        # file. Deleting ours is what "put back what was there" means — an
+        # edited-down copy of the system file is NOT the same thing, because it
+        # would stop tracking that file forever.
+        rm -f "$conf"
+        say "  removed $conf — speechd goes back to $system_conf_dir/speechd.conf"
+    else
+        # No state file: someone removed it, or this is an install from before
+        # the state file existed. Strip our block and leave everything else.
+        local tmp
+        tmp="$(mktemp)"
+        awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
+            $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }' "$conf" > "$tmp"
+        # grep -v exits 1 when it selects nothing, which here only means the
+        # config held nothing but ours; under set -e that ended --remove with
+        # no message and an empty file. 2 is a real error.
+        grep -v "AddModule \"$MODULE_NAME\"" "$tmp" > "$conf" || (( $? == 1 ))
+        rm -f "$tmp"
+        say "  stripped our block from $conf (no record of what came before it)"
+    fi
+    rm -f "$state"
 }
 
 # ============================================================== --check
@@ -357,29 +422,7 @@ if [[ "$action" == remove ]]; then
         backup="$(sed -n 's/^backup=//p' "$state" | tail -1 || true)"
     fi
 
-    if [[ -n "$backup" && -f "$backup" ]]; then
-        # There WAS a config before us. Putting it back beats editing ours,
-        # because it restores settings we never understood.
-        cp "$backup" "$conf"
-        say "  restored $conf from $backup"
-    elif (( created )); then
-        # We created it, which means before us speechd was reading the system
-        # file. Deleting ours is what "put back what was there" means — an
-        # edited-down copy of the system file is NOT the same thing, because it
-        # would stop tracking that file forever.
-        rm -f "$conf"
-        say "  removed $conf — speechd goes back to $system_conf_dir/speechd.conf"
-    else
-        # No state file: someone removed it, or this is an install from before
-        # the state file existed. Strip our block and leave everything else.
-        tmp="$(mktemp)"
-        awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
-            $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }' "$conf" > "$tmp"
-        grep -v "AddModule \"$MODULE_NAME\"" "$tmp" > "$conf"
-        rm -f "$tmp"
-        say "  stripped our block from $conf (no record of what came before it)"
-    fi
-    rm -f "$state"
+    restore_config
 
     if (( restart )); then
         stop_speechd
@@ -458,7 +501,7 @@ if [[ -f "$conf" ]]; then
     tmp="$(mktemp)"
     awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
         $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }' "$conf" > "$tmp"
-    grep -v "AddModule \"$MODULE_NAME\"" "$tmp" > "$conf"
+    grep -v "AddModule \"$MODULE_NAME\"" "$tmp" > "$conf" || (( $? == 1 ))   # 1: nothing but ours
     rm -f "$tmp"
 else
     # Trap 2: the user file REPLACES the system one. Copying it first is what
@@ -534,12 +577,38 @@ if (( restart )) && command -v spd-say >/dev/null 2>&1; then
     say "  speech-dispatcher now offers: ${now[*]:-nothing}"
     missing=()
     for name in "${offered[@]}"; do
-        printf '%s\n' "${now[@]}" | grep -qx "$name" || missing+=("$name")
+        in_list "$name" "${now[@]}" || missing+=("$name")
     done
     if (( ${#missing[@]} )); then
+        # UNDO IT, here, rather than printing a warning above "Done. Try it:".
+        # That is what this did on the first snap install (2026-09-25): it saw
+        # speech-dispatcher offering nothing at all, said so in one line, and
+        # finished as if it had worked, leaving a hung speech-dispatcher for
+        # the user to notice and remove by hand. On a desktop that is driven by
+        # ear there may be nobody who can read that line.
         warn ""
-        warn "  WARNING: these modules were offered before and are not now: ${missing[*]}"
-        warn "  Undo it with:  $self --remove"
+        warn "  these modules were offered before and are not now: ${missing[*]}"
+        warn "  PUTTING BACK what was there before VibeSuperTonic."
+        restore_config
+        stop_speechd
+        warm_speechd
+        mapfile -t back < <(timeout 30 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF')
+        say "  speech-dispatcher now offers: ${back[*]:-nothing}"
+        still=()
+        for name in "${offered[@]}"; do
+            [[ "$name" == "$MODULE_NAME" ]] && continue
+            in_list "$name" "${back[@]}" || still+=("$name")
+        done
+        (( ${#still[@]} == 0 )) || die "and even with your old config back, these are missing: ${still[*]}.
+       Restart speech-dispatcher (log out and in, or: systemctl --user restart
+       speech-dispatcher.service) and check \`spd-say -O\` lists them."
+        die "VibeSuperTonic was NOT registered, and your previous speech setup is back.
+       Please report this, with the output of:  $self --check"
+    fi
+    if ! in_list "$MODULE_NAME" "${now[@]}"; then
+        warn ""
+        warn "  WARNING: everything you had still works, but $MODULE_NAME is not offered."
+        warn "  See:  $self --check"
     fi
 fi
 

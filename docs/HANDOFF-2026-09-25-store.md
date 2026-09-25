@@ -34,6 +34,39 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
   `sudo snap refresh vibesupertonic --edge`. Hotkeys point at `/snap/bin/`, so no
   re-bind is needed.
 
+## After revision 2 reached the user's machine
+
+- **The daemon works under confinement** (`vibesupertonic.ctl status` answers
+  0.2.17). Two things did not:
+- **Tray**: `no tray icon: ConnectException: Permission denied`. The daemon had
+  no plug for the session bus. Fixed in `f665f4a` with `unity7`; `--test-install`
+  now checks the daemon reaches a session bus (run 53: "nothing on the session bus
+  implements org.kde.StatusNotifierWatcher", the right answer with no tray host).
+  Not yet on `edge`.
+- **Speech Dispatcher**: `sandbox-setup.sh speechd-install` left speech-dispatcher
+  offering nothing and hung (`spd-say -O` never returned). The user ran `--remove`
+  and espeak-ng came back. Investigated with `build/check-snap-speechd.sh`, a
+  private speech-dispatcher started from a shell and socket-activated through
+  systemd: **the snap's module loads in both, on the user's machine and in CI**
+  (runs 52 to 54). So it is not the module, confinement, the user's voices or
+  systemd activation. What differed: the speech-dispatcher the installer stopped
+  had been running since before the AppImage module was removed and still
+  offered `vibesupertonic` from it, and the installer waited 5 s on the wrong pid
+  (the last one its loop saw) and never escalated. The suspected hang is systemd
+  starting no new speech-dispatcher while the old one was still dying.
+  **Unproven.** The installer now SIGKILLs a speech-dispatcher still alive 5 s
+  after SIGTERM, waits on every pid it signalled, and **rolls back** (restores
+  the config, restarts, verifies, exits 1) if any previously offered module is
+  missing. Checked locally against speech-dispatcher 0.12: a module that hangs
+  speechd is rolled back with espeak-ng restored; a working one installs; a
+  speech-dispatcher that ignores SIGTERM is killed. Also fixed: `--remove` on a
+  config holding only our block died silently (`grep -v` exit 1 under `set -e`).
+- **Windows**: a second timing test,
+  `PipelineLatencyTests.Time_to_the_first_sample_stays_flat_as_the_document_grows`,
+  failed once on the Windows runner (run 54: 62 ms against 25 ms) with no C#
+  changed since it last passed. Same family as the intermittent one below. Not
+  loosened.
+
 ## State of everything else
 
 **CI** (all jobs run with `workflow_dispatch` on this branch; pushes to it do not

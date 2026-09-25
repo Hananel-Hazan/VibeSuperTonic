@@ -328,11 +328,26 @@ kernel's `type=1326 ... syscall=50` line is what named seccomp. An abstract
 socket has no file mode, so the daemon checks each peer's uid (`SO_PEERCRED`,
 `PeerCredentials`) and refuses other users. **`pack-snap.sh --test-install`**
 installs the snap under snapd and makes its daemon answer; CI's snap job runs it,
-and it was seen failing on the unfixed code before the fix went in.
+and it was seen failing on the unfixed code before the fix went in. It also runs
+[check-snap-speechd.sh](build/check-snap-speechd.sh): a **private**
+speech-dispatcher, started once from a shell and once socket-activated through
+`systemd-run --user` as a desktop starts it, must load the snap's module and keep
+everything it offered before. A desktop with the snap installed can run the same
+script; it never touches the user's own speech-dispatcher.
+
+**`speechd-install.sh` undoes itself** when a module that was offered before the
+install is missing after it: it restores the previous config, restarts
+speech-dispatcher, confirms the old modules answer, and exits non-zero. Until
+2026-09-25 it printed one warning line above "Done", and on the first snap install
+that left a hung speech-dispatcher for the user to find. It also SIGKILLs a
+speech-dispatcher that has not exited 5 s after SIGTERM: a socket-activated one
+that is still dying keeps its service active, so systemd starts no new one and
+every client queues forever.
 
 `pack-snap.sh` asserts, on the finished snap: the version; **strict**
 confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
-`setup`); `network-bind` on the four that can start the daemon;
+`setup`); `network-bind` (the control socket) and `unity7` (the tray's session
+bus) on the four that can start the daemon;
 **no `command-chain` on `ctl`**, because an extension there wraps
 every hotkey press in a launcher script and nothing else would ever complain; no
 models and no CUDA provider; the daemon's three staged libraries (PulseAudio,

@@ -52,7 +52,7 @@ MUTATIONS = [
   [('    tmp="$(mktemp)"\n'
     '    awk -v b="$MARK_BEGIN" -v e="$MARK_END" \'\n'
     "        $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }' \"$conf\" > \"$tmp\"\n"
-    '    grep -v "AddModule \\"$MODULE_NAME\\"" "$tmp" > "$conf"\n'
+    '    grep -v "AddModule \\"$MODULE_NAME\\"" "$tmp" > "$conf" || (( $? == 1 ))   # 1: nothing but ours\n'
     '    rm -f "$tmp"\n', '    :\n')],
   "the block was stacked"),
 
