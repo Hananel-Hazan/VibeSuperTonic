@@ -42,7 +42,8 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
   no plug for the session bus. Fixed in `f665f4a` with `unity7`; `--test-install`
   now checks the daemon reaches a session bus (run 53: "nothing on the session bus
   implements org.kde.StatusNotifierWatcher", the right answer with no tray host).
-  Not yet on `edge`.
+  **Revision 3** (run 55, `1169235`) carries it and the installer below, and is
+  on `edge`.
 - **Speech Dispatcher**: `sandbox-setup.sh speechd-install` left speech-dispatcher
   offering nothing and hung (`spd-say -O` never returned). The user ran `--remove`
   and espeak-ng came back. Investigated with `build/check-snap-speechd.sh`, a
@@ -61,6 +62,20 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
   speechd is rolled back with espeak-ng restored; a working one installs; a
   speech-dispatcher that ignores SIGTERM is killed. Also fixed: `--remove` on a
   config holding only our block died silently (`grep -v` exit 1 under `set -e`).
+- **The user then re-ran `speechd-install` on revision 2 and it worked**
+  (`espeak-ng vibesupertonic`), with the stale speech-dispatcher gone. That fits
+  the suspected cause; it does not prove it.
+- **Open**: a hotkey press brought back the **old AppImage window** ("connected —
+  daemon 0.2.16"), and the selection was read. So something besides the snap's
+  `vibesupertonic.desktop` actions (which are bound correctly in
+  kglobalshortcutsrc) still reaches the AppImage: an autostart entry, another
+  shortcut, or a running AppImage process. Asked the user for `ps`,
+  kglobalshortcutsrc/khotkeysrc, `~/.local/share/applications`,
+  `~/.config/autostart` and `~/.local/bin`. The user also added
+  `StartupNotify=false` beside `X-KDE-StartupNotify=false` by hand; if that
+  stops KDE's bouncing launch icon, keybindings.sh should write both.
+- **KDE lists two VibeSuperTonic entries**: the snap's own
+  `vibesupertonic_vibesupertonic.desktop` and ours. Confirmed on the machine.
 - **Windows**: a second timing test,
   `PipelineLatencyTests.Time_to_the_first_sample_stays_flat_as_the_document_grows`,
   failed once on the Windows runner (run 54: 62 ms against 25 ms) with no C#
