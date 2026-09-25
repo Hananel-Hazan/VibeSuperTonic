@@ -13,6 +13,9 @@
 #   --compose-only         write the snapcraft project and stop, for inspection
 #   --check FILE.snap      run only the checks on a snap already built, which is
 #                          also how each of them was seen failing
+#   --test-install         also install the snap, talk to its daemon under real
+#                          confinement, and remove it. Needs root and snapd;
+#                          refuses if vibesupertonic is already installed. CI does
 #
 # ---------------------------------------------------------------------------
 # THIS SCRIPT PUBLISHES NOTHING, like pack-appimage.sh. It packages the tree
@@ -33,6 +36,7 @@ grade="devel"
 destructive=0
 compose_only=0
 check_only=""
+test_install=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -41,8 +45,9 @@ while [[ $# -gt 0 ]]; do
         --destructive-mode) destructive=1; shift ;;
         --compose-only)     compose_only=1; shift ;;
         --check)            check_only="${2:-}"; shift 2 ;;
+        --test-install)     test_install=1; shift ;;
         -h|--help)
-            sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '3,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
@@ -210,6 +215,57 @@ init="$(printf 'INIT\nQUIT\n' | timeout 30 "$extract/vst-speechd" 2>/dev/null | 
 info "binaries report $version; the module answers INIT"
 
 rm -rf "$extract"
+
+# ------------------------------------------------------------ under snapd
+#
+# EVERYTHING ABOVE RUNS THE SNAP'S FILES OUTSIDE ITS CONFINEMENT, which is how
+# revision 1 shipped a daemon that could not start: AppArmor let it create its
+# socket file and refused listen(), so it aborted 1.7 s after every hotkey
+# press, and every check here passed. Found by the first person to install it
+# (2026-09-25). This section is the check that would have caught it: install the
+# snap, start the daemon the way a hotkey does, and make it answer.
+if (( test_install )); then
+    step "Installing it, and talking to its daemon under confinement…"
+
+    [[ $EUID -eq 0 ]] || die "--test-install installs a snap, so it needs root (sudo)."
+    command -v snap >/dev/null 2>&1 || die "--test-install needs snapd, and there is no snap command."
+    if snap list vibesupertonic >/dev/null 2>&1; then
+        die "vibesupertonic is already installed here, and --test-install would replace
+       and then remove it. Remove it first, or run this on a machine without it."
+    fi
+
+    snap install --dangerous "$out" >/dev/null || die "snap install --dangerous $out failed"
+    trap 'snap remove --purge vibesupertonic >/dev/null 2>&1 || true' EXIT
+
+    # As the person who ran sudo, not as root: the store, the socket and the
+    # confinement are all per user, and root's are not the ones a user gets.
+    user="${SUDO_USER:-root}"
+    user_home="$(getent passwd "$user" | cut -d: -f6)"
+    as_user=(sudo -u "$user" -H env HOME="$user_home")
+
+    said="$("${as_user[@]}" timeout 90 snap run vibesupertonic.ctl status 2>&1 || true)"
+    [[ "$said" == *"\"Version\":\"$version\""* ]] || die "the daemon did not answer under confinement. vst-ctl said:
+       $said
+       Run 'snap run vibesupertonic.daemon' by hand to see why it stopped, and
+       'journalctl | grep apparmor=\"DENIED\"' for what the sandbox refused."
+    info "the hotkey client started the daemon under confinement, and it answered $version"
+
+    config="$("${as_user[@]}" timeout 30 snap run vibesupertonic.ctl config 2>&1 || true)"
+    [[ "$config" == *"\"StoreRoot\":\"$user_home/snap/vibesupertonic/common\""* ]] || die "the daemon's store is not ~/snap/vibesupertonic/common. config said:
+       $config"
+    info "its store is ~/snap/vibesupertonic/common"
+
+    init="$(printf 'INIT\nQUIT\n' | "${as_user[@]}" timeout 60 snap run vibesupertonic.speechd 2>/dev/null \
+            | awk '/^(299|399) / { last = $0 } END { print last }' || true)"
+    [[ "$init" == 299\ * ]] || die "the Speech Dispatcher module under confinement answered INIT with: ${init:-nothing}"
+
+    inside="$("${as_user[@]}" timeout 30 snap run vibesupertonic.setup bind 2>&1 || true)"
+    [[ "$inside" == *"Run this in a terminal"* ]] || die "vibesupertonic.setup did not refuse inside the snap. It said:
+       $inside"
+    info "the module answers INIT, and the setup app refuses inside the sandbox"
+
+    "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
+fi
 
 size="$(du -h "$out" | cut -f1)"
 step "Done."

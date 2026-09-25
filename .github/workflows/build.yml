@@ -483,8 +483,12 @@ jobs:
           sudo snap install snapcraft --classic
           sudo apt-get install -y squashfs-tools appstream desktop-file-utils
 
-      - name: Pack the snap, with its assertions
-        run: sudo bash build/pack-snap.sh --destructive-mode
+      # --test-install: this runner has snapd and AppArmor, so the snap is
+      # installed and its daemon started the way a hotkey starts it. Every other
+      # check runs the snap's files outside confinement, which is how revision 1
+      # reached the store with a daemon AppArmor killed on every press.
+      - name: Pack the snap, with its assertions, and test it under snapd
+        run: sudo bash build/pack-snap.sh --destructive-mode --test-install
 
       - name: Upload the snap
         uses: actions/upload-artifact@v4
