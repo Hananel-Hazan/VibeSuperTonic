@@ -488,6 +488,9 @@ jobs:
         run: |
           sudo snap install snapcraft --classic
           sudo apt-get install -y squashfs-tools appstream desktop-file-utils
+          # For --test-install's check that speech-dispatcher can load the
+          # snap's module, beside the distro's own module as on a desktop.
+          sudo apt-get install -y speech-dispatcher speech-dispatcher-espeak-ng
 
       # --test-install: this runner has snapd, AppArmor and seccomp, so the snap
       # is installed and its daemon started the way a hotkey starts it. Every

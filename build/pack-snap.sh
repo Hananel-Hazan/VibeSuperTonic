@@ -287,6 +287,82 @@ if (( test_install )); then
        $inside"
     info "the module answers INIT, and the setup app refuses inside the sandbox"
 
+    # SPEECH-DISPATCHER STARTING THE MODULE ITSELF, which is not the same as the
+    # INIT above. On the first real install (revision 2, 2026-09-25) the module
+    # answered INIT when run by hand and `sandbox-setup.sh speechd-install
+    # --check` said so, and yet with it declared speech-dispatcher stopped
+    # answering altogether: `spd-say -O` hung, espeak-ng included. That is a
+    # screen reader going quiet. So: a PRIVATE speech-dispatcher (its own
+    # config, socket, runtime and log directories; the user's is never read or
+    # written, the installer's own harness rule), the snap's installer run
+    # against it exactly as a user runs it, and then speechd must still offer
+    # everything it offered before, plus us.
+    if command -v speech-dispatcher >/dev/null 2>&1 && command -v spd-say >/dev/null 2>&1; then
+        probe="$(mktemp -d)"
+        chown "$user" "$probe"
+        speechd_rc=0
+        "${as_user[@]}" PROBE="$probe" bash <<'PROBE' || speechd_rc=$?
+set -uo pipefail
+export PULSE_SERVER="unix:/run/user/$(id -u)/pulse/native"
+export XDG_RUNTIME_DIR="$PROBE/runtime" XDG_CONFIG_HOME="$PROBE/xdg"
+export SPEECHD_ADDRESS="unix_socket:$PROBE/speechd.sock"
+mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$PROBE/log"; chmod 700 "$XDG_RUNTIME_DIR"
+# Under a timeout, because speech-dispatcher does not go to the background until
+# every declared module has answered INIT: a module that never answers blocks
+# its startup for good, and every client with it. That IS the failure, seen
+# from the outside, so it has to end in a verdict here rather than a hang.
+start() {
+    timeout 60 speech-dispatcher -d -t 0 -l 5 -S "$PROBE/speechd.sock" -P "$PROBE/speechd.pid" -L "$PROBE/log" 2>>"$PROBE/log/stderr" \
+        || { echo "speech-dispatcher did not finish starting in 60 s"; return 1; }
+    for _ in $(seq 40); do [[ -S "$PROBE/speechd.sock" ]] && return 0; sleep 0.25; done
+    return 1
+}
+stop() {
+    local pid; pid="$(cat "$PROBE/speechd.pid" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+    for _ in $(seq 50); do [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null
+    rm -f "$PROBE/speechd.sock" "$PROBE/speechd.pid"
+}
+offered() { timeout 30 spd-say -O 2>/dev/null | tail -n +2 | awk 'NF' | sort | tr '\n' ' '; }
+start || { echo "the private speech-dispatcher did not start"; exit 3; }
+before="$(offered)"
+echo "before: ${before:-nothing}"
+[[ -n "$before" ]] || { echo "the private speech-dispatcher offers nothing even before the install"; stop; exit 3; }
+# --force: this snap has no voices, and the question is whether speechd can
+# load the module at all. --no-restart: the installer would stop EVERY
+# speech-dispatcher of this user, and the private one is restarted below.
+bash /snap/vibesupertonic/current/sandbox-setup.sh speechd-install --force --no-restart >"$PROBE/log/installer" 2>&1 \
+    || { echo "the installer failed:"; cat "$PROBE/log/installer"; stop; exit 4; }
+stop; start || { echo "the private speech-dispatcher did not restart with our module declared"; exit 5; }
+t0=$SECONDS
+after="$(offered)"
+echo "after ($((SECONDS - t0)) s): ${after:-nothing}"
+stop
+missing=""
+for name in $before vibesupertonic; do [[ " $after " == *" $name "* ]] || missing+="$name "; done
+[[ -z "$missing" ]] || { echo "missing after the install: $missing"; exit 6; }
+PROBE
+        if (( speechd_rc != 0 )); then
+            printf '    speech-dispatcher'"'"'s own log, and the module'"'"'s:\n' >&2
+            for f in "$probe"/log/*; do
+                printf '      == %s\n' "$(basename "$f")" >&2
+                tail -40 "$f" | sed 's/^/      | /' >&2
+            done
+            printf '    the sandbox refused:\n' >&2
+            journalctl -k --since "-5min" --no-pager 2>/dev/null \
+                | grep -E 'apparmor="DENIED".*snap\.vibesupertonic|type=1326.*vibesupertonic' \
+                | tail -25 | sed 's/^/      | /' >&2 || true
+            rm -rf "$probe"
+            die "speech-dispatcher could not load the snap's module (probe exit $speechd_rc).
+       A user who ran sandbox-setup.sh speechd-install would lose every voice."
+        fi
+        rm -rf "$probe"
+        info "a private speech-dispatcher loads the module and keeps what it offered before"
+    else
+        info "NOT CHECKED: speech-dispatcher loading the module (no speech-dispatcher here; CI installs it)"
+    fi
+
     "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
 fi
 
