@@ -1,5 +1,8 @@
 # Handoff — snap and Flatpak (0.2.17), 2026-09-25
 
+**Superseded by [HANDOFF-2026-09-26-store.md](HANDOFF-2026-09-26-store.md)**, which
+is where to start. This file is the day's history.
+
 Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, code at `a929ba5`. No PR.
 Read `CLAUDE.md` (the "store packages" section) and `docs/STORE-SUBMISSION.md`
 first; this file is the state of play, not the design.

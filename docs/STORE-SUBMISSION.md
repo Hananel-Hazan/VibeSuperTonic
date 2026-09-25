@@ -123,6 +123,17 @@ did not help on its own and was kept.)
 
 **Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
 
+- [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**
+      ("has running apps"): the Speech Dispatcher module (speech-dispatcher keeps
+      it alive), the daemon, or a window the tray opened (which snapd counts as
+      `ctl`). snapd's normal rule; automatic refreshes wait instead. Decide
+      between telling users (listing, INSTALL notes) and making the module and
+      daemon step aside. Today's workaround: `vibesupertonic.ctl shutdown`,
+      `systemctl --user stop speech-dispatcher.service`, close the window.
+- [ ] **After installing or re-binding, log out and back in** before the hotkey
+      works on KDE: kglobalaccel reads shortcuts only at login (by design, see
+      keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
+
 - [ ] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** `snap run` adds
       its own startup; the AppImage's comparable cost was +14.7 ms. Measure it
       against R-3's 100 ms. If it is too slow, the fallback is the Flatpak's
@@ -132,13 +143,17 @@ did not help on its own and was kept.)
       privileged Wayland protocols from sandboxed clients (security-context-v1),
       and `ext-data-control` is exactly that kind of protocol. If KWin withholds
       it, the hotkey reads nothing.
-- [ ] **The tray icon** in both sandboxes (the Flatpak has
-      `--talk-name=org.kde.StatusNotifierWatcher`; the snap has no tray-specific
-      plug).
+- [ ] **The tray icon** in both sandboxes. **Snap: done on Kubuntu 2026-09-25**
+      (revision 5): the icon registers (`unity7`), a click opens the window, and
+      "Read selected text" speaks. Flatpak (`--talk-name=org.kde.StatusNotifierWatcher`)
+      not yet tried.
 - [ ] **Orca end to end**: `sandbox-setup.sh speechd-install`, then Orca speaking
-      through the module, in both.
+      through the module, in both. Snap: the install and `spd-say -o
+      vibesupertonic` work on Kubuntu (2026-09-25); Orca itself not yet tried.
 - [ ] **KDE's menu gains a second VibeSuperTonic entry** after `bind`: the store's
-      own, plus the one keybindings.sh writes to carry the shortcuts. Decide
+      own, plus the one keybindings.sh writes to carry the shortcuts. **Confirmed**
+      on Kubuntu with the snap (`vibesupertonic_vibesupertonic.desktop` beside
+      `vibesupertonic.desktop`). Decide
       whether that one should be `NoDisplay=true`, and test that the shortcuts
       survive it.
 - [ ] **GNOME on Wayland**, which is stock Ubuntu: the hotkey cannot read the
