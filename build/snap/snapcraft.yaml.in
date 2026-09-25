@@ -71,10 +71,21 @@ apps:
     # with it, snapd allows exactly what TrayIcon does: the name
     # org.kde.StatusNotifierItem-<pid>-1, /StatusNotifierItem, /MenuBar and
     # RegisterStatusNotifierItem. Auto-connected, no store review.
+    #
+    # `desktop`, `desktop-legacy` and `gsettings` are the GNOME extension's own
+    # plugs for the window, repeated here because the daemon opens the window
+    # from the tray (TrayIcon, SnapWindow) and it runs under the confinement of
+    # whatever started the daemon, usually the bare ctl. Revision 3's window
+    # aborted on every tray click for want of the extension's environment;
+    # pack-snap.sh now asserts every plug the window app has is on the other
+    # three apps too. All auto-connect.
     plugs: &daemon-plugs
       - network
       - network-bind
       - unity7
+      - desktop
+      - desktop-legacy
+      - gsettings
       - audio-playback
       - x11
       - wayland

@@ -187,21 +187,39 @@ ctl_line="$(awk -F: '$1 == "ctl" && !seen { print; seen = 1 }' <<<"$apps")"
        $ctl_line
        It runs on every hotkey press. Keep extensions off it (snapcraft.yaml.in)."
 
-# THE CONTROL SOCKET NEEDS network-bind, on every app that can start the daemon
-# (decision 2 in snapcraft.yaml.in), because a daemon inherits its starter's
-# seccomp filter. Without it listen() fails under confinement and nowhere else,
-# so only --test-install would notice, and only where snapd runs.
+# EVERY APP THAT CAN START THE DAEMON CARRIES ITS PLUGS, AND THE WINDOW'S
+# (decision 2 in snapcraft.yaml.in), because a process runs under the
+# confinement of whatever started it. network-bind is the control socket:
+# snapd's seccomp filter refuses listen() without it. unity7 is the tray's
+# session bus. And the daemon opens the WINDOW from the tray, so the window's
+# plugs, the GNOME extension's among them, have to be on ctl, daemon and
+# speechd too: revision 3's window aborted on every tray click without them.
+# Read from snap.yaml, as "app plug" pairs, so an extension that adds a plug
+# is caught rather than copied.
+plug_pairs="$(awk '
+    /^apps:/ { inapps = 1; next }
+    inapps && /^[^ ]/ { inapps = 0 }
+    inapps && /^  [A-Za-z0-9-]+:/ { app = $1; sub(/:$/, "", app); key = ""; next }
+    inapps && /^    [A-Za-z0-9_-]+:/ { key = $1; next }
+    inapps && key == "plugs:" && /^ *- / { print app, $2 }' "$meta")"
+has_plug() { [[ $'\n'"$plug_pairs"$'\n' == *$'\n'"$1 $2"$'\n'* ]]; }
 for app in vibesupertonic daemon ctl speechd; do
-    app_line="$(awk -F: -v a="$app" '$1 == a && !seen { print; seen = 1 }' <<<"$apps")"
-    [[ " $app_line " == *" - network-bind "* ]] || die "the '$app' app does not plug network-bind:
-       $app_line
-       snapd's seccomp filter refuses listen() without it, and a daemon this app
-       starts aborts on its control socket. See snapcraft.yaml.in."
-    [[ " $app_line " == *" - unity7 "* ]] || die "the '$app' app does not plug unity7:
-       $app_line
-       a daemon this app starts cannot reach the session bus, and has no tray icon."
+    for plug in network-bind unity7; do
+        has_plug "$app" "$plug" || die "the '$app' app does not plug $plug. A daemon it starts cannot
+       $( [[ $plug == network-bind ]] && echo "listen on its control socket (seccomp refuses listen())" || echo "reach the session bus, so it has no tray icon" ).
+       See snapcraft.yaml.in."
+    done
 done
-info "version $version, strict, five apps, ctl is bare, and all four can listen and show a tray"
+window_plugs="$(awk '$1 == "vibesupertonic" { print $2 }' <<<"$plug_pairs")"
+[[ -n "$window_plugs" ]] || die "could not read the window app's plugs out of meta/snap.yaml"
+for app in daemon ctl speechd; do
+    for plug in $window_plugs; do
+        has_plug "$app" "$plug" || die "the '$app' app lacks the window's plug '$plug'. The daemon opens the
+       window from the tray, and a daemon '$app' started runs it under '$app''s
+       confinement. See decision 2 in snapcraft.yaml.in."
+    done
+done
+info "version $version, strict, five apps, ctl is bare, and the daemon's starters carry its plugs and the window's"
 
 # Assertions 3 and 4 again, on the finished snap: snapcraft's stage-packages are
 # the one thing here that could drag something in.
@@ -339,6 +357,43 @@ if (( test_install )); then
         info "the daemon reaches the session bus: $tray"
     else
         info "NOT CHECKED: the tray (no /run/user/$uid or no dbus-daemon here)"
+    fi
+
+    # THE WINDOW, OPENED THE WAY THE TRAY OPENS IT. Revision 3's daemon ran
+    # $SNAP/vibesupertonic-ui directly, inside the confinement of the bare ctl
+    # that had started it, and the window aborted on every tray click:
+    # libfontconfig.so.1 missing, because only the window app's own command
+    # chain puts the GNOME runtime on the path. So: ask the daemon what it would
+    # run (--window-command, the code the tray uses, not a copy of it), run that
+    # inside ctl's confinement on a virtual display, and require it to be alive
+    # 10 s later. The bare binary in the same place must NOT be, or this check
+    # cannot tell the two apart. Xvfb with -ac, because a snap has its own /tmp
+    # and could not read an Xauthority file in the host's.
+    if command -v Xvfb >/dev/null 2>&1; then
+        display=":$((90 + RANDOM % 9))"
+        "${as_user[@]}" Xvfb "$display" -ac -nolisten tcp >/dev/null 2>&1 &
+        xvfb_pid=$!
+        for _ in $(seq 50); do [[ -e "/tmp/.X11-unix/X${display#:}" ]] && break; sleep 0.1; done
+        window_cmd="$("${as_user[@]}" timeout 30 snap run --shell vibesupertonic.ctl -c '"$SNAP/vibesupertonicd" --window-command' 2>&1)" \
+            || { kill "$xvfb_pid" 2>/dev/null; die "vibesupertonicd --window-command failed inside the snap: $window_cmd"; }
+        mapfile -t window_argv <<<"$window_cmd"
+        in_ctl() { "${as_user[@]}" DISPLAY="$display" timeout 10 snap run --shell vibesupertonic.ctl -c 'exec "$@"' vst "$@" 2>&1; }
+        chained_rc=0; chained_out="$(in_ctl "${window_argv[@]}")" || chained_rc=$?
+        bare_rc=0; bare_out="$(in_ctl /snap/vibesupertonic/current/vibesupertonic-ui)" || bare_rc=$?
+        "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
+        kill "$xvfb_pid" 2>/dev/null || true
+        if (( chained_rc != 124 )); then
+            printf '    the window, as the tray starts it (%s), said:\n' "${window_argv[*]}" >&2
+            tail -25 <<<"$chained_out" | sed 's/^/      | /' >&2
+            die "the window did not stay up when opened the way the tray opens it (exit $chained_rc)."
+        fi
+        if (( bare_rc == 124 )); then
+            die "the bare window ALSO stayed up inside ctl's confinement, so this check cannot tell
+       a correct launch from revision 3's. Something about this machine differs from a desktop."
+        fi
+        info "the window opens as the tray opens it (${window_argv[*]##*/}), and the bare binary does not (exit $bare_rc)"
+    else
+        info "NOT CHECKED: opening the window from the daemon (no Xvfb here; CI installs it)"
     fi
 fi
 

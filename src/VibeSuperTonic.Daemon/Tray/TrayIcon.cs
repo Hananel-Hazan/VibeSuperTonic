@@ -305,24 +305,16 @@ internal sealed class TrayIcon : IDisposable
             return;
         }
 
-        string exe = Environment.GetEnvironmentVariable("VST_UI")
-            ?? System.IO.Path.Combine(AppContext.BaseDirectory, "vibesupertonic-ui");
-
-        if (!File.Exists(exe))
+        if (WindowStartInfo(out string? cannot) is not { } start)
         {
             _launchGate.Failed();
-            _log($"tray: {exe} not found (set VST_UI to override)");
+            _log($"tray: {cannot}");
             return;
         }
 
         try
         {
-            Process.Start(new ProcessStartInfo(exe)
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
+            Process.Start(start);
         }
         catch (Exception ex)
         {
@@ -330,6 +322,41 @@ internal sealed class TrayIcon : IDisposable
             // period for a launch that never happened.
             _launchGate.Failed();
             _log($"tray: could not open the window: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// How to start the window: <c>VST_UI</c> if set; in a snap, the window
+    /// app's own command chain (<see cref="SnapWindow"/>), because run directly
+    /// from a daemon the hotkey client started it has no GNOME runtime and
+    /// aborts on its first library; otherwise the file beside this one.
+    ///
+    /// <para>Its output is NOT redirected. It used to go to two pipes nothing
+    /// read, which is why revision 3's window could abort on every tray click
+    /// with its exception lost; and a pipe that fills blocks the writer. Now it
+    /// goes wherever this daemon's own output goes.</para>
+    /// </summary>
+    internal static ProcessStartInfo? WindowStartInfo(out string? why)
+    {
+        if (Environment.GetEnvironmentVariable("VST_UI") is { Length: > 0 } ui)
+            return Plain(ui, out why);
+
+        if (SnapPeer.Current is not null && Environment.GetEnvironmentVariable("SNAP") is { } snap)
+        {
+            if (SnapWindow.Resolve(snap, Environment.GetEnvironmentVariable, out why) is not { } window)
+                return null;
+            var start = new ProcessStartInfo(window.Argv[0]) { UseShellExecute = false };
+            foreach (string arg in window.Argv.Skip(1)) start.ArgumentList.Add(arg);
+            foreach (var (key, value) in window.Environment) start.Environment[key] = value;
+            return start;
+        }
+
+        return Plain(System.IO.Path.Combine(AppContext.BaseDirectory, "vibesupertonic-ui"), out why);
+
+        static ProcessStartInfo? Plain(string exe, out string? why)
+        {
+            why = File.Exists(exe) ? null : $"{exe} not found (set VST_UI to override)";
+            return why is null ? new ProcessStartInfo(exe) { UseShellExecute = false } : null;
         }
     }
 

@@ -87,10 +87,31 @@ for (int i = 0; i < args.Length; i++)
                 if (said is not null) Console.WriteLine(said);
             }
             return 0;
+        // What a click on the tray icon would run to open the window, one word
+        // per line, with the app's own variables as a leading `env K=V`. For
+        // pack-snap.sh --test-install, which runs exactly this inside the
+        // hotkey client's confinement; a copy of the rule there would test
+        // the copy.
+        case "--window-command":
+            if (TrayIcon.WindowStartInfo(out string? whyNot) is not { } start)
+            {
+                Console.Error.WriteLine(whyNot);
+                return 1;
+            }
+            if (SnapPeer.Current is not null
+                && Environment.GetEnvironmentVariable("SNAP") is { } snapRoot
+                && SnapWindow.Resolve(snapRoot, Environment.GetEnvironmentVariable, out _) is { Environment.Count: > 0 } w)
+            {
+                Console.WriteLine("env");
+                foreach (var (key, value) in w.Environment) Console.WriteLine($"{key}={value}");
+            }
+            Console.WriteLine(start.FileName);
+            foreach (string arg in start.ArgumentList) Console.WriteLine(arg);
+            return 0;
         case "--help" or "-h":
             Console.WriteLine(
                 "vibesupertonicd [--data <dir>] [--models <dir>] [--voice M1] [--lang en] [--preload]");
-            Console.WriteLine("                [--version] [--print-store]");
+            Console.WriteLine("                [--version] [--print-store] [--window-command]");
             Console.WriteLine();
             Console.WriteLine("Portable: with no arguments, reads models/ and data/ from the");
             Console.WriteLine($"directory holding this executable ({LinuxDataPaths.BaseDir}).");
