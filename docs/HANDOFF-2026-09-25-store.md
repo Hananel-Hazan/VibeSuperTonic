@@ -1,40 +1,30 @@
 # Handoff — snap and Flatpak (0.2.17), 2026-09-25
 
-Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, head `e7eefb4`. No PR.
+Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, head `a929ba5`. No PR.
 Read `CLAUDE.md` (the "store packages" section) and `docs/STORE-SUBMISSION.md`
 first; this file is the state of play, not the design.
 
-## The one blocker
+## The one blocker, and its fix
 
-**The snap's daemon cannot start under confinement.** It aborts (exit 134) about
-2 s after launch, so the window says "not connected" and hotkeys do nothing.
+**The snap's daemon could not start under confinement.** It aborted (exit 134)
+about 2 s after launch, so the window said "not connected" and hotkeys did
+nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
 
-- Revision 1 is on the Snap Store's `edge` channel and has this bug. Nothing
-  newer has been uploaded. **Do not tell the user to upload until CI's snap job
-  passes `--test-install`.**
-- First cause, from the user's machine (`snap run vibesupertonic.daemon`):
-  `SocketException (13): Permission denied at Socket.Listen` in
-  `DaemonServer.Bind`. AppArmor let it create the socket file in
-  `$XDG_RUNTIME_DIR` and refused `listen()`. No `apparmor="DENIED"` line for it
-  appeared in the user's journal, only unrelated file denials (machine-id lock,
-  power_supply reads; both harmless).
-- Fix attempt 1, commit `da89bc9`: in a snap, use the abstract socket
-  `@snap.<instance>.ctl-<uid>` (`SnapPeer` in Core; `Protocol.IsAbstract` and
-  `Protocol.EndPoint`), with an `SO_PEERCRED` same-user check (`PeerCredentials`
-  in the daemon). **It did not work**: CI run 48 failed identically, exit 134
-  after 2.1 s, "without listening on @snap.vibesupertonic.ctl-1001". The
-  assumption that snapd's template allows listen on `@snap.<name>.**` was wrong,
-  or something else fails. Unverified either way.
-- Commit `e7eefb4` makes `pack-snap.sh --test-install` print, on failure, the
-  daemon's foreground output and the kernel's AppArmor and seccomp denials.
-  **CI run 49 (id 36144434415) is running it.** Read its `snap` job log first:
-  it should name exactly what confinement refuses.
-- Candidates, not yet tested: the `network-bind` plug (may grant unix
-  bind/listen); a socket file under `$SNAP_USER_DATA` or `$SNAP_USER_COMMON`;
-  checking whether the failure is really `listen` and not something earlier.
-- The check is proven: run 47 (`40d2203`, test without fix) failed exactly like
-  the store build. Keep `--test-install` in CI's snap job; it is the only check
-  that runs the snap under snapd.
+- **Cause, named by CI run 49** (`e7eefb4`, which prints the sandbox's denials):
+  the kernel logged `type=1326 ... syscall=50`, a **seccomp** denial of
+  `listen`, and no AppArmor line for the socket. snapd's default seccomp filter
+  has `bind()` but not `listen()`/`accept()`; only the `network-bind` plug grants
+  them. That is why the file socket (revision 1) and the abstract socket
+  (`da89bc9`) failed identically: both were aimed at AppArmor.
+- **Fix, commit `a929ba5`:** `network-bind` joins the shared plug list in
+  `snapcraft.yaml.in` (window, daemon, ctl, speechd). It auto-connects and needs
+  no manual review. `pack-snap.sh` now asserts all four apps plug it (checked
+  against a synthetic snap in both directions). The abstract socket and its
+  `SO_PEERCRED` check stay.
+- **CI run 50** on `a929ba5` is the proof; see "CI" below for its result.
+  **Do not tell the user to upload until its snap job passes `--test-install`.**
+- The other two denials in run 49 are harmless: `file_lock` on
+  `/etc/machine-id` and `/proc/cpuinfo`.
 - When it passes: the user downloads `linux-snap` from that run's page,
   `snapcraft upload --release=edge VibeSuperTonic-0.2.17-amd64.snap` from
   `~/Downloads` (the file must be in the current directory), then
@@ -47,7 +37,8 @@ first; this file is the state of play, not the design.
 trigger `build.yml`, which runs on `main` and `Dev` only):
 - Green: linux, pack, smoke, parity, speechd, flatpak (builds, installs, checks a
   real deployment), Windows build.
-- Snap job: builds and passes its static checks; fails `--test-install` (above).
+- Snap job: builds and passes its static checks; `--test-install` failed through
+  run 49 (above). Run 50: PENDING.
 - Windows `PipelineLatencyTests.An_utterance_does_not_cost_anything_to_start`:
   intermittent (5 passes, 2 failures at 313 and 448 ms against 250). Linux
   measures 1-2 ms. Commit `59c4037` makes its failure message split the time and
@@ -77,7 +68,7 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 
 ## Open requests from the user
 
-1. Get the snap working (the blocker).
+1. Get the snap working (the blocker; fixed in `a929ba5` if run 50 agrees).
 2. Set up CI to upload to `edge` automatically. Needs a credential the user
    creates: `snapcraft export-login --snaps=vibesupertonic --channels=edge
    --acls=package_access,package_push,package_update,package_release <file>`,
@@ -102,6 +93,7 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 | `40d2203` | `pack-snap.sh --test-install` and CI step (seen failing on unfixed code) |
 | `da89bc9` | Abstract socket + SO_PEERCRED for snaps (**did not fix it**) |
 | `e7eefb4` | `--test-install` prints daemon output and sandbox denials on failure |
+| `a929ba5` | `network-bind` plug (the real fix: seccomp, not AppArmor); packer asserts it |
 
 ## Tooling notes for a cloud session
 
@@ -115,3 +107,8 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 - Creating or removing files at the filesystem root (`/app`, `/.flatpak-info`)
   is blocked by the session's safety checks; `/snap/vibesupertonic/x7` and `x8`
   exist in the old container from a manual layout test.
+- CI artifacts cannot be downloaded from the container (their storage host is
+  refused by the proxy), so a built snap cannot be inspected here. `apt-get
+  install squashfs-tools` works, and a synthetic snap (a `meta/snap.yaml` in a
+  `mksquashfs` image) is enough to exercise `pack-snap.sh --check` up to its
+  library assertion.
