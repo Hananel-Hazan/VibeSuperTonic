@@ -197,8 +197,11 @@ for app in vibesupertonic daemon ctl speechd; do
        $app_line
        snapd's seccomp filter refuses listen() without it, and a daemon this app
        starts aborts on its control socket. See snapcraft.yaml.in."
+    [[ " $app_line " == *" - unity7 "* ]] || die "the '$app' app does not plug unity7:
+       $app_line
+       a daemon this app starts cannot reach the session bus, and has no tray icon."
 done
-info "version $version, strict, five apps, ctl is bare, and all four can listen"
+info "version $version, strict, five apps, ctl is bare, and all four can listen and show a tray"
 
 # Assertions 3 and 4 again, on the finished snap: snapcraft's stage-packages are
 # the one thing here that could drag something in.
@@ -363,7 +366,39 @@ PROBE
         info "NOT CHECKED: speech-dispatcher loading the module (no speech-dispatcher here; CI installs it)"
     fi
 
+    # THE TRAY, which needs the session bus, which confinement can refuse
+    # outright: revision 2's daemon reported "ConnectException: Permission
+    # denied" on a real desktop. There is no tray host here, so the right answer
+    # is "nothing on the session bus implements" the watcher; anything about
+    # connecting means the plug is missing. A bus of our own at the path a
+    # desktop session uses, since that is the path snapd's rules name.
     "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
+    uid="$(id -u "$user")"
+    bus="/run/user/$uid/bus"
+    bus_pid=""
+    if [[ -d "/run/user/$uid" ]] && command -v dbus-daemon >/dev/null 2>&1; then
+        if [[ ! -S "$bus" ]]; then
+            bus_pid="$("${as_user[@]}" dbus-daemon --session --address="unix:path=$bus" --fork --print-pid 2>/dev/null || true)"
+        fi
+        for _ in $(seq 20); do [[ -S "$bus" ]] && break; sleep 0.1; done
+        # The first status starts the daemon; the tray registers in the
+        # background after that, so ask until it has an answer.
+        tray="not started"
+        for _ in $(seq 20); do
+            said="$("${as_user[@]}" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" timeout 60 snap run vibesupertonic.ctl status 2>&1 || true)"
+            tray="$(awk 'match($0, /"Tray":"[^"]*"/) && !seen { print substr($0, RSTART + 8, RLENGTH - 9); seen = 1 }' <<<"$said")"
+            [[ "$tray" == "not started" ]] || break
+            sleep 0.5
+        done
+        "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
+        [[ -n "$bus_pid" ]] && kill "$bus_pid" 2>/dev/null
+        [[ "$tray" == registered* || "$tray" == *"nothing on the session bus implements"* ]] || die "the daemon's tray under confinement said: ${tray:-nothing}
+       With a session bus and no tray host it should say that nothing implements
+       the watcher. See unity7 in snapcraft.yaml.in."
+        info "the daemon reaches the session bus: $tray"
+    else
+        info "NOT CHECKED: the tray (no /run/user/$uid or no dbus-daemon here)"
+    fi
 fi
 
 size="$(du -h "$out" | cut -f1)"

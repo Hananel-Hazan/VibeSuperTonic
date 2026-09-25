@@ -65,9 +65,16 @@ apps:
     # what revision 1 did: the kernel logged `type=1326 ... syscall=50` (seccomp,
     # listen), and no AppArmor line at all. pack-snap.sh asserts every app on
     # this list still carries it.
+    #
+    # `unity7` is the tray icon. Without it the daemon may not even connect to
+    # the session bus (revision 2 said "ConnectException: Permission denied");
+    # with it, snapd allows exactly what TrayIcon does: the name
+    # org.kde.StatusNotifierItem-<pid>-1, /StatusNotifierItem, /MenuBar and
+    # RegisterStatusNotifierItem. Auto-connected, no store review.
     plugs: &daemon-plugs
       - network
       - network-bind
+      - unity7
       - audio-playback
       - x11
       - wayland
