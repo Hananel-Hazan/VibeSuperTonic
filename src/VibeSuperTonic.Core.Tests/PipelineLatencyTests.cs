@@ -191,15 +191,66 @@ public class PipelineLatencyTests
     /// shape this creeps in — a settings file re-read, a device reopened, a
     /// pronunciation table recompiled for every sentence. Measured 2026-08-30:
     /// twenty complete utterances end to end in under a millisecond.
+    ///
+    /// <para><b>It says where the time went when it fails</b>, because it has
+    /// failed on the Windows runner at 313 and 448 ms (2026-09-25) while measuring
+    /// 1-2 ms on Linux, even pinned to one CPU with the whole suite running
+    /// beside it. The message splits each utterance into its three waits and
+    /// measures twenty bare thread-pool round trips on the same machine. A slow
+    /// pool shows up in the baseline too; a slow session does not.</para>
     /// </summary>
     [Fact]
     public void An_utterance_does_not_cost_anything_to_start()
     {
-        Speak("A short sentence.");
+        SpeakTimed("A short sentence.");
 
+        var phases = new List<Phases>();
         var clock = Stopwatch.StartNew();
-        for (int i = 0; i < 20; i++) Speak("A short sentence.");
+        for (int i = 0; i < 20; i++) phases.Add(SpeakTimed("A short sentence."));
+        long total = clock.ElapsedMilliseconds;
 
-        Assert.InRange(clock.ElapsedMilliseconds, 0, CeilingMs);
+        if (total > CeilingMs)
+        {
+            var hop = Stopwatch.StartNew();
+            for (int i = 0; i < 20; i++) Task.Run(() => { }).Wait();
+            double hopMs = hop.Elapsed.TotalMilliseconds;
+
+            static string Summary(IEnumerable<double> values)
+            {
+                var sorted = values.Order().ToList();
+                return $"median {sorted[sorted.Count / 2]:F1} ms, max {sorted[^1]:F1} ms";
+            }
+
+            Assert.Fail(
+                $"twenty utterances took {total} ms against a {CeilingMs} ms ceiling. " +
+                $"Speak() returning: {Summary(phases.Select(p => p.StartMs))}; " +
+                $"waiting for Completion: {Summary(phases.Select(p => p.FinishMs))}; " +
+                $"Dispose: {Summary(phases.Select(p => p.DisposeMs))}. " +
+                $"Twenty bare Task.Run(...).Wait() round trips on this machine: {hopMs:F1} ms. " +
+                $"Per utterance: {string.Join(" ", phases.Select(p => (p.StartMs + p.FinishMs + p.DisposeMs).ToString("F1")))}");
+        }
+    }
+
+    private readonly record struct Phases(double StartMs, double FinishMs, double DisposeMs);
+
+    /// <summary><see cref="Speak"/>, timed in its three waits.</summary>
+    private static Phases SpeakTimed(string text)
+    {
+        var synth = new FakeSynthesizer { FramesPerChunk = 4410 };
+        var sink = new StampingSink { RenderedSoFar = () => synth.Rendered.Count };
+        var session = new SpeechSession(synth, sink, new SpeechSessionOptions());
+
+        var t = Stopwatch.StartNew();
+        Assert.True(session.Speak(text, Voice));
+        double start = t.Elapsed.TotalMilliseconds;
+
+        session.Completion.Wait();
+        double finish = t.Elapsed.TotalMilliseconds - start;
+
+        session.Dispose();
+        double dispose = t.Elapsed.TotalMilliseconds - start - finish;
+
+        Assert.True(sink.WrittenFrames > 0, "the utterance produced no audio at all");
+        return new Phases(start, finish, dispose);
     }
 }
