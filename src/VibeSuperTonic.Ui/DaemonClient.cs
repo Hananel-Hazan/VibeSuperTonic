@@ -252,9 +252,15 @@ public sealed class DaemonClient
             return false;
         }
 
+        // Inside a Flatpak a plain child dies with this window's sandbox, so the
+        // daemon has to be started as an instance of its own. See DaemonLaunch.
+        var (fileName, arguments) = Environment.GetEnvironmentVariable("VST_DAEMON") is not null
+            ? (exe, (IReadOnlyList<string>)[])
+            : DaemonLaunch.Plan(exe, [], FlatpakPeer.Current);
+
         try
         {
-            var psi = new ProcessStartInfo(exe)
+            var psi = new ProcessStartInfo(fileName)
             {
                 UseShellExecute = false,
                 // The daemon outlives this window. Its output is discarded
@@ -264,6 +270,8 @@ public sealed class DaemonClient
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+
+            foreach (string argument in arguments) psi.ArgumentList.Add(argument);
 
             var proc = Process.Start(psi);
             if (proc is null) { error = "Process.Start returned null"; return false; }

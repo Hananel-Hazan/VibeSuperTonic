@@ -137,15 +137,146 @@ internal static class LinuxDataPaths
     /// everything beside the executable, which is the whole portability
     /// story.</para>
     /// </summary>
-    public static StorePick Store => _store ??= ResolveStore(
-        AppImageFile,
-        BaseDir,
-        Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        Directory.Exists,
-        CanCreateIn);
+    public static StorePick Store => _store ??= Sandbox is { } sandbox
+        ? new StorePick(sandbox.StoreRoot, sandbox.StoreReason)
+        : ResolveStore(
+            AppImageFile,
+            BaseDir,
+            Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Directory.Exists,
+            CanCreateIn);
 
     public static string StoreRoot => Store.Root;
+
+    // ------------------------------------------------------------- sandboxes
+
+    /// <summary>Which store-distributed package this process is running inside.</summary>
+    public enum SandboxKind { Snap, Flatpak }
+
+    /// <summary>
+    /// A snap or a Flatpak, and the four facts that differ inside one.
+    /// </summary>
+    /// <param name="Kind">Which sandbox.</param>
+    /// <param name="Id">The snap's instance name, or the Flatpak app id.</param>
+    /// <param name="StoreRoot">Where <c>models/</c> and <c>data/</c> go — never
+    /// <see cref="BaseDir"/>, which is read-only in both.</param>
+    /// <param name="StoreReason">The sentence <c>config</c> reports.</param>
+    /// <param name="StableBaseDir">What the install check records instead of
+    /// <see cref="BaseDir"/>. See <see cref="LinuxDataPaths.StableBaseDir"/>.</param>
+    /// <param name="RealHome">The user's home as the desktop sees it.</param>
+    public sealed record SandboxPick(
+        SandboxKind Kind, string Id, string StoreRoot, string StoreReason,
+        string StableBaseDir, string RealHome);
+
+    /// <summary>
+    /// The snap or Flatpak this process runs inside, or null for the tarball and
+    /// the AppImage.
+    ///
+    /// <para><b>Both sandboxes make <see cref="BaseDir"/> read-only</b>, so the
+    /// portable rule — everything beside the executable — cannot hold there:
+    /// the first settings save fails, and the first model download has nowhere
+    /// to go. Each sandbox names one directory that is the app's own, writable
+    /// and kept across updates, and the store goes there.</para>
+    ///
+    /// <para><b>Validated rather than trusted</b>, for the reason
+    /// <see cref="AppImageFile"/> is: these variables are inherited by every
+    /// child process, and they decide where 383 MB of models are written. A
+    /// sandbox counts only when the executable really is inside it.</para>
+    /// </summary>
+    public static SandboxPick? Sandbox { get; } = DetectSandbox(
+        Environment.GetEnvironmentVariable, BaseDir, File.Exists);
+
+    /// <summary>
+    /// The rule, pure, for the tests that pin it.
+    ///
+    /// <para><b>Snap.</b> The store goes in <c>$SNAP_USER_COMMON</c>
+    /// (<c>~/snap/&lt;name&gt;/common</c>), not <c>$SNAP_USER_DATA</c>. The
+    /// latter is per revision, and snapd copies it on every refresh, which for a
+    /// store of several hundred MB of models is a copy per update and a second
+    /// copy kept for rollback. <c>common</c> is neither copied nor rolled back.</para>
+    ///
+    /// <para>snapd also points <c>$HOME</c> at <c>$SNAP_USER_DATA</c>, so it
+    /// changes on every refresh too. That is why <see cref="SandboxPick.RealHome"/>
+    /// comes from <c>$SNAP_REAL_HOME</c>, and why the install check records
+    /// <c>/snap/&lt;name&gt;/current</c> rather than the revision directory: an
+    /// install check that compared either would tell every snap user "the
+    /// program moved" after every update. That is the same failure 2026-08-28
+    /// found for the AppImage's mount directory.</para>
+    ///
+    /// <para><b>Flatpak.</b> The store goes in <c>$XDG_DATA_HOME</c>, which a
+    /// Flatpak points at <c>~/.var/app/&lt;id&gt;/data</c>: the app's own
+    /// directory, kept across updates, and removed by
+    /// <c>flatpak uninstall --delete-data</c>. <c>/app</c> is the same path on
+    /// every update, and <c>$HOME</c> is the real home.</para>
+    /// </summary>
+    public static SandboxPick? DetectSandbox(
+        Func<string, string?> env, string baseDir, Func<string, bool> fileExists)
+    {
+        string dir = Path.TrimEndingDirectorySeparator(baseDir);
+
+        string? snap = env("SNAP");
+        string? snapName = NonEmpty(env("SNAP_INSTANCE_NAME")) ?? NonEmpty(env("SNAP_NAME"));
+        string? common = env("SNAP_USER_COMMON");
+        if (IsAbsolute(snap) && snapName is not null && IsAbsolute(common)
+            && IsUnder(dir, Path.TrimEndingDirectorySeparator(snap!)))
+        {
+            string home = FirstAbsolute(env("SNAP_REAL_HOME"), env("HOME")) ?? "";
+            return new SandboxPick(
+                SandboxKind.Snap, snapName, common!,
+                "inside the snap's common data, which is kept across refreshes",
+                $"/snap/{snapName}/current", home);
+        }
+
+        string? flatpakId = NonEmpty(env("FLATPAK_ID"));
+        if (flatpakId is not null && fileExists("/.flatpak-info") && IsUnder(dir, "/app"))
+        {
+            string home = FirstAbsolute(env("HOME")) ?? "";
+            string data = FirstAbsolute(env("XDG_DATA_HOME"))
+                ?? Path.Combine(home.Length > 0 ? home : "/tmp", ".var", "app", flatpakId, "data");
+            return new SandboxPick(
+                SandboxKind.Flatpak, flatpakId, Path.Combine(data, "vibesupertonic"),
+                "inside the Flatpak's own data directory, which is kept across updates",
+                dir, home);
+        }
+
+        return null;
+
+        static string? NonEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        static bool IsAbsolute(string? s) => !string.IsNullOrWhiteSpace(s) && s.StartsWith('/');
+        static string? FirstAbsolute(params string?[] values) =>
+            values.FirstOrDefault(IsAbsolute)?.Trim();
+        static bool IsUnder(string path, string root) =>
+            string.Equals(path, root, StringComparison.Ordinal)
+            || path.StartsWith(root + "/", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The command that connects this install to the desktop, run on the host
+    /// because a sandbox cannot. See <c>build/sandbox-setup.sh</c>, which prints
+    /// the same thing when run inside.
+    /// </summary>
+    public static string SetupCommand(SandboxPick sandbox, string verb) =>
+        sandbox.Kind == SandboxKind.Snap
+            ? $"bash /snap/{sandbox.Id}/current/sandbox-setup.sh {verb}"
+            : $"bash \"$(flatpak info --show-location {sandbox.Id})/files/lib/vibesupertonic/sandbox-setup.sh\" {verb}";
+
+    /// <summary>
+    /// <see cref="BaseDir"/> as the install check should remember it. It differs
+    /// only inside a snap, whose revision directory changes on every refresh
+    /// while <c>/snap/&lt;name&gt;/current</c> does not. See
+    /// <see cref="DetectSandbox"/>.
+    /// </summary>
+    public static string StableBaseDir => Sandbox?.StableBaseDir ?? BaseDir;
+
+    /// <summary>
+    /// The home directory the desktop reads its configuration from, which is
+    /// not <c>$HOME</c> inside a snap. See <see cref="DetectSandbox"/>.
+    /// </summary>
+    public static string RealHome =>
+        Sandbox?.RealHome is { Length: > 0 } real
+            ? real
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "";
 
     /// <summary>
     /// The rule, as a pure function so it can be tested without an AppImage, a

@@ -92,8 +92,9 @@ public sealed record InstallCheck(
         {
             advice.Add(
                 "Re-bind the hotkeys and the desktop entry: run install.sh in this folder " +
-                "(or appimage-bind.sh for an AppImage). They name the old location, so the " +
-                "keys will do nothing until they are rewritten.");
+                "(or `<AppImage> bind` for an AppImage, or sandbox-setup.sh bind for a snap " +
+                "or Flatpak). They name the old location, so the keys will do nothing until " +
+                "they are rewritten.");
         }
 
         if (impact.HasFlag(InstallImpact.Benchmark))

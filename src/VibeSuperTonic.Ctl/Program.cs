@@ -269,7 +269,13 @@ var request = new Request
     // inside the X session — while the daemon could have been started by
     // systemd --user or by a shell that had no $DISPLAY, and a process's
     // environment cannot change afterwards. Phase 4 reads PRIMARY from this.
-    Display = verb is RequestVerb.Toggle or RequestVerb.Read
+    //
+    // EXCEPT from the host into a Flatpak. The sandbox renames the display — the
+    // host's :0 is :99 inside, with only that socket mounted — so the host's
+    // name would make an X11 daemon open a display that does not exist in its
+    // sandbox and read nothing. Sent as null, the daemon uses its own $DISPLAY,
+    // which flatpak set correctly when it started it.
+    Display = verb is RequestVerb.Toggle or RequestVerb.Read && FlatpakPeer.Current is not { Inside: false }
         ? Environment.GetEnvironmentVariable("DISPLAY")
         : null,
 
@@ -774,9 +780,18 @@ static bool TryStartDaemon(out string error, out string? startedFrom, out Proces
         return false;
     }
 
+    // A Flatpak install cannot start the daemon as a plain child: the child
+    // would die with this process's sandbox, which for a hotkey press is a few
+    // milliseconds from now. DaemonLaunch says how instead. Not for an override
+    // or an AppImage, which name exactly what to run.
+    bool named = Environment.GetEnvironmentVariable("VST_DAEMON") is { Length: > 0 } || appImage is not null;
+    var (fileName, launchArguments) = named
+        ? (exe, (IReadOnlyList<string>)arguments)
+        : DaemonLaunch.Plan(exe, arguments, FlatpakPeer.Current);
+
     try
     {
-        var psi = new ProcessStartInfo(exe)
+        var psi = new ProcessStartInfo(fileName)
         {
             UseShellExecute = false,
             // The daemon outlives this process, so its output cannot go to a
@@ -788,7 +803,7 @@ static bool TryStartDaemon(out string error, out string? startedFrom, out Proces
             RedirectStandardError = true,
         };
 
-        foreach (string argument in arguments) psi.ArgumentList.Add(argument);
+        foreach (string argument in launchArguments) psi.ArgumentList.Add(argument);
 
         var proc = Process.Start(psi);
         if (proc is null) { error = "Process.Start returned null"; return false; }

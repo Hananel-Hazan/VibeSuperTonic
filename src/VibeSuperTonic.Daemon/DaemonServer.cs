@@ -690,7 +690,19 @@ public sealed partial class DaemonServer : IDisposable
                         $"{LinuxDataPaths.StoreRoot} ({LinuxDataPaths.Store.Reason}), " +
                         "not beside the program, because an AppImage is read-only.")
                 .ToList()
-            : _config.Notes;
+            : LinuxDataPaths.Sandbox is { } sandbox
+                ? _config.Notes
+                    .Append($"running as a {(sandbox.Kind == LinuxDataPaths.SandboxKind.Snap ? "snap" : "Flatpak")} " +
+                            $"({sandbox.Id}) — models and data are in {LinuxDataPaths.StoreRoot} " +
+                            $"({LinuxDataPaths.Store.Reason}), not beside the program, because the " +
+                            "program's own directory is read-only.")
+                    // The sandbox cannot bind the hotkeys or register with Speech
+                    // Dispatcher, so the window is where the user learns the command.
+                    .Append("hotkeys and the screen reader module are set up once, from a terminal: " +
+                            $"{LinuxDataPaths.SetupCommand(sandbox, "bind")} and " +
+                            $"{LinuxDataPaths.SetupCommand(sandbox, "speechd-install")}")
+                    .ToList()
+                : _config.Notes;
 
         // The benchmark measured Supertonic, and it still governs the Supertonic
         // session correctly — so this is a note rather than a staleness reason.

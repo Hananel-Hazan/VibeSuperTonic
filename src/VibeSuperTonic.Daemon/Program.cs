@@ -165,6 +165,13 @@ if (LinuxDataPaths.AppImageFile is { } appImage)
         appImage, AppContext.BaseDirectory.TrimEnd('/'), version);
     if (installed is not null) DaemonLog.Write(installed);
 }
+else if (LinuxDataPaths.Sandbox is { } sandbox)
+{
+    // Named in the log for the same reason the AppImage is: the store is not
+    // beside the binary, and every path below reads strangely until you know.
+    DaemonLog.Write($"{sandbox.Kind.ToString().ToLowerInvariant()} {sandbox.Id}, " +
+                    $"store {LinuxDataPaths.StoreRoot} ({LinuxDataPaths.Store.Reason})");
+}
 
 DaemonLog.Write($"data {dataDir}{(config.Writable ? "" : " (read-only)")}");
 foreach (string note in config.Notes)

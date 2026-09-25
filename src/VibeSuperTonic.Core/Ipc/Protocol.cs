@@ -736,11 +736,24 @@ public static class Protocol
     /// and survives logout, so the directory has to be mode 0700 and the socket
     /// 0600 explicitly rather than inheriting them.
     /// </remarks>
-    public static string SocketPath()
+    public static string SocketPath() => SocketPath(
+        Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
+        Directory.Exists,
+        FlatpakPeer.Current);
+
+    /// <summary>
+    /// The rule, with its inputs passed in, for the tests.
+    ///
+    /// <para>A Flatpak install puts the socket in the app's shared runtime
+    /// directory, the one place every instance and the host-side client can all
+    /// reach. See <see cref="FlatpakPeer"/>. A snap needs nothing here: snapd
+    /// already gives every process of the snap the same
+    /// <c>$XDG_RUNTIME_DIR</c>, <c>/run/user/&lt;uid&gt;/snap.&lt;name&gt;</c>.</para>
+    /// </summary>
+    public static string SocketPath(string? runtime, Func<string, bool> dirExists, FlatpakPeer? flatpak)
     {
-        string? runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
-        string root = !string.IsNullOrEmpty(runtime) && Directory.Exists(runtime)
-            ? Path.Combine(runtime, SocketDirName)
+        string root = !string.IsNullOrEmpty(runtime) && dirExists(runtime)
+            ? Path.Combine(flatpak?.SharedRuntimeDir(runtime) ?? runtime, SocketDirName)
             : Path.Combine(Path.GetTempPath(), $"{SocketDirName}-{Environment.UserName}");
 
         return Path.Combine(root, SocketFileName);

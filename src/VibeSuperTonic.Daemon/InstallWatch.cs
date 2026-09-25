@@ -30,11 +30,15 @@ internal static class InstallWatch
     /// <summary>Where we are now.</summary>
     internal static InstallIdentity Current(string modelsRoot, string version) =>
         new(
-            BaseDir: LinuxDataPaths.BaseDir,
+            // The stable forms, not the raw ones. Inside a snap both BaseDir and
+            // $HOME name the current revision, so comparing them would report a
+            // move after every refresh. See LinuxDataPaths.DetectSandbox. Outside
+            // a sandbox both are exactly what they were.
+            BaseDir: LinuxDataPaths.StableBaseDir,
             StoreRoot: LinuxDataPaths.StoreRoot,
             ModelsRoot: modelsRoot,
             AppImageFile: LinuxDataPaths.AppImageFile ?? "",
-            Home: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "",
+            Home: LinuxDataPaths.RealHome,
             MachineId: MachineFacts.MachineId(),
             LogicalProcessors: Environment.ProcessorCount,
             Version: version);
