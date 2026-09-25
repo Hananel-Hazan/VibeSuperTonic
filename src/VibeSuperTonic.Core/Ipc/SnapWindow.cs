@@ -35,7 +35,7 @@ public sealed record SnapWindow(IReadOnlyList<string> Argv, IReadOnlyDictionary<
     /// </summary>
     public static SnapWindow? Resolve(string snapRoot, Func<string, string?> env, out string? why)
     {
-        string meta = Path.Combine(snapRoot, "meta", "snap.yaml");
+        string meta = snapRoot.TrimEnd('/') + "/meta/snap.yaml";
         string yaml;
         try
         {
