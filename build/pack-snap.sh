@@ -244,10 +244,20 @@ if (( test_install )); then
     as_user=(sudo -u "$user" -H env HOME="$user_home")
 
     said="$("${as_user[@]}" timeout 90 snap run vibesupertonic.ctl status 2>&1 || true)"
-    [[ "$said" == *"\"Version\":\"$version\""* ]] || die "the daemon did not answer under confinement. vst-ctl said:
-       $said
-       Run 'snap run vibesupertonic.daemon' by hand to see why it stopped, and
-       'journalctl | grep apparmor=\"DENIED\"' for what the sandbox refused."
+    if [[ "$said" != *"\"Version\":\"$version\""* ]]; then
+        # Say WHY, here, rather than telling somebody to go and find out. The
+        # daemon run in the foreground prints its own exception, and the kernel
+        # log names what AppArmor or seccomp refused. Both read to the end
+        # (tail, not head): no early-exiting consumer in a pipeline.
+        printf '    the daemon in the foreground said:\n' >&2
+        "${as_user[@]}" timeout 30 snap run vibesupertonic.daemon 2>&1 | tail -25 | sed 's/^/      | /' >&2 || true
+        printf '    the sandbox refused:\n' >&2
+        journalctl -k --since "-10min" --no-pager 2>/dev/null \
+            | grep -E 'apparmor="DENIED".*snap\.vibesupertonic|type=1326.*vibesupertonic' \
+            | tail -25 | sed 's/^/      | /' >&2 || true
+        die "the daemon did not answer under confinement. vst-ctl said:
+       $said"
+    fi
     info "the hotkey client started the daemon under confinement, and it answered $version"
 
     config="$("${as_user[@]}" timeout 30 snap run vibesupertonic.ctl config 2>&1 || true)"
