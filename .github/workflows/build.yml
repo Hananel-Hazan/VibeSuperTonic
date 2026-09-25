@@ -491,6 +491,12 @@ jobs:
           # For --test-install's check that speech-dispatcher can load the
           # snap's module, beside the distro's own module as on a desktop.
           sudo apt-get install -y speech-dispatcher speech-dispatcher-espeak-ng
+          # A systemd user manager for this user, as a desktop session has. A
+          # desktop's speech-dispatcher is socket-activated by it, and that is
+          # the path check-snap-speechd.sh's second half takes.
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 50); do [ -S "/run/user/$(id -u)/systemd/private" ] && break; sleep 0.2; done
+          ls -l "/run/user/$(id -u)/" || true
 
       # --test-install: this runner has snapd, AppArmor and seccomp, so the snap
       # is installed and its daemon started the way a hotkey starts it. Every

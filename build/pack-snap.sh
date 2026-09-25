@@ -296,7 +296,10 @@ if (( test_install )); then
     # A private speech-dispatcher; see check-snap-speechd.sh, which a desktop
     # with the snap installed can run too.
     if command -v speech-dispatcher >/dev/null 2>&1 && command -v spd-say >/dev/null 2>&1; then
-        "${as_user[@]}" bash "$root/build/check-snap-speechd.sh" >&2 \
+        # XDG_RUNTIME_DIR, which sudo drops, so systemctl --user can find this
+        # user's manager when there is one (CI starts one with enable-linger).
+        "${as_user[@]}" XDG_RUNTIME_DIR="/run/user/$(id -u "$user")" \
+            bash "$root/build/check-snap-speechd.sh" >&2 \
             || die "speech-dispatcher could not load the snap's module (above). A user who ran
        sandbox-setup.sh speechd-install would lose every voice."
         info "a private speech-dispatcher loads the module and keeps what it offered before"
