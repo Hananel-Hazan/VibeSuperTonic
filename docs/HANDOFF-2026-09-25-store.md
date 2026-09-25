@@ -92,6 +92,14 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
     only desktop-launch sets PULSE_SERVER. Fixed by a top-level
     `PULSE_SERVER: unix:/run/user/$SNAP_UID/pulse/native`, asserted statically
     and, in --test-install, as ctl sees it. Not yet published at this writing.
+- **Refresh blocked by the Speech Dispatcher module**: once registered,
+  speech-dispatcher keeps `vibesupertonic.speechd` running, and snapd refuses a
+  manual refresh ("has running apps (speechd)") and postpones automatic ones.
+  Workaround: `systemctl --user stop speech-dispatcher.service` (and kill the
+  module if it outlives it), then refresh. Every user who registers the module
+  will meet this. **Open**: the module could exit when idle (speech-dispatcher
+  restarts modules on demand? verify), or STORE-SUBMISSION/INSTALL notes must
+  say it. Not changed yet.
 - **Windows**: a second timing test,
   `PipelineLatencyTests.Time_to_the_first_sample_stays_flat_as_the_document_grows`,
   failed once on the Windows runner (run 54: 62 ms against 25 ms) with no C#
