@@ -4,16 +4,16 @@ namespace VibeSuperTonic.Core.Ipc;
 /// Whether this process belongs to a snap install of this product, and the
 /// control socket name that confinement allows it.
 ///
-/// <para><b>Why a snap cannot use a socket file.</b> snapd's AppArmor template
-/// lets a confined app create a file in its runtime directory, so binding a
-/// unix socket there succeeds, and then refuses <c>listen()</c> with EACCES.
-/// Revision 1 on the store's edge channel did exactly that: the daemon aborted
-/// 1.7 s after every hotkey press, "Permission denied" in
-/// <c>DaemonServer.Bind</c>, found by the first person to install it
-/// (2026-09-25). What the template does allow is binding and listening on an
-/// ABSTRACT socket whose name starts <c>snap.&lt;instance&gt;.</c>, and
-/// connecting to one from any app of the same snap. So a snap install uses
-/// one of those.</para>
+/// <para><b>Why an abstract socket.</b> Revision 1 on the store's edge channel
+/// aborted its daemon 1.7 s after every hotkey press, "Permission denied" at
+/// <c>Socket.Listen</c> in <c>DaemonServer.Bind</c>, found by the first person
+/// to install it (2026-09-25). This type was written on the belief that
+/// AppArmor refused <c>listen()</c> on the socket FILE. It did not: the kernel
+/// logged a seccomp denial of syscall 50, <c>listen</c>, which snapd's default
+/// filter leaves out and only the <c>network-bind</c> plug grants, whatever the
+/// address. That plug is the fix (snapcraft.yaml.in). The abstract name stays
+/// because the template allows <c>@snap.&lt;instance&gt;.*</c> to every app of
+/// the snap and it depends on no directory existing.</para>
 ///
 /// <para><b>An abstract socket has no file mode</b>, so the 0600 that protects
 /// the socket file everywhere else does not exist here: any process on the

@@ -751,9 +751,8 @@ public static class Protocol
     /// already gives every process of the snap the same
     /// <c>$XDG_RUNTIME_DIR</c>, <c>/run/user/&lt;uid&gt;/snap.&lt;name&gt;</c>.</para>
     ///
-    /// <para><b>A snap gets an abstract socket instead of a file</b>, because
-    /// its confinement refuses <c>listen()</c> on the file. See
-    /// <see cref="SnapPeer"/>. The name starts with <c>@</c>; use
+    /// <para><b>A snap gets an abstract socket instead of a file.</b> See
+    /// <see cref="SnapPeer"/> for why, and for the plug that lets it listen. The name starts with <c>@</c>; use
     /// <see cref="IsAbstract"/> before any file operation on it and
     /// <see cref="EndPoint"/> to bind or connect.</para>
     /// </summary>

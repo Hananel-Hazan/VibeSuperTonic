@@ -318,10 +318,13 @@ not add those grants to make binding work from inside.** It reuses
 in CI's `linux` job.
 
 **In a snap the control socket is abstract, `@snap.<instance>.ctl-<uid>`, not a
-file** (`SnapPeer` in Core). snapd's AppArmor template lets a confined app create
-the socket file and then refuses `listen()`, so revision 1 on the store's edge
-channel aborted its daemon 1.7 s after every hotkey press, while every packer
-check passed: they all ran the snap's files outside confinement. An abstract
+file** (`SnapPeer` in Core), and **every app that can start the daemon plugs
+`network-bind`**. snapd's default seccomp filter has `bind()` but not `listen()`,
+which only `network-bind` grants, whatever the address; so revision 1 on the
+store's edge channel aborted its daemon 1.7 s after every hotkey press, while
+every packer check passed: they all ran the snap's files outside confinement. It
+was first blamed on AppArmor, and the abstract socket was that wrong guess; the
+kernel's `type=1326 ... syscall=50` line is what named seccomp. An abstract
 socket has no file mode, so the daemon checks each peer's uid (`SO_PEERCRED`,
 `PeerCredentials`) and refuses other users. **`pack-snap.sh --test-install`**
 installs the snap under snapd and makes its daemon answer; CI's snap job runs it,
@@ -329,7 +332,8 @@ and it was seen failing on the unfixed code before the fix went in.
 
 `pack-snap.sh` asserts, on the finished snap: the version; **strict**
 confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
-`setup`); **no `command-chain` on `ctl`**, because an extension there wraps
+`setup`); `network-bind` on the four that can start the daemon;
+**no `command-chain` on `ctl`**, because an extension there wraps
 every hotkey press in a launcher script and nothing else would ever complain; no
 models and no CUDA provider; the daemon's three staged libraries (PulseAudio,
 X11, Wayland); and the module answering `INIT` with 299. `--check <file.snap>`

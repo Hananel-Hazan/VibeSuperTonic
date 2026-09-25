@@ -57,8 +57,17 @@ apps:
     # One list, anchored here and reused below, because of decision 2.
     # `network` is the first-run model download, `opengl` the GPU,
     # `audio-playback` the voice.
+    #
+    # `network-bind` is the control socket, and nothing else grants it. snapd's
+    # default seccomp filter has bind() but not listen() or accept(); those come
+    # only with this plug, which is auto-connected and needs no store review.
+    # Without it the daemon's listen() fails with EACCES and it aborts, which is
+    # what revision 1 did: the kernel logged `type=1326 ... syscall=50` (seccomp,
+    # listen), and no AppArmor line at all. pack-snap.sh asserts every app on
+    # this list still carries it.
     plugs: &daemon-plugs
       - network
+      - network-bind
       - audio-playback
       - x11
       - wayland

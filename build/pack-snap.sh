@@ -148,6 +148,7 @@ step "Checking what came out…"
 
 extract="$root/dist/build-linux/snap-extract"
 rm -rf "$extract"
+mkdir -p "$(dirname "$extract")"
 unsquashfs -q -d "$extract" "$out" >/dev/null || die "unsquashfs could not read $out"
 
 meta="$extract/meta/snap.yaml"
@@ -185,7 +186,19 @@ ctl_line="$(awk -F: '$1 == "ctl" && !seen { print; seen = 1 }' <<<"$apps")"
 [[ "$ctl_line" != *command-chain* ]] || die "the ctl app has a command-chain:
        $ctl_line
        It runs on every hotkey press. Keep extensions off it (snapcraft.yaml.in)."
-info "version $version, strict, five apps, and ctl is bare"
+
+# THE CONTROL SOCKET NEEDS network-bind, on every app that can start the daemon
+# (decision 2 in snapcraft.yaml.in), because a daemon inherits its starter's
+# seccomp filter. Without it listen() fails under confinement and nowhere else,
+# so only --test-install would notice, and only where snapd runs.
+for app in vibesupertonic daemon ctl speechd; do
+    app_line="$(awk -F: -v a="$app" '$1 == a && !seen { print; seen = 1 }' <<<"$apps")"
+    [[ " $app_line " == *" - network-bind "* ]] || die "the '$app' app does not plug network-bind:
+       $app_line
+       snapd's seccomp filter refuses listen() without it, and a daemon this app
+       starts aborts on its control socket. See snapcraft.yaml.in."
+done
+info "version $version, strict, five apps, ctl is bare, and all four can listen"
 
 # Assertions 3 and 4 again, on the finished snap: snapcraft's stage-packages are
 # the one thing here that could drag something in.
@@ -219,8 +232,8 @@ rm -rf "$extract"
 # ------------------------------------------------------------ under snapd
 #
 # EVERYTHING ABOVE RUNS THE SNAP'S FILES OUTSIDE ITS CONFINEMENT, which is how
-# revision 1 shipped a daemon that could not start: AppArmor let it create its
-# socket file and refused listen(), so it aborted 1.7 s after every hotkey
+# revision 1 shipped a daemon that could not start: seccomp refused listen()
+# (no network-bind plug), so it aborted 1.7 s after every hotkey
 # press, and every check here passed. Found by the first person to install it
 # (2026-09-25). This section is the check that would have caught it: install the
 # snap, start the daemon the way a hotkey does, and make it answer.
