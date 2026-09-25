@@ -16,9 +16,9 @@
 #    same goes for the Speech Dispatcher module (which runs vst-ctl) and the
 #    window. Hence one plug list, used four times.
 #
-# 3. The daemon's native libraries (PulseAudio, X11, Wayland) are STAGED, not
-#    taken from the GNOME extension, and found through a top-level
-#    LD_LIBRARY_PATH. The daemon is often started by ctl, which has no
+# 3. The daemon's native libraries (PulseAudio, X11, Wayland) are STAGED into
+#    lib/native, not taken from the GNOME extension, and found through a
+#    top-level LD_LIBRARY_PATH. The daemon is often started by ctl, which has no
 #    extension (decision 1), so it cannot rely on the extension's environment.
 #    Top-level environment is applied by snapd itself, at no startup cost.
 #
@@ -43,7 +43,7 @@ platforms:
   amd64:
 
 environment:
-  LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio
+  LD_LIBRARY_PATH: $SNAP/lib/native:$SNAP/lib/native/pulseaudio
   # Invariant globalization is compiled in; this only keeps a stray ICU probe
   # from looking for a libicu the snap does not carry.
   DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
@@ -86,9 +86,17 @@ parts:
     parse-info:
       - usr/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
 
+  # Moved out of usr/lib, and that is load-bearing. The GNOME extension's
+  # gpu-2404 cleanup deletes every library under usr/lib that its mesa content
+  # snap also carries, libX11 among them, because the extension's wrapper puts
+  # that content snap on the path. Only the window has the wrapper (decision 1),
+  # so for the daemon the library was simply gone. CI's first snap build found
+  # it: the build succeeded and pack-snap.sh's library check failed.
   native-libs:
     plugin: nil
     stage-packages:
       - libpulse0
       - libx11-6
       - libwayland-client0
+    organize:
+      'usr/lib/x86_64-linux-gnu/*': lib/native/

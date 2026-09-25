@@ -193,8 +193,9 @@ found="$(find "$extract" -name 'libonnxruntime_providers_cuda.so' -print -quit)"
 # Without them the daemon starts, cannot open the audio device, and speaks to
 # nobody.
 for lib in libpulse.so.0 libX11.so.6 libwayland-client.so.0; do
-    [[ -e "$extract/usr/lib/x86_64-linux-gnu/$lib" ]] || die "$lib is not in the snap's usr/lib/x86_64-linux-gnu.
-       The daemon loads it by name; see the native-libs part."
+    [[ -e "$extract/lib/native/$lib" ]] || die "$lib is not in the snap's lib/native.
+       The daemon loads it by name; see the native-libs part. Staged into
+       usr/lib instead, the GNOME extension's gpu cleanup deletes it."
 done
 info "no models, no CUDA provider, and the daemon's three libraries are staged"
 

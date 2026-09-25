@@ -105,7 +105,10 @@ Verified in this repository:
   a missing app, a missing library, a model file, no espeak).
 - Only in CI, because this container cannot reach the Snap Store or Flathub:
   the real `snapcraft` and `flatpak-builder` builds, and the installed-Flatpak
-  checks.
+  checks. The Flatpak passed all of them on its first run. The snap's library
+  check caught a real fault on its first run: the GNOME extension's GPU cleanup
+  had deleted `libX11` from `usr/lib`, where the daemon (which has no extension)
+  needed it. The daemon's libraries now live in `lib/native`.
 
 **Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
 
