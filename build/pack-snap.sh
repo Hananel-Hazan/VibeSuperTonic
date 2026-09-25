@@ -221,6 +221,17 @@ for app in daemon ctl speechd; do
 done
 info "version $version, strict, five apps, ctl is bare, and the daemon's starters carry its plugs and the window's"
 
+# THE SOUND SERVER, for every app. Without PULSE_SERVER a daemon started by the
+# bare ctl looks for PulseAudio under the snap's own XDG_RUNTIME_DIR, finds
+# nothing, and every hotkey press is refused with "no audio device available"
+# (revision 3). Only the window's desktop-launch sets it otherwise.
+pulse="$(awk '/^environment:/ { env = 1; next } env && /^[^ ]/ { env = 0 }
+              env && /^  PULSE_SERVER:/ && !seen { sub(/^  PULSE_SERVER: */, ""); gsub(/["'"'"']/, ""); print; seen = 1 }' "$meta")"
+[[ "$pulse" == 'unix:/run/user/$SNAP_UID/pulse/native' ]] || die "meta/snap.yaml sets PULSE_SERVER to '${pulse:-nothing}', not
+       unix:/run/user/\$SNAP_UID/pulse/native. A daemon the hotkey starts cannot play
+       a sound without it. See snapcraft.yaml.in."
+info "every app is pointed at the host's sound server"
+
 # Assertions 3 and 4 again, on the finished snap: snapcraft's stage-packages are
 # the one thing here that could drag something in.
 found="$(find "$extract/models" -type f -print -quit 2>/dev/null || true)"
@@ -298,6 +309,13 @@ if (( test_install )); then
     [[ "$config" == *"\"StoreRoot\":\"$user_home/snap/vibesupertonic/common\""* ]] || die "the daemon's store is not ~/snap/vibesupertonic/common. config said:
        $config"
     info "its store is ~/snap/vibesupertonic/common"
+
+    # And snapd expands it: an unexpanded $SNAP_UID would be the same silence.
+    uid="$(id -u "$user")"
+    said_pulse="$("${as_user[@]}" timeout 30 snap run --shell vibesupertonic.ctl -c 'printf %s "$PULSE_SERVER"' 2>&1 || true)"
+    [[ "$said_pulse" == "unix:/run/user/$uid/pulse/native" ]] || die "inside the snap, ctl sees PULSE_SERVER='$said_pulse', not
+       unix:/run/user/$uid/pulse/native, so the daemon it starts cannot play a sound."
+    info "ctl, and so the daemon it starts, sees PULSE_SERVER=$said_pulse"
 
     init="$(printf 'INIT\nQUIT\n' | "${as_user[@]}" timeout 60 snap run vibesupertonic.speechd 2>/dev/null \
             | awk '/^(299|399) / { last = $0 } END { print last }' || true)"

@@ -76,6 +76,22 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
   stops KDE's bouncing launch icon, keybindings.sh should write both.
 - **KDE lists two VibeSuperTonic entries**: the snap's own
   `vibesupertonic_vibesupertonic.desktop` and ours. Confirmed on the machine.
+- **Revision 3 on the user's machine**: tray registered; Speech Dispatcher module
+  speaks (`spd-say -o vibesupertonic` heard). Two faults, both the daemon being
+  started by the bare `ctl`:
+  - **Tray click aborted the window**: `libfontconfig.so.1` missing. The daemon
+    ran `$SNAP/vibesupertonic-ui` without the GNOME extension's command chain.
+    Fixed in `57e72a6`/`05e450a`: `SnapWindow` (Core) reads the window app's
+    chain from `meta/snap.yaml`; the extension's plugs (desktop,
+    desktop-legacy, gsettings) joined the shared list; pack-snap.sh asserts the
+    window's plugs are on daemon/ctl/speechd; --test-install opens the window
+    that way on Xvfb inside ctl (run 56: stays up; bare binary exits 134).
+    Revision 4 (run 57) carries it.
+  - **Hotkey silent**: "no audio device available: could not open a PulseAudio
+    playback stream: Connection refused". In a snap XDG_RUNTIME_DIR is private;
+    only desktop-launch sets PULSE_SERVER. Fixed by a top-level
+    `PULSE_SERVER: unix:/run/user/$SNAP_UID/pulse/native`, asserted statically
+    and, in --test-install, as ctl sees it. Not yet published at this writing.
 - **Windows**: a second timing test,
   `PipelineLatencyTests.Time_to_the_first_sample_stays_flat_as_the_document_grows`,
   failed once on the Windows runner (run 54: 62 ms against 25 ms) with no C#

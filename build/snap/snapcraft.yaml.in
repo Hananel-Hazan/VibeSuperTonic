@@ -44,6 +44,14 @@ platforms:
 
 environment:
   LD_LIBRARY_PATH: $SNAP/lib/native:$SNAP/lib/native/pulseaudio
+  # The sound server. In a snap XDG_RUNTIME_DIR is /run/user/<uid>/snap.<name>,
+  # where libpulse finds no socket, so the daemon's playback failed with
+  # "Connection refused" on every hotkey press (revision 3, 2026-09-25). The
+  # GNOME extension's desktop-launch sets this for the window only; the daemon
+  # is started by the bare ctl, so it is set here, for every app, by snapd.
+  # audio-playback is what lets a confined app connect to it. PipeWire serves
+  # the same socket.
+  PULSE_SERVER: unix:/run/user/$SNAP_UID/pulse/native
   # Invariant globalization is compiled in; this only keeps a stray ICU probe
   # from looking for a libicu the snap does not carry.
   DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'

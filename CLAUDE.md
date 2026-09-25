@@ -333,7 +333,13 @@ and it was seen failing on the unfixed code before the fix went in. It also runs
 speech-dispatcher, started once from a shell and once socket-activated through
 `systemd-run --user` as a desktop starts it, must load the snap's module and keep
 everything it offered before. A desktop with the snap installed can run the same
-script; it never touches the user's own speech-dispatcher.
+script; it never touches the user's own speech-dispatcher. And it opens the
+window **the way the tray does**: `vibesupertonicd --window-command` (the daemon's
+own rule, `SnapWindow` in Core, which reads the window app's command chain from
+`meta/snap.yaml`) run inside `ctl`'s confinement on Xvfb must stay up, and the
+bare `$SNAP/vibesupertonic-ui` in the same place must not, or the check cannot
+tell them apart. Revision 3's window aborted on every tray click
+(`libfontconfig.so.1` missing) because the daemon ran the bare binary.
 
 **`speechd-install.sh` undoes itself** when a module that was offered before the
 install is missing after it: it restores the previous config, restarts
@@ -347,7 +353,12 @@ every client queues forever.
 `pack-snap.sh` asserts, on the finished snap: the version; **strict**
 confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
 `setup`); `network-bind` (the control socket) and `unity7` (the tray's session
-bus) on the four that can start the daemon;
+bus) on the four that can start the daemon, and **every plug of the window app on
+`daemon`, `ctl` and `speechd` too**, because the daemon opens the window from the
+tray and a process runs under its starter's confinement; `PULSE_SERVER` pointing
+at `/run/user/$SNAP_UID/pulse/native` for every app, because inside a snap
+`XDG_RUNTIME_DIR` is private and a daemon started by the bare `ctl` otherwise
+finds no sound server;
 **no `command-chain` on `ctl`**, because an extension there wraps
 every hotkey press in a launcher script and nothing else would ever complain; no
 models and no CUDA provider; the daemon's three staged libraries (PulseAudio,
