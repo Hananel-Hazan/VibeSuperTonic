@@ -1,10 +1,10 @@
 # Handoff — snap and Flatpak (0.2.17), 2026-09-25
 
-Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, head `a929ba5`. No PR.
+Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, code at `a929ba5`. No PR.
 Read `CLAUDE.md` (the "store packages" section) and `docs/STORE-SUBMISSION.md`
 first; this file is the state of play, not the design.
 
-## The one blocker, and its fix
+## The blocker, now fixed
 
 **The snap's daemon could not start under confinement.** It aborted (exit 134)
 about 2 s after launch, so the window said "not connected" and hotkeys did
@@ -21,8 +21,11 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
   no manual review. `pack-snap.sh` now asserts all four apps plug it (checked
   against a synthetic snap in both directions). The abstract socket and its
   `SO_PEERCRED` check stay.
-- **CI run 50** on `a929ba5` is the proof; see "CI" below for its result.
-  **Do not tell the user to upload until its snap job passes `--test-install`.**
+- **CI run 50** (id 36145223156) on `a929ba5`: **all green, snap job included.**
+  Under snapd the hotkey client started the daemon and it answered 0.2.17, the
+  store is `~/snap/vibesupertonic/common`, the module answers INIT, and the setup
+  app refuses inside the sandbox. That run's `linux-snap` artifact is the one to
+  upload as revision 2.
 - The other two denials in run 49 are harmless: `file_lock` on
   `/etc/machine-id` and `/proc/cpuinfo`.
 - When it passes: the user downloads `linux-snap` from that run's page,
@@ -37,8 +40,8 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
 trigger `build.yml`, which runs on `main` and `Dev` only):
 - Green: linux, pack, smoke, parity, speechd, flatpak (builds, installs, checks a
   real deployment), Windows build.
-- Snap job: builds and passes its static checks; `--test-install` failed through
-  run 49 (above). Run 50: PENDING.
+- Snap job: green from run 50, `--test-install` included. It failed through run
+  49 (above), so the check has been seen both ways.
 - Windows `PipelineLatencyTests.An_utterance_does_not_cost_anything_to_start`:
   intermittent (5 passes, 2 failures at 313 and 448 ms against 250). Linux
   measures 1-2 ms. Commit `59c4037` makes its failure message split the time and
@@ -68,7 +71,8 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 
 ## Open requests from the user
 
-1. Get the snap working (the blocker; fixed in `a929ba5` if run 50 agrees).
+1. Get the snap working. **Fixed in `a929ba5`, proven by run 50; waiting on the
+   user to upload revision 2 to `edge` and try it on their machine.**
 2. Set up CI to upload to `edge` automatically. Needs a credential the user
    creates: `snapcraft export-login --snaps=vibesupertonic --channels=edge
    --acls=package_access,package_push,package_update,package_release <file>`,
