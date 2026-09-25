@@ -1,0 +1,94 @@
+# The snap. A TEMPLATE: build/pack-snap.sh fills in @VERSION@ and @GRADE@,
+# lays the composed tree out as payload/ beside it, and runs snapcraft there.
+# Never run snapcraft against this file directly: the payload is what makes
+# pack-tar.sh's assertions apply to the snap, and only the packer composes it.
+#
+# THREE DECISIONS THAT LOOK ODD AND ARE NOT.
+#
+# 1. The hotkey client, `ctl`, has NO extension. An extension wraps the command
+#    in a desktop-launch script, which on the hotkey path would be paid on every
+#    single press. vst-ctl needs libc and nothing else. pack-snap.sh asserts that
+#    the built snap's ctl command is still bare.
+#
+# 2. Every app that can START the daemon carries the daemon's plugs. A confined
+#    process's children keep its AppArmor profile, so a daemon that vst-ctl
+#    starts on the first hotkey press runs under ctl's profile, not daemon's. The
+#    same goes for the Speech Dispatcher module (which runs vst-ctl) and the
+#    window. Hence one plug list, used four times.
+#
+# 3. The daemon's native libraries (PulseAudio, X11, Wayland) are STAGED, not
+#    taken from the GNOME extension, and found through a top-level
+#    LD_LIBRARY_PATH. The daemon is often started by ctl, which has no
+#    extension (decision 1), so it cannot rely on the extension's environment.
+#    Top-level environment is applied by snapd itself, at no startup cost.
+#
+# No personal-files and no classic confinement. The two things that need the
+# desktop's own configuration (hotkeys, Speech Dispatcher) are done by
+# sandbox-setup.sh, which the user runs once on the host. See that file.
+
+name: vibesupertonic
+title: VibeSuperTonic
+base: core24
+version: '@VERSION@'
+grade: @GRADE@
+confinement: strict
+license: MIT AND GPL-3.0-or-later
+adopt-info: vibesupertonic
+icon: snap/gui/vibesupertonic.png
+website: https://github.com/Hananel-Hazan/VibeSuperTonic
+source-code: https://github.com/Hananel-Hazan/VibeSuperTonic
+issues: https://github.com/Hananel-Hazan/VibeSuperTonic/issues
+
+platforms:
+  amd64:
+
+environment:
+  LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio
+  # Invariant globalization is compiled in; this only keeps a stray ICU probe
+  # from looking for a libicu the snap does not carry.
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
+
+apps:
+  vibesupertonic:
+    command: vibesupertonic-ui
+    common-id: io.github.hananel_hazan.VibeSuperTonic
+    desktop: usr/share/applications/io.github.hananel_hazan.VibeSuperTonic.desktop
+    extensions: [gnome]
+    # One list, anchored here and reused below, because of decision 2.
+    # `network` is the first-run model download, `opengl` the GPU,
+    # `audio-playback` the voice.
+    plugs: &daemon-plugs
+      - network
+      - audio-playback
+      - x11
+      - wayland
+      - opengl
+
+  daemon:
+    command: vibesupertonicd
+    plugs: *daemon-plugs
+
+  ctl:
+    command: vst-ctl
+    plugs: *daemon-plugs
+
+  speechd:
+    command: vst-speechd
+    plugs: *daemon-plugs
+
+  setup:
+    command: sandbox-setup.sh
+
+parts:
+  vibesupertonic:
+    plugin: dump
+    source: payload
+    parse-info:
+      - usr/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+
+  native-libs:
+    plugin: nil
+    stage-packages:
+      - libpulse0
+      - libx11-6
+      - libwayland-client0

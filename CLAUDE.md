@@ -12,6 +12,8 @@ obvious; the project ships two products from one repository.
 | Windows | [build/pack-zip.ps1](build/pack-zip.ps1) | `dist/VibeSuperTonic-<version>-win.zip` |
 | Linux | [build/pack-tar.sh](build/pack-tar.sh) | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
 | Linux, AppImage | [build/pack-appimage.sh](build/pack-appimage.sh) | `dist/VibeSuperTonic-<version>-x86_64.AppImage` |
+| Linux, snap | [build/pack-snap.sh](build/pack-snap.sh) | `dist/VibeSuperTonic-<version>-amd64.snap` |
+| Linux, Flatpak | [build/pack-flatpak.sh](build/pack-flatpak.sh) | `dist/VibeSuperTonic-<version>-x86_64.flatpak` |
 
 **Linux ships two artifacts, and the tarball is the canonical one.** Decided
 2026-08-24. The AppImage is built *from the tree pack-tar.sh composed* — it
@@ -25,6 +27,27 @@ bash build/pack-tar.sh -v <X.Y.Z> && bash build/pack-appimage.sh -v <X.Y.Z>
 In that order, and a failed tarball means no AppImage. `pack-appimage.sh` refuses
 to run against a composed tree whose binaries report a different version, so the
 two artifacts of one release cannot come from two builds.
+
+**Since 0.2.17 (2026-09-25) Linux ships four, and the user-facing order is snap,
+Flatpak, AppImage, tarball.** The snap is what the Ubuntu App Center installs
+and Kubuntu's Discover lists; the Flatpak is Flathub, which Discover lists too.
+The AppImage is the third choice. **The tarball is still canonical**: the snap
+and the Flatpak are built from it exactly as the AppImage is, publish nothing,
+and re-ask its cheap assertions through
+[check-composed-tree.sh](build/check-composed-tree.sh). The Flatpak checks the
+tree *inside the tarball*, because on Flathub the tarball is its only source.
+
+```bash
+bash build/pack-tar.sh -v <X.Y.Z> && bash build/pack-snap.sh -v <X.Y.Z> --grade stable \
+  && bash build/pack-flatpak.sh -v <X.Y.Z> --test-install && bash build/pack-appimage.sh -v <X.Y.Z>
+```
+
+`pack-snap.sh` needs `snapcraft` (LXD by default, `--destructive-mode` on an
+Ubuntu 24.04 machine) and `pack-flatpak.sh` needs `flatpak-builder`. Neither
+store is reachable from a cloud session, so there both are built only by CI's
+`snap` and `flatpak` jobs. Submission steps, and the checklist that still needs a
+real Kubuntu and Ubuntu desktop, are in
+[docs/STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md).
 
 **Since S4 (2026-08-28) the archive also carries a Speech Dispatcher module** —
 `vst-speechd` and `speechd-install.sh` beside `install.sh` — which is what makes
@@ -272,6 +295,41 @@ such a symlink and asks it for both `--version` and `INIT`.
   second instead of in a four-minute pack — which is how the 100 ms-slow-but-ELF
   case was actually observed being caught.
 
+### The store packages — what they assert, and why
+
+Written 2026-09-25. Both sandboxes make the program's directory read-only, so
+three things in the code changed, each of which was silent when wrong:
+`LinuxDataPaths.DetectSandbox` moves the store to `$SNAP_USER_COMMON` or the
+Flatpak's `~/.var/app/<id>/data`; the install check records
+`/snap/<name>/current` and `$SNAP_REAL_HOME`, because snapd renames both the
+program's directory and `$HOME` on every refresh and the "program moved" banner
+would otherwise greet every snap user after every update; and in a Flatpak the
+socket moves to `$XDG_RUNTIME_DIR/app/<id>/` (every `flatpak run` has a private
+`/run/user/<uid>`) and the daemon is started through `flatpak-spawn` so it
+outlives its sandbox (`FlatpakPeer`, `DaemonLaunch` in Core).
+
+**The hotkeys and the Speech Dispatcher module are set up from the host**, by
+[sandbox-setup.sh](build/sandbox-setup.sh), which ships in both. That is a
+decision: it keeps the snap free of `personal-files` and classic confinement and
+the Flatpak free of home access, all of which need a manual store review. **Do
+not add those grants to make binding work from inside.** It reuses
+`keybindings.sh` and `speechd-install.sh` unchanged. Its own harness is
+[check-sandbox-setup.sh](build/check-sandbox-setup.sh), with negative controls,
+in CI's `linux` job.
+
+`pack-snap.sh` asserts, on the finished snap: the version; **strict**
+confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
+`setup`); **no `command-chain` on `ctl`**, because an extension there wraps
+every hotkey press in a launcher script and nothing else would ever complain; no
+models and no CUDA provider; the daemon's three staged libraries (PulseAudio,
+X11, Wayland); and the module answering `INIT` with 299. `--check <file.snap>`
+runs only these, which is how all seven were seen failing. `pack-flatpak.sh
+--test-install` installs the bundle and asserts the store lands under
+`~/.var/app`, the module answers `INIT` inside the sandbox, and the host-side
+`vst-ctl`, run from the deployment's `active` path as a hotkey runs it, looks for
+the daemon in the shared runtime directory. If that were wrong, every press
+would start a second daemon nobody talks to.
+
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
 nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a
@@ -305,7 +363,9 @@ has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
 **The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
-`0.2.12`, which is S5's number and is **under development**. `0.2.11` shipped on
+`0.2.17`, the snap and Flatpak release, **under development** since 2026-09-25.
+(This paragraph said `0.2.12` until then; 0.2.13 to 0.2.16 came and went without
+it being updated, and the table below does not list all of them.) `0.2.11` shipped on
 2026-08-30 and is tagged `v0.2.11`; the bump followed the same day, which is the
 rule below working rather than a coincidence.
 
@@ -318,6 +378,7 @@ rule below working rather than a coincidence.
 | `0.2.12` | Skipped | never cut |
 | `0.2.13` | Two numbers that did not describe the daemon: a benchmark measuring a `TotalStep` no voice ran at, and a banner that could not clear its own warning. Both reported from the running install | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.13`, not published.** (It briefly carried this project's work on 2026-08-28 before being reclaimed to `0.2.11`; nothing was ever cut under it then) |
 | `0.2.12` | All ten of TESTING-PLAN's items, the ORT hash pin, and four window fixes — the Tune tab's unreadable dropdowns, the Pronunciations tab losing unsaved rules, the scope label, and a false claim in `INSTALL.txt` | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.12`, not published.** It began as "checks only, accumulates until it carries something visible" — and then it did |
+| `0.2.17` | The snap and the Flatpak — [STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md) — and the sandbox-aware store, install check and socket they need. Chosen by the user as a patch release | **under development** since 2026-09-25 |
 | `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
 
 **A first `0.2.11` was packed and then withdrawn the same day**, and the

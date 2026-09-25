@@ -326,8 +326,12 @@ EOF
 # Absolute command string. The executable is quoted only when it needs to be:
 # the desktop splits this with shell-like word splitting, so an install path
 # containing a space breaks an unquoted command.
+#
+# VST_KB_CTL_COMMAND replaces "<install-dir>/vst-ctl" for a snap, where the key
+# has to run the client inside its confinement through /snap/bin, not the file
+# in the read-only mount. Unset for every other install. See sandbox-setup.sh.
 _vst_kb_command() {
-    local exe="$1/vst-ctl" verb="$2"
+    local exe="${VST_KB_CTL_COMMAND:-$1/vst-ctl}" verb="$2"
     if [[ "$exe" == *[[:space:]]* ]]; then
         printf '"%s" %s' "$exe" "$verb"
     else

@@ -140,6 +140,16 @@ jobs:
                     "outside the test run. Check the build output.")
           PY
 
+      # sandbox-setup.sh is what gives a snap or Flatpak install its hotkeys and
+      # its Speech Dispatcher module, and every way it can be wrong is silent: a
+      # key bound to a path the next update removes, a module command speechd
+      # lists and never runs, a write inside the sandbox that looks like success.
+      # Hermetic (a fake snap mount and a fake Flatpak installation, all writes
+      # redirected), about a second, and --negative-control makes it prove it can
+      # fail before its pass is believed.
+      - name: Check sandbox-setup.sh against a fake snap and Flatpak
+        run: bash build/check-sandbox-setup.sh --negative-control
+
       # PublishAot only takes effect on `dotnet publish`, so the step above
       # compiles vst-ctl without ever exercising the native toolchain — and the
       # plan (Phase 7) names the release run as the first place this can fail.
@@ -437,3 +447,88 @@ jobs:
           tail -60 /tmp/smoke.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
             echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------- snap
+  #
+  # THE SNAP, BUILT FROM THE SAME TARBALL. pack-snap.sh publishes nothing: it
+  # repackages the tree pack-tar.sh composed, so the eleven assertions of the
+  # pack job are the snap's too, and it adds its own: strict confinement, all
+  # five apps present, the hotkey app free of any launcher wrapper, the daemon's
+  # native libraries staged, and the module answering INIT from inside the
+  # finished snap.
+  #
+  # The tarball is extracted to where pack-tar.sh would have left the tree, so
+  # this job does not need .NET or espeak-ng. --destructive-mode because this
+  # runner IS the core24 base (Ubuntu 24.04) and has no LXD to spare. sudo
+  # because destructive mode installs the GNOME extension's build snaps through
+  # snapd.
+  snap:
+    runs-on: ubuntu-24.04
+    needs: pack
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      - name: Extract it as the composed tree
+        run: |
+          mkdir -p dist/release-linux
+          tar -xzf dist/VibeSuperTonic-*.tar.gz -C dist/release-linux
+
+      - name: Install snapcraft
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt-get install -y squashfs-tools appstream desktop-file-utils
+
+      - name: Pack the snap, with its assertions
+        run: sudo bash build/pack-snap.sh --destructive-mode
+
+      - name: Upload the snap
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-snap
+          path: dist/*.snap
+          retention-days: 7
+
+  # ---------------------------------------------------------------- flatpak
+  #
+  # THE FLATPAK, BUILT FROM THE SAME TARBALL, then INSTALLED and checked as a
+  # real deployment (--test-install). What that proves is what fails silently
+  # otherwise: the store lands in ~/.var/app rather than the read-only /app;
+  # the Speech Dispatcher module answers INIT inside the sandbox; and the
+  # host-side vst-ctl, run from the deployment's `active` path exactly as a
+  # hotkey runs it, looks for the daemon in the app's shared runtime directory.
+  # If that last one were wrong, every press would start a second daemon that
+  # nobody talks to, and nothing would report an error.
+  #
+  # Flathub's own build image, so the runtime and flatpak-builder are the ones
+  # Flathub's servers use. --privileged because bubblewrap needs namespaces.
+  flatpak:
+    runs-on: ubuntu-latest
+    needs: pack
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      - name: Pack the Flatpak and test the installed deployment
+        run: |
+          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          bash build/pack-flatpak.sh --test-install
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: dist/*.flatpak
+          retention-days: 7

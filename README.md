@@ -225,15 +225,46 @@ of an engine other applications load, this is a **daemon** that owns the model
 and the audio device, a **global hotkey** that speaks whatever you have
 selected, and a **window** to follow along in.
 
+### Installing
+
+Four packages of one build, in the order to try them:
+
+1. **Snap**, which is what the Ubuntu App Center installs, and which Kubuntu's
+   Discover lists too: `sudo snap install vibesupertonic`
+2. **Flatpak**, from Flathub, which Discover lists once Flatpak support is
+   added: `flatpak install flathub io.github.hananel_hazan.VibeSuperTonic`
+3. **AppImage**: one file, `chmod +x`, run it. Models and data live beside it.
+4. **Tarball**, the portable folder:
+
+   ```bash
+   tar -xzf VibeSuperTonic-<version>-linux-x64.tar.gz
+   cd VibeSuperTonic
+   ./install.sh          # binds the hotkeys and adds a menu entry; nothing autostarts
+   ```
+
+The snap and the Flatpak start with 0.2.17 and are not in either store yet
+([docs/STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md)). Until they are, CI
+builds both from every push, and `sudo snap install --dangerous <file>.snap` or
+`flatpak install --user <file>.flatpak` installs one.
+
+**Both are sandboxed, so the hotkeys and the screen reader take one command in
+a terminal.** A sandbox cannot change the desktop's shortcut settings or Speech
+Dispatcher's configuration, so the package carries a script you run on the host
+once:
+
 ```bash
-tar -xzf VibeSuperTonic-<version>-linux-x64.tar.gz
-cd VibeSuperTonic
-./install.sh          # binds the hotkeys and adds a menu entry; nothing autostarts
+# snap
+bash /snap/vibesupertonic/current/sandbox-setup.sh bind
+bash /snap/vibesupertonic/current/sandbox-setup.sh speechd-install
+# Flatpak
+bash "$(flatpak info --show-location io.github.hananel_hazan.VibeSuperTonic)/files/lib/vibesupertonic/sandbox-setup.sh" bind
 ```
 
-Or the AppImage: one file, `chmod +x`, run it. Models and data live beside it.
+Models and settings live in `~/snap/vibesupertonic/common` or
+`~/.var/app/io.github.hananel_hazan.VibeSuperTonic/data/vibesupertonic`, which
+both survive updates.
 
-**Stop the daemon before replacing either** — Linux lets you overwrite a running
+**Stop the daemon before replacing the AppImage or the tarball** — Linux lets you overwrite a running
 executable, and the result is a new binary on disk with the old one still
 answering every hotkey press. `install.sh` does it for you; by hand it is
 `./vst-ctl shutdown`.
@@ -293,7 +324,8 @@ taken from a measurement, not a limitation nobody noticed.
 - X11, or Wayland on KDE/wlroots. **GNOME/Wayland cannot work**: selection
   capture needs `ext-data-control`, which GNOME declines to implement on
   security grounds
-- No runtime to install. All four binaries carry what they need
+- No runtime to install. All four binaries carry what they need. The snap and
+  the Flatpak bring their own libraries as well
 
 Every release is extracted into a bare `ubuntu:22.04` container in CI and started
 there — no .NET, no display, no audio device, no models — so "it runs on a

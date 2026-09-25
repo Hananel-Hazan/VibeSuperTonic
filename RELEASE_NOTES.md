@@ -1,3 +1,69 @@
+# VibeSuperTonic v0.2.17
+
+*A snap and a Flatpak, so it can be installed from the Ubuntu App Center and from KDE Discover.*
+
+**Under development.** Nothing below has been packed for release or published to
+either store yet. The steps and the list of what still needs checking on a real
+desktop are in [docs/STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md).
+
+```
+VibeSuperTonic-0.2.17-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.17-amd64.snap           (built by CI)
+VibeSuperTonic-0.2.17-x86_64.flatpak       (built by CI)
+VibeSuperTonic-0.2.17-x86_64.AppImage
+```
+
+## Two new ways to install, and the AppImage moves to third
+
+Linux now offers four packages of the same build, in this order: the **snap**
+(what the Ubuntu App Center installs, and what Kubuntu's Discover lists), the
+**Flatpak** (Flathub, which Discover lists once Flatpak support is added), the
+**AppImage**, and the **tarball**. The tarball is still the one the other three
+are built from.
+
+Both new packages are sandboxed. That changed three things, all invisible when
+they work:
+
+- **Models and settings live in the sandbox's own directory**,
+  `~/snap/vibesupertonic/common` or
+  `~/.var/app/io.github.hananel_hazan.VibeSuperTonic/data/vibesupertonic`,
+  because the program's directory is read-only there. Both survive updates.
+- **An update does not claim the program moved.** snapd renames the program's
+  directory and `$HOME` on every refresh. The "re-bind your hotkeys" check now
+  compares the paths that stay the same, so snap users do not get a false warning
+  after each update.
+- **In the Flatpak, the window, the hotkey and the screen reader module all find
+  the same daemon**, and a daemon started by a hotkey press keeps running after
+  the press ends.
+
+## Hotkeys and the screen reader: one command in a terminal
+
+A sandbox cannot change the desktop's shortcut settings or Speech Dispatcher's
+configuration, and asking the stores for that access would need a manual review
+for something used once. So both packages carry `sandbox-setup.sh`, which you run
+on the host. The Status tab shows the exact command for your install:
+
+```bash
+bash /snap/vibesupertonic/current/sandbox-setup.sh bind              # snap
+bash /snap/vibesupertonic/current/sandbox-setup.sh speechd-install
+```
+
+It uses the same binding and Speech Dispatcher code as the tarball and the
+AppImage.
+
+## On stock Ubuntu (GNOME on Wayland)
+
+The hotkey cannot read the selection there. GNOME does not offer the Wayland
+protocol that allows it, which is true of every package, not just these. The
+screen reader voices and the window work. The store listing says so.
+
+## Licence
+
+As since 0.2.11, the Linux packages bundle espeak-ng and are GPL-3.0-or-later as
+a whole. The source stays MIT.
+
+---
+
 # VibeSuperTonic v0.2.16
 
 *Four ways a press could do nothing, and nothing anywhere said so.*

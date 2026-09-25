@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=VibeSuperTonic
+GenericName=Text to speech
+Comment=Reads what you select, out loud, in a neural voice that runs on this machine
+Exec=vibesupertonic
+Icon=io.github.hananel_hazan.VibeSuperTonic
+Categories=Utility;Accessibility;
+Keywords=speech;tts;text to speech;reader;screen reader;voice;accessibility;orca;
+Terminal=false
+StartupWMClass=vibesupertonic-ui

@@ -234,6 +234,20 @@ for helper in vst-gpu-guard.sh vst-autotune.sh; do
     chmod 755 "$staging/$helper"
 done
 
+# The store packages' desktop hook-up and listing (2026-09-25). They travel in
+# the tarball because the snap and the Flatpak are both built FROM it, the way
+# the AppImage is: that is what makes this tree's assertions theirs too, and it
+# is what a Flathub manifest downloads. Harmless to a tarball user. install.sh
+# still writes its own launcher, and sandbox-setup.sh refuses to run anywhere
+# but inside an installed snap or Flatpak.
+cp "$root/build/sandbox-setup.sh" "$staging/sandbox-setup.sh"
+chmod 755 "$staging/sandbox-setup.sh"
+app_id="io.github.hananel_hazan.VibeSuperTonic"
+mkdir -p "$staging/desktop"
+cp "$root/build/desktop/$app_id.desktop"      "$staging/desktop/$app_id.desktop"
+cp "$root/build/desktop/$app_id.metainfo.xml" "$staging/desktop/$app_id.metainfo.xml"
+cp "$root/build/vibesupertonic.png"           "$staging/desktop/$app_id.png"
+
 # --- the phonemiser (P5) ----------------------------------------------------
 #
 # espeak-ng, built by build/build-espeak.sh from a pinned commit, in the layout

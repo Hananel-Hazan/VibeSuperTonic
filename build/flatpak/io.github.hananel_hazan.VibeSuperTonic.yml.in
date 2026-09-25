@@ -1,0 +1,71 @@
+# The Flatpak manifest. A TEMPLATE: build/pack-flatpak.sh fills in the two
+# @TARBALL_*@ lines with the Linux tarball it was given, by path for a local
+# build or by release URL for Flathub, always with its SHA-256.
+#
+# It builds nothing from source. It installs the tree pack-tar.sh composed and
+# asserted, as the AppImage and the snap do, so the eleven assertions apply to
+# this package too. Flathub accepts an upstream release archive pinned by hash.
+#
+# THE LAYOUT IS A CONTRACT WITH CODE. The tree goes to /app/lib/vibesupertonic,
+# and FlatpakPeer in Core recognises a deployment by that path: the host-side
+# hotkey client finds the daemon's socket from it, and DaemonLaunch starts the
+# daemon at /app/lib/vibesupertonic/vibesupertonicd. Move it and both break,
+# silently. FlatpakPeer.InstallSuffix and SandboxDir are the other end.
+#
+# No --filesystem=home and no host config access. The hotkeys and the Speech
+# Dispatcher module are the desktop's configuration, written once by
+# sandbox-setup.sh on the host. See that file.
+
+id: io.github.hananel_hazan.VibeSuperTonic
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: vibesupertonic
+
+finish-args:
+  # The window, on either display server. X11 only when Wayland is absent.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # The voice.
+  - --socket=pulseaudio
+  # The first-run model download, from Hugging Face.
+  - --share=network
+  # GPU inference. The optional CUDA pack is not offered inside the sandbox.
+  - --device=dri
+  # The tray icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+
+modules:
+  - name: vibesupertonic
+    buildsystem: simple
+    # Install the tarball's bytes as they are. flatpak-builder otherwise strips
+    # every ELF under /app and splits out debug info, and the binaries the
+    # tarball's assertions checked would not be the ones that ship.
+    build-options:
+      no-debuginfo: true
+      strip: false
+    build-commands:
+      - install -d /app/lib/vibesupertonic /app/bin
+      - cp -a . /app/lib/vibesupertonic/
+      # A wrapper, not a symlink: the window resolves its own directory, and a
+      # script is certain to leave it the real one.
+      - |
+        cat > /app/bin/vibesupertonic <<'EOF'
+        #!/bin/sh
+        exec /app/lib/vibesupertonic/vibesupertonic-ui "$@"
+        EOF
+      - chmod 755 /app/bin/vibesupertonic
+      # For `flatpak run --command=sandbox-setup.sh <id>`, which prints the host
+      # command for this install.
+      - ln -s ../lib/vibesupertonic/sandbox-setup.sh /app/bin/sandbox-setup.sh
+      - install -Dm644 desktop/io.github.hananel_hazan.VibeSuperTonic.desktop
+          /app/share/applications/io.github.hananel_hazan.VibeSuperTonic.desktop
+      - install -Dm644 desktop/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+          /app/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+      - install -Dm644 desktop/io.github.hananel_hazan.VibeSuperTonic.png
+          /app/share/icons/hicolor/256x256/apps/io.github.hananel_hazan.VibeSuperTonic.png
+    sources:
+      - type: archive
+        @TARBALL_LOCATION@
+        sha256: @TARBALL_SHA256@
