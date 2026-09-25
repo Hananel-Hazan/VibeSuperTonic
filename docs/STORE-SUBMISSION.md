@@ -159,6 +159,16 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
 2. `snapcraft upload --release=edge dist/VibeSuperTonic-0.2.17-amd64.snap`. CI's
    `linux-snap` artifact is a `devel`-grade build, which `edge` and `beta`
    accept; `candidate` and `stable` need a build made with `--grade stable`.
+
+   **CI does this itself** once the repository has an
+   `SNAPCRAFT_STORE_CREDENTIALS` secret: the snap job publishes to `edge` on
+   every push to `main`, and on a manual run with `publish_edge` ticked, after
+   `--test-install` has passed. Make the credential with
+   `snapcraft export-login --snaps=vibesupertonic --channels=edge
+   --acls=package_access,package_push,package_update,package_release <file>`
+   and paste the file's contents into the secret. It can reach `edge` only.
+   Promotion to `stable` stays a person's decision, in the dashboard or with
+   `snapcraft release`.
 3. In the dashboard: categories (Utilities, Productivity), screenshots, and the
    licence note that the models download separately under OpenRAIL-M.
 4. Automated review should pass, because nothing privileged is requested. Promote

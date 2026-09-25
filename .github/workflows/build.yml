@@ -15,6 +15,12 @@ on:
   pull_request:
     branches: [main, Dev]
   workflow_dispatch:
+    inputs:
+      publish_edge:
+        # A manual run from a branch uploads only when asked. See the snap job.
+        description: 'Upload the snap to the Snap Store edge channel'
+        type: boolean
+        default: false
 
 jobs:
   # ---------------------------------------------------------------- Windows
@@ -483,10 +489,10 @@ jobs:
           sudo snap install snapcraft --classic
           sudo apt-get install -y squashfs-tools appstream desktop-file-utils
 
-      # --test-install: this runner has snapd and AppArmor, so the snap is
-      # installed and its daemon started the way a hotkey starts it. Every other
-      # check runs the snap's files outside confinement, which is how revision 1
-      # reached the store with a daemon AppArmor killed on every press.
+      # --test-install: this runner has snapd, AppArmor and seccomp, so the snap
+      # is installed and its daemon started the way a hotkey starts it. Every
+      # other check runs the snap's files outside confinement, which is how
+      # revision 1 reached the store with a daemon seccomp killed on every press.
       - name: Pack the snap, with its assertions, and test it under snapd
         run: sudo bash build/pack-snap.sh --destructive-mode --test-install
 
@@ -496,6 +502,34 @@ jobs:
           name: linux-snap
           path: dist/*.snap
           retention-days: 7
+
+      # TO THE STORE'S EDGE CHANNEL, and only a snap that passed --test-install
+      # above, since a failed step ends the job before this one. On a push to
+      # main, or a manual run with publish_edge ticked; never a pull request.
+      # The credential is `snapcraft export-login --snaps=vibesupertonic
+      # --channels=edge ...`, so it cannot reach beta, candidate or stable
+      # whatever this step is changed to say. CI builds are grade devel, which
+      # the store also keeps off candidate and stable.
+      #
+      # Asked for and no credential is a failure, not a skip: a green run that
+      # silently published nothing is how somebody waits for a revision that is
+      # never coming. On main without one, it says so and passes.
+      - name: Publish to the edge channel
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          || (github.event_name == 'workflow_dispatch' && inputs.publish_edge)
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          ASKED: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [[ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]]; then
+            msg="no SNAPCRAFT_STORE_CREDENTIALS secret, so nothing was published"
+            if [[ "$ASKED" == true ]]; then echo "::error::$msg"; exit 1; fi
+            echo "::notice::$msg"; exit 0
+          fi
+          snaps=(dist/VibeSuperTonic-*.snap)
+          [[ ${#snaps[@]} -eq 1 && -f "${snaps[0]}" ]] || { echo "::error::expected one snap in dist/, found: ${snaps[*]}"; exit 1; }
+          snapcraft upload --release=edge "${snaps[0]}"
 
   # ---------------------------------------------------------------- flatpak
   #

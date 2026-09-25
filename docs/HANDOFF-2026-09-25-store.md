@@ -73,10 +73,13 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 
 1. Get the snap working. **Fixed in `a929ba5`, proven by run 50; waiting on the
    user to upload revision 2 to `edge` and try it on their machine.**
-2. Set up CI to upload to `edge` automatically. Needs a credential the user
-   creates: `snapcraft export-login --snaps=vibesupertonic --channels=edge
-   --acls=package_access,package_push,package_update,package_release <file>`,
-   stored as a GitHub secret. Do this after revision 2 works.
+2. CI uploads to `edge`: **the step is written** (snap job, "Publish to the edge
+   channel"; on `main` pushes, or a manual run with `publish_edge` ticked). The
+   user made the edge-only credential (`snap-edge.cred`); it has to be stored as
+   the repository secret `SNAPCRAFT_STORE_CREDENTIALS`, which only they can do.
+   Their own `snapcraft upload` of run 50's snap was refused by the store with
+   `binary_sha3_384: Error checking upload uniqueness`, cause unknown; the first
+   dispatch with `publish_edge` is also the second attempt at revision 2.
 3. Desktop checklist in `docs/STORE-SUBMISSION.md` (hotkey latency through
    `/snap/bin`, tray icon, Orca, duplicate menu entry on KDE, Status tab note).
 4. Store listing on snapcraft.io: Utilities + Productivity, screenshots, licence
