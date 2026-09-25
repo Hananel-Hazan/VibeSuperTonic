@@ -279,6 +279,13 @@ var request = new Request
         ? Environment.GetEnvironmentVariable("DISPLAY")
         : null,
 
+    // Beside DISPLAY, under the same rule: the X server's key changes at every
+    // login, and a daemon that outlived one would open the tray's window with a
+    // key file that no longer exists (ClientDisplay in Core).
+    XAuthority = verb is RequestVerb.Toggle or RequestVerb.Read && FlatpakPeer.Current is not { Inside: false }
+        ? Environment.GetEnvironmentVariable("XAUTHORITY")
+        : null,
+
     // Only benchmark reads it, and only to override its load guard. Sent as null
     // otherwise so the flag cannot quietly acquire a second meaning later.
     Force = verb is RequestVerb.Benchmark or RequestVerb.VoiceRemove && force ? true : null,

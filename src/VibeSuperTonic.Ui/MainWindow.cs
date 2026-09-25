@@ -313,6 +313,7 @@ public sealed class MainWindow : Window
         {
             Verb = verb,
             Display = verb == RequestVerb.Read ? Environment.GetEnvironmentVariable("DISPLAY") : null,
+            XAuthority = verb == RequestVerb.Read ? Environment.GetEnvironmentVariable("XAUTHORITY") : null,
         });
 
         return button;

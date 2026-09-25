@@ -60,13 +60,22 @@ internal sealed class TrayIcon : IDisposable
         Func<Request, Response> invoke,
         Func<bool> uiAttached,
         Action<string> log,
-        Action? raiseWindow = null)
+        Action? raiseWindow = null,
+        Func<IReadOnlyDictionary<string, string?>>? windowSession = null)
     {
         _invoke = invoke;
         _uiAttached = uiAttached;
         _log = log;
         _raiseWindow = raiseWindow ?? (() => { });
+        _windowSession = windowSession;
     }
+
+    /// <summary>
+    /// The current session's DISPLAY and XAUTHORITY as a client last reported
+    /// them (ClientDisplay in Core), applied to the window over this process's
+    /// own, which may be from a session that has since ended.
+    /// </summary>
+    private readonly Func<IReadOnlyDictionary<string, string?>>? _windowSession;
 
     private readonly Action _raiseWindow;
 
@@ -305,7 +314,7 @@ internal sealed class TrayIcon : IDisposable
             return;
         }
 
-        if (WindowStartInfo(out string? cannot) is not { } start)
+        if (WindowStartInfo(out string? cannot, _windowSession?.Invoke()) is not { } start)
         {
             _launchGate.Failed();
             _log($"tray: {cannot}");
@@ -336,7 +345,21 @@ internal sealed class TrayIcon : IDisposable
     /// with its exception lost; and a pipe that fills blocks the writer. Now it
     /// goes wherever this daemon's own output goes.</para>
     /// </summary>
-    internal static ProcessStartInfo? WindowStartInfo(out string? why)
+    internal static ProcessStartInfo? WindowStartInfo(
+        out string? why, IReadOnlyDictionary<string, string?>? session = null)
+    {
+        var start = Command(out why);
+        if (start is null || session is not { Count: > 0 }) return start;
+
+        foreach (var (key, value) in session)
+        {
+            if (value is null) start.Environment.Remove(key);
+            else start.Environment[key] = value;
+        }
+        return start;
+    }
+
+    private static ProcessStartInfo? Command(out string? why)
     {
         if (Environment.GetEnvironmentVariable("VST_UI") is { Length: > 0 } ui)
             return Plain(ui, out why);

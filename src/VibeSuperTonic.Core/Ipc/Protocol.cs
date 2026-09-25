@@ -266,6 +266,14 @@ public sealed record Request
     public string? Display { get; init; }
 
     /// <summary>
+    /// The client's <c>$XAUTHORITY</c>, sent beside <see cref="Display"/> and
+    /// under the same rule, for the same reason: the X server's key changes at
+    /// every login, and a daemon that outlived one holds a file that no longer
+    /// exists. Only the tray's window uses it; see <see cref="ClientDisplay"/>.
+    /// </summary>
+    public string? XAuthority { get; init; }
+
+    /// <summary>
     /// Who is subscribing, and as what — <c>hello</c>, sent on
     /// <see cref="RequestVerb.Subscribe"/> and ignored by every other verb.
     ///

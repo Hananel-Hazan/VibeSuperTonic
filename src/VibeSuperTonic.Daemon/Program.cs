@@ -455,7 +455,8 @@ foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGINT, PosixSig
 // daemon that refuses to start is a hotkey that silently does nothing, and that
 // trade is the whole reason `status` carries a Tray field.
 using var tray = new TrayIcon(
-    server.Invoke, () => server.UiAttached, DaemonLog.Write, server.RaiseWindow);
+    server.Invoke, () => server.UiAttached, DaemonLog.Write, server.RaiseWindow,
+    () => server.ClientDisplay.ForWindow(File.Exists));
 server.TrayStatus = () => tray.Status;
 session.Emitted += tray.OnSessionEvent;
 server.UiAttachedChanged += tray.OnUiAttachedChanged;

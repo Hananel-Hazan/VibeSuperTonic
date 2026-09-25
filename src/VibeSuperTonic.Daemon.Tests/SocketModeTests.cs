@@ -187,4 +187,41 @@ public sealed class SocketModeTests : IDisposable
 
         Assert.True(client.Connected);
     }
+
+    /// <summary>
+    /// The session the tray's window gets comes from clients on the socket, and
+    /// never from the tray itself. The tray is this process: its requests carry
+    /// the daemon's own DISPLAY and XAUTHORITY, which after a logout and login
+    /// are the stale values ClientDisplay exists to replace (revision 4 of the
+    /// snap aborted its window on every tray click for exactly that).
+    /// </summary>
+    [Fact]
+    public async Task Only_a_client_on_the_socket_reports_the_session_the_tray_window_gets()
+    {
+        Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", _root);
+        Bind();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var serving = _server!.RunAsync(cts.Token);
+
+        _server.Invoke(new Request { Verb = RequestVerb.Status, Display = ":9", XAuthority = "/run/user/1000/xauth_old" });
+        Assert.Empty(_server.ClientDisplay.ForWindow(_ => true));
+
+        using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        client.Connect(new UnixDomainSocketEndPoint(Protocol.SocketPath()));
+        using var stream = new NetworkStream(client, ownsSocket: false);
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        using var reader = new StreamReader(stream);
+        await writer.WriteLineAsync(Protocol.Encode(new Request
+        {
+            Verb = RequestVerb.Status, Display = ":0", XAuthority = "/run/user/1000/xauth_new",
+        }));
+        Assert.NotNull(await reader.ReadLineAsync(cts.Token));
+
+        var vars = _server.ClientDisplay.ForWindow(_ => true);
+        Assert.Equal(":0", vars["DISPLAY"]);
+        Assert.Equal("/run/user/1000/xauth_new", vars["XAUTHORITY"]);
+
+        cts.Cancel();
+        try { await serving; } catch (OperationCanceledException) { }
+    }
 }

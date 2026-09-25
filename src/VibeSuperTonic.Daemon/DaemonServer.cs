@@ -170,6 +170,13 @@ public sealed partial class DaemonServer : IDisposable
     /// </summary>
     public Response Invoke(Request request) => Handle(request);
 
+    /// <summary>
+    /// The session the socket's clients last reported, for the tray's window.
+    /// Fed only from the socket: <see cref="Invoke"/> is the tray, which is this
+    /// process, and carries the very environment this replaces.
+    /// </summary>
+    public ClientDisplay ClientDisplay { get; } = new();
+
     // --------------------------------------------------------------- listening
 
     /// <summary>
@@ -391,6 +398,7 @@ public sealed partial class DaemonServer : IDisposable
                     await WriteAsync(writer, Response.Fail("unparseable request"));
                     continue;
                 }
+                ClientDisplay.Observe(request);
 
                 if (request.Verb == RequestVerb.Subscribe)
                 {
