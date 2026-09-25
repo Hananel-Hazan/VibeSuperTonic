@@ -83,6 +83,9 @@ public sealed partial class DaemonServer : IDisposable
     /// <summary>Bound by <see cref="Bind"/>, served by <see cref="RunAsync"/>, closed by Dispose.</summary>
     private Socket? _listener;
 
+    /// <summary>True when the socket is an abstract name (a snap's) rather than a file.</summary>
+    private bool _abstractSocket;
+
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
@@ -194,20 +197,29 @@ public sealed partial class DaemonServer : IDisposable
         if (_listener is not null) return;
 
         string path = Protocol.SocketPath();
-        string dir = Path.GetDirectoryName(path)!;
 
-        Directory.CreateDirectory(dir);
-        // Explicit rather than inherited. Under $XDG_RUNTIME_DIR the parent is
-        // already 0700, but the /tmp fallback is world-writable and the socket
-        // is a remote-control interface for the user's speakers.
-        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // An abstract name — a snap's, see SnapPeer — is not a file: there is no
+        // directory to make, no mode to set and no stale file to clear, and a
+        // second daemon is refused by bind() itself. What replaces the file
+        // mode is the peer check in RunAsync.
+        _abstractSocket = Protocol.IsAbstract(path);
+        if (!_abstractSocket)
+        {
+            string dir = Path.GetDirectoryName(path)!;
 
-        ClearStaleSocket(path);
+            Directory.CreateDirectory(dir);
+            // Explicit rather than inherited. Under $XDG_RUNTIME_DIR the parent is
+            // already 0700, but the /tmp fallback is world-writable and the socket
+            // is a remote-control interface for the user's speakers.
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            ClearStaleSocket(path);
+        }
 
         var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
-            listener.Bind(new UnixDomainSocketEndPoint(path));
+            listener.Bind(Protocol.EndPoint(path));
         }
         catch (SocketException ex)
         {
@@ -232,7 +244,8 @@ public sealed partial class DaemonServer : IDisposable
                 "Set $XDG_RUNTIME_DIR to a shorter directory.", ex);
         }
 
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (!_abstractSocket)
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
         // A unix socket whose accept queue is full fails connect() with EAGAIN
         // immediately — it does not queue and it does not wait. At a backlog of
@@ -265,6 +278,16 @@ public sealed partial class DaemonServer : IDisposable
                 try { client = await listener.AcceptAsync(serving); }
                 catch (OperationCanceledException) { break; }
 
+                // An abstract socket has no file mode, so anyone on the machine
+                // can connect to it. Only this user may drive these speakers.
+                if (_abstractSocket && !PeerCredentials.IsSameUser(client))
+                {
+                    Log($"refused a connection from uid {PeerCredentials.PeerUid(client)?.ToString() ?? "unknown"}: " +
+                        "only this daemon's own user may control it");
+                    client.Dispose();
+                    continue;
+                }
+
                 // Fire and forget: one misbehaving client must not stall accept.
                 _ = Task.Run(() => ServeAsync(client, serving), CancellationToken.None);
             }
@@ -277,7 +300,8 @@ public sealed partial class DaemonServer : IDisposable
             // The socket file, not the listener: a leftover path is what the next
             // daemon has to reason about in ClearStaleSocket, and leaving one
             // behind on a clean exit makes that job harder for no reason.
-            try { File.Delete(Protocol.SocketPath()); } catch { /* going away anyway */ }
+            if (!_abstractSocket)
+                try { File.Delete(Protocol.SocketPath()); } catch { /* going away anyway */ }
         }
     }
 

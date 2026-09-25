@@ -110,6 +110,14 @@ Verified in this repository:
   had deleted `libX11` from `usr/lib`, where the daemon (which has no extension)
   needed it. The daemon's libraries now live in `lib/native`.
 
+**What the first real install found.** Revision 1, on `edge`, could not start its
+daemon: AppArmor allowed creating the socket file and refused `listen()`, so the
+window said "not connected" and every hotkey press aborted a daemon. Nothing above
+had run the snap under snapd. The fix is an abstract socket named for the snap,
+which confinement allows, with a same-user check in place of the file mode; and
+`pack-snap.sh --test-install`, which CI now runs on a runner with snapd, installs
+the snap and makes its daemon answer.
+
 **Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
 
 - [ ] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** `snap run` adds

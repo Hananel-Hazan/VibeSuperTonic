@@ -739,7 +739,8 @@ public static class Protocol
     public static string SocketPath() => SocketPath(
         Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
         Directory.Exists,
-        FlatpakPeer.Current);
+        FlatpakPeer.Current,
+        SnapPeer.Current);
 
     /// <summary>
     /// The rule, with its inputs passed in, for the tests.
@@ -749,15 +750,37 @@ public static class Protocol
     /// reach. See <see cref="FlatpakPeer"/>. A snap needs nothing here: snapd
     /// already gives every process of the snap the same
     /// <c>$XDG_RUNTIME_DIR</c>, <c>/run/user/&lt;uid&gt;/snap.&lt;name&gt;</c>.</para>
+    ///
+    /// <para><b>A snap gets an abstract socket instead of a file</b>, because
+    /// its confinement refuses <c>listen()</c> on the file. See
+    /// <see cref="SnapPeer"/>. The name starts with <c>@</c>; use
+    /// <see cref="IsAbstract"/> before any file operation on it and
+    /// <see cref="EndPoint"/> to bind or connect.</para>
     /// </summary>
-    public static string SocketPath(string? runtime, Func<string, bool> dirExists, FlatpakPeer? flatpak)
+    public static string SocketPath(string? runtime, Func<string, bool> dirExists, FlatpakPeer? flatpak,
+        SnapPeer? snap = null)
     {
+        if (snap is not null) return snap.SocketName;
+
         string root = !string.IsNullOrEmpty(runtime) && dirExists(runtime)
             ? Path.Combine(flatpak?.SharedRuntimeDir(runtime) ?? runtime, SocketDirName)
             : Path.Combine(Path.GetTempPath(), $"{SocketDirName}-{Environment.UserName}");
 
         return Path.Combine(root, SocketFileName);
     }
+
+    /// <summary>
+    /// True for an abstract socket name (<c>@…</c>), which is not a file: it
+    /// cannot be stat-ed, chmod-ed or deleted, and it vanishes with its owner.
+    /// </summary>
+    public static bool IsAbstract(string socketPath) => socketPath.StartsWith('@');
+
+    /// <summary>
+    /// The endpoint to bind or connect, for a socket file or an abstract name
+    /// alike. The kernel spells an abstract name with a leading NUL.
+    /// </summary>
+    public static System.Net.Sockets.UnixDomainSocketEndPoint EndPoint(string socketPath) =>
+        new(IsAbstract(socketPath) ? "\0" + socketPath[1..] : socketPath);
 
     public static string Encode<T>(T message) =>
         JsonSerializer.Serialize(message, typeof(T), ProtocolJson.Default);

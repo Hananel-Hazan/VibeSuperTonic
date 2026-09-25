@@ -618,7 +618,9 @@ static void PrintTable(BenchmarkPayload result)
 /// </summary>
 static Socket? Connect(string path)
 {
-    if (!File.Exists(path)) return null;
+    // An abstract name (a snap's) is not a file, so there is nothing to look
+    // for: a connect that nobody answers is ECONNREFUSED, handled below.
+    if (!Protocol.IsAbstract(path) && !File.Exists(path)) return null;
 
     // Short and bounded: this sits in front of every hotkey press, so the
     // budget here is tens of milliseconds, not seconds. Only reached at all
@@ -630,7 +632,7 @@ static Socket? Connect(string path)
         var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
-            socket.Connect(new UnixDomainSocketEndPoint(path));
+            socket.Connect(Protocol.EndPoint(path));
             return socket;
         }
         catch (SocketException ex)

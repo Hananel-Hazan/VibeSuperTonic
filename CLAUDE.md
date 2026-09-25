@@ -317,6 +317,16 @@ not add those grants to make binding work from inside.** It reuses
 [check-sandbox-setup.sh](build/check-sandbox-setup.sh), with negative controls,
 in CI's `linux` job.
 
+**In a snap the control socket is abstract, `@snap.<instance>.ctl-<uid>`, not a
+file** (`SnapPeer` in Core). snapd's AppArmor template lets a confined app create
+the socket file and then refuses `listen()`, so revision 1 on the store's edge
+channel aborted its daemon 1.7 s after every hotkey press, while every packer
+check passed: they all ran the snap's files outside confinement. An abstract
+socket has no file mode, so the daemon checks each peer's uid (`SO_PEERCRED`,
+`PeerCredentials`) and refuses other users. **`pack-snap.sh --test-install`**
+installs the snap under snapd and makes its daemon answer; CI's snap job runs it,
+and it was seen failing on the unfixed code before the fix went in.
+
 `pack-snap.sh` asserts, on the finished snap: the version; **strict**
 confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
 `setup`); **no `command-chain` on `ctl`**, because an extension there wraps

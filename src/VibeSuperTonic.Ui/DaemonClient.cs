@@ -206,12 +206,13 @@ public sealed class DaemonClient
     private static Socket? Connect()
     {
         string path = Protocol.SocketPath();
-        if (!File.Exists(path)) return null;
+        // An abstract name (a snap's) is not a file; a refused connect says the same thing.
+        if (!Protocol.IsAbstract(path) && !File.Exists(path)) return null;
 
         var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
-            socket.Connect(new UnixDomainSocketEndPoint(path));
+            socket.Connect(Protocol.EndPoint(path));
             return socket;
         }
         catch (SocketException)
