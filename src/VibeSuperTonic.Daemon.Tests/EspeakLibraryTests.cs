@@ -10,6 +10,7 @@ namespace VibeSuperTonic.Daemon.Tests;
 /// <para>These run against whatever this machine has, which is the point: the
 /// probe's whole job is to be honest about that.</para>
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class EspeakLibraryTests
 {
     [Fact]

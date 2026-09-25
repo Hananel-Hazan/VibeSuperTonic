@@ -28,11 +28,14 @@ namespace VibeSuperTonic.Daemon.Tests;
 /// invisible in any log, and reachable by any local process.</para>
 ///
 /// <para>These tests move <c>$XDG_RUNTIME_DIR</c>, which is process-wide, so
-/// they are one class and xunit runs a class's tests one at a time. The path
+/// they are one class, and in <see cref="ProcessEnvironmentCollection"/> so no
+/// other class runs beside them: one class at a time was not enough, because
+/// xunit runs different classes in parallel and <c>$TMPDIR</c> reached them. The path
 /// stays SHORT — AF_UNIX truncates at 108 bytes and a socket under a long
 /// scratch path fails to bind with an error that reads like a permissions
 /// problem.</para>
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class SocketModeTests : IDisposable
 {
     private const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite;
