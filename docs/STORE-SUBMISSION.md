@@ -142,10 +142,12 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
 
 ### Snap Store
 
-1. Create a developer account at snapcraft.io and reserve the name:
-   `snapcraft register vibesupertonic`.
-2. `snapcraft upload --release=edge dist/VibeSuperTonic-0.2.17-amd64.snap`, from
-   a build made with `--grade stable` if it will go past `beta`.
+1. ~~Create a developer account at snapcraft.io and reserve the name:
+   `snapcraft register vibesupertonic`.~~ **Done 2026-09-25**; the name
+   `vibesupertonic` belongs to the project's Ubuntu One account.
+2. `snapcraft upload --release=edge dist/VibeSuperTonic-0.2.17-amd64.snap`. CI's
+   `linux-snap` artifact is a `devel`-grade build, which `edge` and `beta`
+   accept; `candidate` and `stable` need a build made with `--grade stable`.
 3. In the dashboard: categories (Utilities, Productivity), screenshots, and the
    licence note that the models download separately under OpenRAIL-M.
 4. Automated review should pass, because nothing privileged is requested. Promote
