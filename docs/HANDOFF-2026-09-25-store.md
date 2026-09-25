@@ -71,15 +71,14 @@ trigger `build.yml`, which runs on `main` and `Dev` only):
 
 ## Open requests from the user
 
-1. Get the snap working. **Fixed in `a929ba5`, proven by run 50; waiting on the
-   user to upload revision 2 to `edge` and try it on their machine.**
-2. CI uploads to `edge`: **the step is written** (snap job, "Publish to the edge
-   channel"; on `main` pushes, or a manual run with `publish_edge` ticked). The
-   user made the edge-only credential (`snap-edge.cred`); it has to be stored as
-   the repository secret `SNAPCRAFT_STORE_CREDENTIALS`, which only they can do.
-   Their own `snapcraft upload` of run 50's snap was refused by the store with
-   `binary_sha3_384: Error checking upload uniqueness`, cause unknown; the first
-   dispatch with `publish_edge` is also the second attempt at revision 2.
+1. Get the snap working. **Fixed in `a929ba5`, proven by run 50, revision 2 on
+   `edge`; waiting on the user to `snap refresh` and try it on their machine.**
+2. ~~CI uploads to `edge`.~~ **Done.** The secret `SNAPCRAFT_STORE_CREDENTIALS`
+   (edge-only) is set, and run 51 (id 36162925538, `ec00d3d`, `publish_edge`
+   ticked) published **revision 2 to `edge`**. From now on every push to `main`
+   publishes too. The user's own upload attempt had failed because the file in
+   `~/Downloads` was revision 1's snap (`binary_sha3_384: Error checking upload
+   uniqueness` is the store refusing a duplicate).
 3. Desktop checklist in `docs/STORE-SUBMISSION.md` (hotkey latency through
    `/snap/bin`, tray icon, Orca, duplicate menu entry on KDE, Status tab note).
 4. Store listing on snapcraft.io: Utilities + Productivity, screenshots, licence
