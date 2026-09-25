@@ -92,6 +92,19 @@ nothing. Revision 1 on the Snap Store's `edge` channel has this bug.
     only desktop-launch sets PULSE_SERVER. Fixed by a top-level
     `PULSE_SERVER: unix:/run/user/$SNAP_UID/pulse/native`, asserted statically
     and, in --test-install, as ctl sees it. Not yet published at this writing.
+- **Revision 4 on the machine**: sound from the tray works, the tray opens the
+  window, `spd-say -o vibesupertonic` speaks. The hotkey stayed silent until a
+  **logout/login** (Plasma loads kglobalaccel shortcuts only at login; by design,
+  see keybindings.sh). Then a tray click after the re-login aborted the window
+  with `XOpenDisplay failed`: the daemon, started by the Speech Dispatcher module
+  before the logout, held the old session's XAUTHORITY (`xauth_RxnJOD` vs the
+  new `xauth_jHeGTu`). Fixed in `dc5e14b`: `Request.XAuthority` travels beside
+  `Request.Display` from vst-ctl and the window; `ClientDisplay` (Core) keeps the
+  latest socket client's report and the tray applies it to the window.
+  **Revision 5** (run 59) carries it. Known limit: a daemon no client has
+  reported to since the login still uses its own values; one hotkey press fixes
+  that. Not fixed: X11 **selection capture** by a stale daemon would hit the same
+  XAUTHORITY problem on an X11 session (Wayland capture was unaffected here).
 - **Refresh blocked by the Speech Dispatcher module**: once registered,
   speech-dispatcher keeps `vibesupertonic.speechd` running, and snapd refuses a
   manual refresh ("has running apps (speechd)") and postpones automatic ones.
