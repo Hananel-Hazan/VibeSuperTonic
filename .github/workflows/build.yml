@@ -470,7 +470,11 @@ jobs:
   # snapd.
   snap:
     runs-on: ubuntu-24.04
-    needs: pack
+    # linux and speechd too, because this job can publish: the snap ships
+    # sandbox-setup.sh (checked in linux) and speechd-install.sh (restore-
+    # tested in speechd), and a snap whose installer failed its restore test
+    # must not reach the store. Both run beside pack, so this costs no time.
+    needs: [pack, linux, speechd]
     steps:
       - uses: actions/checkout@v4
 
