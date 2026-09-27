@@ -387,6 +387,11 @@ sessionState = () => session.State == SpeechState.Idle ? SpeechStateProbe.Idle :
 // this daemon's control socket already lives there — so a daemon vst-ctl can
 // reach at all is one whose runtime dir is right by construction.
 string? forced = Environment.GetEnvironmentVariable("VST_SELECTION");
+// In a snap the socket the probe looks for may not be linked in yet. See the type.
+if (SnapPeer.Current is not null
+    && SnapWaylandLink.Ensure(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
+        Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")) is { } linked)
+    DaemonLog.Write(linked);
 bool useWayland = forced switch
 {
     "wayland" => true,
