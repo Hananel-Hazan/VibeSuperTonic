@@ -18,10 +18,12 @@ the AOT compiler, and the offline build would fail on the first publish.
 --in-sdk RUNS THE RESTORE INSIDE THE FLATPAK SDK, WITH ITS DOTNET EXTENSION. That
 is the one that matters. The runtime packs (Microsoft.NETCore.App.Runtime.*, the
 ILCompiler packs) are versioned by the SDK that restores them, not by anything in
-this repository: SDK 10.0.112 asks for 10.0.12. If the extension carries another
-SDK, a file generated on a workstation names packages the offline build never
-asks for, and the build fails. CI's flathub job regenerates with --in-sdk and
-refuses a committed file that differs.
+this repository: SDK 10.0.112 asks for 10.0.12. That is exactly what happened.
+The first file was generated on a workstation with 10.0.112, and Flathub's
+dotnet10//25.08 asks for 10.0.8. It also brings its own apphost, so
+Microsoft.NETCore.App.Host drops out: 33 packages, not 34. CI's flathub job
+regenerates with --in-sdk and refuses a committed file that differs. The run
+that caught this (2026-09-27) was also the first full build to pass.
 
 Deterministic: sorted by name and version, and nothing about the machine in it.
 """
