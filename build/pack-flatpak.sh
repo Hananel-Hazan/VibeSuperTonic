@@ -82,6 +82,13 @@ work="$root/dist/build-linux/flatpak"
 manifest="$work/$app_id.yml"
 out="$root/dist/VibeSuperTonic-$version-x86_64.flatpak"
 
+# Git on this checkout, trusted explicitly. CI runs as root in a container over
+# a checkout the runner's user owns, and git then refuses every command
+# ("dubious ownership", exit 128): the first --lint run died on it before the
+# linter started. A command-line safe.directory is honoured, and trusts only
+# this path, for this call.
+vst_git() { git -c safe.directory="$root" -C "$root" "$@"; }
+
 # shellcheck source=check-composed-tree.sh
 source "$root/build/check-composed-tree.sh"
 
@@ -142,7 +149,7 @@ PY
 info "flathub.json limits Flathub to x86_64, the one architecture this builds"
 
 if [[ -n "$flathub_tag" ]]; then
-    tag_commit="$(git -C "$root" rev-parse --verify -q "$flathub_tag^{commit}")" \
+    tag_commit="$(vst_git rev-parse --verify -q "$flathub_tag^{commit}")" \
         || die "no tag $flathub_tag here. Tag the release first (CLAUDE.md), then write the submission."
     app_source="      - type: git
         url: https://github.com/Hananel-Hazan/VibeSuperTonic.git
@@ -340,10 +347,9 @@ fi
 # request. Two checks, as Flathub runs them:
 #
 #   manifest  on the manifest as submitted: git source pinned to a commit, with
-#             nuget-sources.json and flathub.json beside it. Not the one built
-#             above: that one names this checkout as a `dir`, and its directory
-#             holds the build state, which the linter measures ("more than
-#             25 MB").
+#             nuget-sources.json and flathub.json beside it, which is what
+#             Flathub lints. Not the one built above, which names this checkout
+#             as a `dir` source, a thing only a local build has.
 #   repo      on the OSTree repository the build exported: desktop file,
 #             metainfo, icons, the ELF architectures, finish-args, size.
 #
@@ -363,7 +369,7 @@ if (( lint )); then
     lintdir="$work/lint"
     rm -rf "$lintdir"
     mkdir -p "$lintdir"
-    head_commit="$(git -C "$root" rev-parse HEAD)"
+    head_commit="$(vst_git rev-parse HEAD)"
     lint_source="      - type: git
         url: https://github.com/Hananel-Hazan/VibeSuperTonic.git
         commit: $head_commit"
