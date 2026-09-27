@@ -210,14 +210,8 @@ public sealed class VoicesTab : UserControl
                     Width = 14,
                     VerticalAlignment = VerticalAlignment.Center,
                 },
-                new TextBlock
-                {
-                    Text = v.Id,
-                    Width = 260,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    FontWeight = v.IsDefault ? FontWeight.Bold : FontWeight.Normal,
-                },
-                Ui.Label(string.Join(" · ", bits)),
+                Column(v.Id, IdWidth - 22, v.IsDefault ? FontWeight.Bold : FontWeight.Normal),
+                Column(string.Join(" · ", bits), InstalledDetailsWidth, opacity: 0.7),
             },
         };
 
@@ -292,13 +286,16 @@ public sealed class VoicesTab : UserControl
     {
         var licence = new TextBlock
         {
-            Text = v.LicenceClass == "nc" ? $"{v.Licence} — NON-COMMERCIAL" : v.Licence ?? "",
+            // The class, not the URL: a Creative Commons URL ran past the window's
+            // edge. The URL is on hover, and in full in the download dialog.
+            Text = v.LicenceClass == "nc" ? "NON-COMMERCIAL use only" : v.Licence ?? "",
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = 0.7,
             // The one licence fact that constrains what the USER may do rather
             // than what we may do, so it is the one that gets a colour.
             Foreground = v.LicenceClass == "nc" ? Brushes.OrangeRed : null,
         };
+        if (!string.IsNullOrEmpty(v.Licence)) ToolTip.SetTip(licence, v.Licence);
 
         var progress = new ProgressBar { Width = 160, Minimum = 0, Maximum = 1, IsVisible = false };
         var progressText = Ui.Label("");
@@ -306,20 +303,48 @@ public sealed class VoicesTab : UserControl
         var install = new Button { Content = "Download" };
         install.Click += async (_, _) => await InstallAsync(v, install, progress, progressText);
 
+        // FIXED COLUMNS, and the button before the licence. The licence text runs
+        // from nothing to a full Creative Commons URL, so with it in front every
+        // Download landed somewhere different, which is the first thing the
+        // store screenshot showed (2026-09-26). The id and the details are
+        // trimmed to their column, with the whole text on hover.
+        var details = $"{v.Quality} · {v.SampleRate / 1000} kHz · {v.Bytes / (1024 * 1024)} MB";
         return new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             Children =
             {
-                new TextBlock { Text = v.Id, Width = 274, VerticalAlignment = VerticalAlignment.Center },
-                Ui.Label($"{v.Quality} · {v.SampleRate / 1000} kHz · {v.Bytes / (1024 * 1024)} MB"),
-                licence,
+                Column(v.Id, IdWidth),
+                Column(details, DetailsWidth, opacity: 0.7),
                 install,
                 progress,
                 progressText,
+                licence,
             },
         };
+    }
+
+    // The row's columns. The ● and its spacing make up the 22 an installed row's
+    // id gives back, so the two lists' columns start at the same x.
+    private const double IdWidth = 300;
+    private const double DetailsWidth = 210;
+    private const double InstalledDetailsWidth = 420;
+
+    /// <summary>One fixed-width cell: trimmed with an ellipsis, the whole text on hover.</summary>
+    private static TextBlock Column(string text, double width, FontWeight weight = FontWeight.Normal, double opacity = 1)
+    {
+        var cell = new TextBlock
+        {
+            Text = text,
+            Width = width,
+            FontWeight = weight,
+            Opacity = opacity,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(cell, text);
+        return cell;
     }
 
     /// <summary>
