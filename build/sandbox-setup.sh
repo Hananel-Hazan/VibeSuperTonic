@@ -128,8 +128,13 @@ fi
 # ------------------------------------------------------------------- verbs
 case "$verb" in
     bind|unbind|status)
+        # The keys run <current>/vst-ctl on the host, in both packages. For the
+        # snap that is a change (2026-09-27): through /snap/bin, snap run set up
+        # confinement on every press, 108 ms of a 100 ms budget. vst-ctl knows
+        # it is the snap's host-side client and starts the daemon through
+        # /snap/bin/<name>.daemon, so the daemon still runs confined. See
+        # SnapPeer.Host.
         export VST_KB_CTL_COMMAND=""
-        [[ "$kind" == snap ]] && VST_KB_CTL_COMMAND="$ctl_cmd"
         # The menu entry keybindings.sh writes carries the shortcuts; it has to
         # open the window, and the window is not a file beside vst-ctl here.
         if [[ "$verb" == bind && "$ui_cmd" == flatpak ]]; then

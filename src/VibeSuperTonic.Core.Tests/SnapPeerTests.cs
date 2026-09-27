@@ -88,4 +88,56 @@ public sealed class SnapPeerTests
         Assert.Equal((byte)'s', abstractAddress[3]);
         Assert.Equal((byte)'/', file.Serialize()[2]);
     }
+
+    // ------------------------------------------------ the host-side client (2026-09-27)
+
+    private static SnapPeer? Host(string baseDir, string? snapEnv = null) =>
+        SnapPeer.DetectHost(k => k == "SNAP" ? snapEnv : null, baseDir, () => 1000);
+
+    /// <summary>The hotkey binding: /snap/&lt;name&gt;/current/vst-ctl, run by the desktop, unconfined.</summary>
+    [Fact]
+    public void A_client_run_from_the_snaps_current_directory_is_its_host_side_client()
+    {
+        var peer = Host("/snap/vibesupertonic/current/");
+        Assert.NotNull(peer);
+        Assert.Equal("@snap.vibesupertonic.ctl-1000", peer!.SocketName);
+        Assert.Equal("/snap/bin/vibesupertonic.daemon", peer.DaemonCommand);
+    }
+
+    [Theory]
+    [InlineData("/snap/vibesupertonic/11/")]
+    [InlineData("/snap/vibesupertonic/x3")]
+    [InlineData("/snap/vibesupertonic_beta/current")]
+    public void Revision_directories_and_parallel_installs_count_too(string dir)
+    {
+        Assert.NotNull(Host(dir));
+    }
+
+    /// <summary>Inside the snap it is Current, not Host: "inside" must keep meaning inside.</summary>
+    [Fact]
+    public void Inside_the_snap_it_is_not_the_host_client()
+    {
+        Assert.Null(Host("/snap/vibesupertonic/current/", snapEnv: "/snap/vibesupertonic/11"));
+    }
+
+    [Theory]
+    [InlineData("/opt/VibeSuperTonic")]
+    [InlineData("/snap/vibesupertonic")]                    // too shallow
+    [InlineData("/snap/vibesupertonic/current/lib")]        // too deep
+    [InlineData("/snap/bin")]
+    [InlineData("/snap/Vibe/current")]                      // not a snap name
+    [InlineData("/snap/vibesupertonic/edge")]               // not a revision
+    [InlineData("/home/u/snap/vibesupertonic/current")]
+    [InlineData(@"C:\Program Files\VibeSuperTonic")]
+    public void Anything_else_is_not(string dir)
+    {
+        Assert.Null(Host(dir));
+    }
+
+    /// <summary>The uid is asked only once the path matched: never on Windows, never for a tarball.</summary>
+    [Fact]
+    public void The_uid_is_not_asked_unless_the_path_matches()
+    {
+        Assert.Null(SnapPeer.DetectHost(_ => null, "/opt/vst", () => throw new InvalidOperationException("asked")));
+    }
 }

@@ -47,6 +47,64 @@ public sealed record SnapPeer(string Instance, string Uid)
         }
     }
 
+    private static SnapPeer? _host;
+    private static bool _hostResolved;
+
+    /// <summary>
+    /// This process runs from a snap's files WITHOUT its confinement: the
+    /// hotkey client, bound as <c>/snap/&lt;name&gt;/current/vst-ctl</c>. Null
+    /// inside the snap (see <see cref="Current"/>) and everywhere else.
+    ///
+    /// <para><b>Why the hotkey runs it that way.</b> Through <c>/snap/bin</c>,
+    /// <c>snap run</c> sets up confinement on every press, and that alone
+    /// measured 108 ms on Kubuntu (2026-09-27; <c>snap run --shell … true</c>
+    /// costs the same), against a 100 ms budget for the whole press. Run
+    /// directly it is 6 ms. An unconfined client of the same user may connect
+    /// to the confined daemon's abstract socket (seen, no AppArmor denial), and
+    /// the daemon checks the uid regardless. It is the Flatpak's arrangement:
+    /// the client on the host, the daemon in the sandbox.</para>
+    ///
+    /// <para>Kept apart from <see cref="Current"/> because everything that asks
+    /// <c>Current</c> means "inside": the store, the update watch, the Wayland
+    /// link, the window's command chain. Only the socket name and how to start
+    /// the daemon are shared.</para>
+    /// </summary>
+    public static SnapPeer? Host
+    {
+        get
+        {
+            if (!_hostResolved)
+            {
+                _host = Current is null ? DetectHost(Environment.GetEnvironmentVariable, AppContext.BaseDirectory, Posix.Uid) : null;
+                _hostResolved = true;
+            }
+            return _host;
+        }
+    }
+
+    /// <summary>
+    /// The host-side rule, pure: no <c>$SNAP</c>, and this executable sits
+    /// directly in <c>/snap/&lt;instance&gt;/&lt;revision or current&gt;/</c>.
+    /// </summary>
+    public static SnapPeer? DetectHost(Func<string, string?> env, string baseDir, Func<uint> uid)
+    {
+        if (!string.IsNullOrWhiteSpace(env("SNAP"))) return null;
+        string[] parts = baseDir.TrimEnd('/').Split('/');
+        // "", "snap", instance, revision
+        if (parts.Length != 4 || parts[0] != "" || parts[1] != "snap") return null;
+        if (!IsInstanceName(parts[2])) return null;
+        if (parts[3] != "current" && !parts[3].All(char.IsAsciiDigit) && !(parts[3].StartsWith('x') && parts[3][1..].All(char.IsAsciiDigit)))
+            return null;
+        return new SnapPeer(parts[2], uid().ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// What the host-side client starts when no daemon answers: the daemon app
+    /// through <c>snap run</c>, so it runs confined, with the snap's store and
+    /// plugs, and never as a plain child of an unconfined client.
+    /// </summary>
+    public string DaemonCommand => $"/snap/bin/{Instance}.daemon";
+
     /// <summary>
     /// The abstract socket name, written with the leading <c>@</c> that tools
     /// such as <c>ss -x</c> print. <see cref="Protocol.EndPoint"/> turns it into
@@ -91,4 +149,13 @@ public sealed record SnapPeer(string Instance, string Uid)
             if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c is '-' or '_')) return false;
         return char.IsAsciiLetterOrDigit(value[0]);
     }
+}
+
+internal static class Posix
+{
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "getuid")]
+    private static extern uint GetUid();
+
+    /// <summary>The real uid. Only asked on Linux, from a path under /snap.</summary>
+    public static uint Uid() => GetUid();
 }

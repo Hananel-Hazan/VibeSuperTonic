@@ -326,6 +326,26 @@ if (( test_install )); then
        $config"
     info "its store is ~/snap/vibesupertonic/common"
 
+    # THE HOTKEY AS sandbox-setup.sh BINDS IT (2026-09-27): <current>/vst-ctl
+    # run on the host, unconfined, because snap run costs 108 ms a press. It has
+    # to find the confined daemon's abstract socket, and when none answers it
+    # must start the daemon through its snap app, CONFINED. An unconfined daemon
+    # would answer too, and nothing else would notice: its store, its plugs and
+    # the update watch would all be wrong. So ask the kernel which profile the
+    # daemon it started runs under.
+    "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
+    said="$("${as_user[@]}" timeout 90 /snap/vibesupertonic/current/vst-ctl status 2>&1 || true)"
+    [[ "$said" == *"\"Version\":\"$version\""* ]] || die "the host-side hotkey client (/snap/vibesupertonic/current/vst-ctl) got no answer. It said:
+       $said"
+    label=""
+    for proc in /proc/[0-9]*; do
+        [[ "$(readlink "$proc/exe" 2>/dev/null)" == /snap/vibesupertonic/*/vibesupertonicd ]] || continue
+        label="$(cat "$proc/attr/current" 2>/dev/null || true)"
+    done
+    [[ "$label" == "snap.vibesupertonic.daemon (enforce)" ]] || die "the host-side hotkey client started a daemon that runs as '${label:-nothing found}',
+       not under the daemon app's confinement. See SnapPeer.Host and vst-ctl's TryStartDaemon."
+    info "the host-side hotkey client started the daemon confined ($label) and it answered"
+
     # And snapd expands it: an unexpanded $SNAP_UID would be the same silence.
     uid="$(id -u "$user")"
     said_pulse="$("${as_user[@]}" timeout 30 snap run --shell vibesupertonic.ctl -c 'printf %s "$PULSE_SERVER"' 2>&1 || true)"

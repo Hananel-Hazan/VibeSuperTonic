@@ -771,6 +771,13 @@ static bool TryStartDaemon(out string error, out string? startedFrom, out Proces
         startedFrom = appImage;
         arguments.Add("daemon");
     }
+    else if (exe.Length == 0 && SnapPeer.Host is { } host)
+    {
+        // Run from the snap's files on the host (the hotkey binding): the
+        // daemon must still start confined, so through its snap app, never as a
+        // plain child of this unconfined process. See SnapPeer.Host.
+        exe = host.DaemonCommand;
+    }
     else if (exe.Length == 0)
     {
         exe = Path.Combine(AppContext.BaseDirectory, "vibesupertonicd");

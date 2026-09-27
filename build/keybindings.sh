@@ -327,9 +327,9 @@ EOF
 # the desktop splits this with shell-like word splitting, so an install path
 # containing a space breaks an unquoted command.
 #
-# VST_KB_CTL_COMMAND replaces "<install-dir>/vst-ctl" for a snap, where the key
-# has to run the client inside its confinement through /snap/bin, not the file
-# in the read-only mount. Unset for every other install. See sandbox-setup.sh.
+# VST_KB_CTL_COMMAND replaces "<install-dir>/vst-ctl" when set. Nothing sets it
+# now: the snap bound /snap/bin/<name>.ctl until 2026-09-27, and moved to the
+# file in its mount for speed (see sandbox-setup.sh). Kept as the override.
 _vst_kb_command() {
     local exe="${VST_KB_CTL_COMMAND:-$1/vst-ctl}" verb="$2"
     if [[ "$exe" == *[[:space:]]* ]]; then

@@ -79,8 +79,10 @@ STUB
 
     out="$("${env_base[@]}" VST_SANDBOX_SNAP_ROOT="$snap" bash "$rev/sandbox-setup.sh" bind 2>&1)" \
         || { red "snap: bind failed: $out"; return 1; }
-    [[ "$out" == *"Exec=$snap/bin/vibesupertonic.ctl read"* ]] \
-        || { red "snap: the hotkey does not run /snap/bin/<name>.ctl:"; printf '%s\n' "$out"; return 1; }
+    # <current>/vst-ctl on the host, not /snap/bin/<name>.ctl: snap run costs
+    # 108 ms a press. The client starts the daemon confined (SnapPeer.Host).
+    [[ "$out" == *"Exec=$snap/vibesupertonic/current/vst-ctl read"* ]] \
+        || { red "snap: the hotkey does not run <current>/vst-ctl directly:"; printf '%s\n' "$out"; return 1; }
     [[ "$out" == *"Exec=$snap/bin/vibesupertonic"$'\n'* ]] \
         || { red "snap: the menu entry does not open /snap/bin/<name>:"; printf '%s\n' "$out"; return 1; }
     [[ "$out" != *"/x5/"* ]] \
@@ -180,7 +182,7 @@ if [[ "${1:-}" == --negative-control ]]; then
     # shellcheck disable=SC2016
     declare -A breaks=(
         [flatpak-commit-path]='s|stable_deploy="$(dirname "$deploy")/active"|stable_deploy="$deploy"|'
-        [snap-ctl-in-mount]='s|\[\[ "$kind" == snap \]\] \&\& VST_KB_CTL_COMMAND="$ctl_cmd"|:|'
+        [snap-ctl-through-snap-run]='s|export VST_KB_CTL_COMMAND=""|export VST_KB_CTL_COMMAND=""; [[ "$kind" == snap ]] \&\& VST_KB_CTL_COMMAND="$ctl_cmd"|'
         [wrapper-on-check]='s/\[\[ "$arg" == --remove || "$arg" == --check \]\]/[[ "$arg" == --remove ]]/'
         [menu-entry-visible]='s|export VST_KB_KDE_NO_DISPLAY=1|:|'
     )

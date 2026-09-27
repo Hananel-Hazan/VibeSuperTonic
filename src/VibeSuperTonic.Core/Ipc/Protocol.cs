@@ -749,7 +749,7 @@ public static class Protocol
         Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
         Directory.Exists,
         FlatpakPeer.Current,
-        SnapPeer.Current);
+        SnapPeer.Current ?? SnapPeer.Host);
 
     /// <summary>
     /// The rule, with its inputs passed in, for the tests.
