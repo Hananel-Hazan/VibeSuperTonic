@@ -75,12 +75,6 @@ before revision 5 met some of it:
   was started without its libraries, and then again after a logout, because a
   daemon that outlived the session still pointed at the old one. The daemon now
   takes the display from the latest program that talks to it.
-- **The hotkey is about 100 ms quicker in the snap.** Each press went through
-  `snap run`, which sets up the sandbox and cost 108 ms before anything else
-  happened. The keys now run the client straight from the snap's folder, and
-  the background service still starts inside the sandbox. If you bound the keys
-  before this version, run `bash /snap/vibesupertonic/current/sandbox-setup.sh
-  bind` once more to get the quicker binding; the old one keeps working.
 - **The window says when the engine is not running.** Stopped from the tray or
   a terminal, the engine went away and the open window still looked as if it
   worked. A bar across the top now says so, on every tab, with a Start it now
