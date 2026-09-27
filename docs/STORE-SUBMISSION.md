@@ -168,6 +168,9 @@ did not help on its own and was kept.)
       desktop with the next revision: reboot, press the hotkey before opening the
       window, and the log says `linked ... wayland-0` then `selection source:
       wayland`.
+      **Confirmed on the desktop 2026-09-27, revision 7:** after a reboot the first
+      hotkey press started the daemon, which logged the link and chose Wayland,
+      and the selection was read.
 
 - [ ] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** `snap run` adds
       its own startup; the AppImage's comparable cost was +14.7 ms. Measure it
@@ -199,7 +202,9 @@ did not help on its own and was kept.)
       NoDisplay entries, which is the reason to expect it to work. **Not yet seen
       after a real logout.** The user's re-login on 2026-09-27 did not test it:
       revision 5's `sandbox-setup.sh` predates the change, `bind` was not re-run,
-      and the entry on disk has no `NoDisplay` line. The user had hidden the entry with KDE's menu editor
+      and the entry on disk has no `NoDisplay` line. **Confirmed later the same
+      day on revision 7:** `bind` re-run, the entry written `NoDisplay=true`, and
+      after a reboot the hotkeys still work. The user had hidden the entry with KDE's menu editor
       on 2026-09-26, thinking it a mistake; `keybindings.sh status` now warns when
       the shortcuts point at an entry that no longer exists.
 - [ ] **GNOME on Wayland**, which is stock Ubuntu: the hotkey cannot read the

@@ -331,11 +331,9 @@ bash build/pack-flatpak.sh -v 0.2.17 --manifest-only \
 
 ## Still open, not blocking this release
 
-- Fixed in 0.2.17, and each still needs its desktop proof on a revision that
-  carries it: the hidden menu entry after a logout (re-run `sandbox-setup.sh
-  bind`, log out and in, press Ctrl+`), and the hotkey
-  after a reboot, pressed before any window opens (STORE-SUBMISSION's checklist).
-  The 2026-09-27 re-login on revision 5 tested none of them: it is what found
-  the third.
+- **Confirmed on revision 7, 2026-09-27:** the hidden menu entry keeps its
+  hotkeys after a reboot, and the hotkey reads when pressed before any window
+  has opened. The earlier re-login on revision 5 tested neither: it is what
+  found the second.
 - The Flatpak on a real desktop: tray, selection capture on Plasma/Wayland, Orca.
 - X11 selection capture by a daemon that outlived a logout (handoff item 4).
