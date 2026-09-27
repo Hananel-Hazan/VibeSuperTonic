@@ -75,6 +75,10 @@ before revision 5 met some of it:
   was started without its libraries, and then again after a logout, because a
   daemon that outlived the session still pointed at the old one. The daemon now
   takes the display from the latest program that talks to it.
+- **On X11, the hotkey could stop working after you logged out and back in**,
+  with "could not open X display", if the background service had kept running
+  from the earlier session. It now uses the display login the key press
+  brings, as the tray's window already did.
 - **After a restart, the hotkey read nothing in Wayland applications** until the
   window had been opened once. The daemon looked for the desktop's Wayland
   connection inside the snap's private folder, where only the window's launcher

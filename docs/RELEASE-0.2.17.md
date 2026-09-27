@@ -336,4 +336,7 @@ bash build/pack-flatpak.sh -v 0.2.17 --manifest-only \
   has opened. The earlier re-login on revision 5 tested neither: it is what
   found the second.
 - The Flatpak on a real desktop: tray, selection capture on Plasma/Wayland, Orca.
-- X11 selection capture by a daemon that outlived a logout (handoff item 4).
+- ~~X11 selection capture by a daemon that outlived a logout (handoff item 4).~~
+  Fixed 2026-09-27 (`NativeXAuthority`): seen failing and then passing against
+  this machine's XWayland with a daemon started on a dead `XAUTHORITY`. Not yet
+  seen on a real X11 desktop after a real logout.

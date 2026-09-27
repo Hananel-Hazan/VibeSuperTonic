@@ -5,6 +5,7 @@ using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Daemon.Interop;
 
 namespace VibeSuperTonic.Daemon;
 
@@ -514,6 +515,22 @@ public sealed partial class DaemonServer : IDisposable
                 if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
             }
         }
+    }
+
+    /// <summary>
+    /// Capture the selection in the session the latest client reported, not the
+    /// one this daemon started in. A press's own <c>$DISPLAY</c> wins; the tray's
+    /// requests carry none and take the latest report. On X11 the cookie file
+    /// follows too; see <see cref="NativeXAuthority"/>.
+    /// </summary>
+    private SelectionResult CaptureSelection(Request request)
+    {
+        var session = ClientDisplay.ForWindow(File.Exists);
+        string? display = !string.IsNullOrWhiteSpace(request.Display)
+            ? request.Display
+            : session.GetValueOrDefault("DISPLAY");
+        if (_selection is X11SelectionSource && NativeXAuthority.Apply(session) is { } changed) Log(changed);
+        return _selection.Capture(display);
     }
 
     /// <summary>
@@ -1144,7 +1161,7 @@ public sealed partial class DaemonServer : IDisposable
             // nothing selected leaves the current reading alone; capturing
             // after would silence it and then fail, so a mis-press would cost
             // the user their place with nothing to show for it.
-            var selection = _selection.Capture(request.Display);
+            var selection = CaptureSelection(request);
             if (!selection.Ok) return Refuse(selection.Reason!);
             text = selection.Text;
             notice = selection.Notice;
@@ -1270,7 +1287,7 @@ public sealed partial class DaemonServer : IDisposable
                 if (!string.IsNullOrWhiteSpace(request.Text))
                     return StartSpeaking(request.Text, request) with { Action = action };
 
-                var selection = _selection.Capture(request.Display);
+                var selection = CaptureSelection(request);
                 if (!selection.Ok)
                 {
                     // Not a state change. An empty selection is a no-op with a
