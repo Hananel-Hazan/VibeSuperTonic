@@ -196,11 +196,20 @@ did not help on its own and was kept.)
       hotkey press started the daemon, which logged the link and chose Wayland,
       and the selection was read.
 
-- [ ] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** `snap run` adds
-      its own startup; the AppImage's comparable cost was +14.7 ms. Measure it
-      against R-3's 100 ms. If it is too slow, the fallback is the Flatpak's
-      approach (run the file in the mount directly), which needs AppArmor to let
-      an unconfined client connect to the confined daemon's socket.
+- [x] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** **Measured
+      2026-09-27 on Kubuntu: 108 ms median per press**, all of it `snap run`
+      setting up confinement (`snap run --shell vibesupertonic.ctl -c true` costs
+      the same), against a 100 ms budget for the whole press. **Accepted: it is
+      the snap's cost, and the fallback does not work.** Run from the mount on
+      the host, `vst-ctl` is refused by the confined daemon's AppArmor profile,
+      which does not accept a connection from an unconfined peer (`DENIED
+      operation="connect" ... requested="send receive accept"`), seen in CI's
+      `--test-install` and then on the desktop. It had first looked like 6 ms and
+      no denial, because the daemon it reached had itself been started
+      unconfined by the same experiment. Tried as d5215c9, reverted. A future
+      route would be a D-Bus call to the daemon (the tray's SNI object already
+      receives calls from the desktop), which needs its own design and an
+      autostart story. The tarball, AppImage and Flatpak do not pay this.
 - [ ] **Selection capture in the Flatpak on Plasma/Wayland.** KWin can withhold
       privileged Wayland protocols from sandboxed clients (security-context-v1),
       and `ext-data-control` is exactly that kind of protocol. If KWin withholds

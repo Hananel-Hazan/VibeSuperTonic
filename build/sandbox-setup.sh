@@ -129,6 +129,12 @@ fi
 case "$verb" in
     bind|unbind|status)
         export VST_KB_CTL_COMMAND=""
+        # /snap/bin for the snap, although snap run costs 108 ms a press. The
+        # file in the mount, run on the host, is refused: the daemon's AppArmor
+        # profile does not accept a connection from an unconfined peer ("DENIED
+        # operation=connect ... requested=send receive accept", 2026-09-27, on
+        # the desktop and in CI). The Flatpak has no such rule. Do not move this
+        # to the mount without an interface that allows it.
         [[ "$kind" == snap ]] && VST_KB_CTL_COMMAND="$ctl_cmd"
         # The menu entry keybindings.sh writes carries the shortcuts; it has to
         # open the window, and the window is not a file beside vst-ctl here.
