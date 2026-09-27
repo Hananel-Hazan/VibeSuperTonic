@@ -1,6 +1,6 @@
 # Handoff — snap and Flatpak (0.2.17), for 2026-09-28
 
-Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, ahead of `Dev` (`78b9b56`) by the commits in the table below. The user approved fast-forwarding `Dev` to it once `build.yml` is green on the head. No PR.
+Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, **identical to `Dev`**: `Dev` was fast-forwarded to it on 2026-09-27, with the user's approval, once `build.yml` was green on the head. No PR.
 Read these first:
 
 - `CLAUDE.md`: "The store packages", and its new Flathub paragraph.
@@ -12,7 +12,7 @@ on the user's machine and on the tooling. This one adds only what changed.
 
 ## Where it stands
 
-- **`build.yml` is green on `bb6cd19`** (run 86), and run 87 on `8e707b2` was running when this was written: **read its result first.** That covers
+- **`build.yml` is green on `8e707b2`** (run 87, all eight jobs; the edge upload skipped), the last code commit. That covers
   every job: pack, smoke, speechd, parity, snap with `--test-install`, flatpak,
   and Windows.
 - **The `flathub` workflow is new.** It runs on pushes to `main`, `Dev` and
@@ -102,9 +102,9 @@ exists. Not done here: it is a release-time choice for the user, not a fix.
 
 ## Open, in rough order
 
-1. **`build.yml` run 87 on `8e707b2`**, then fast-forward `Dev` to this branch
-   (`git push origin HEAD:Dev`), which the user approved. A push to `Dev`
-   publishes nothing. It runs `build.yml` and `flathub` there.
+1. **Done: `build.yml` run 87 is green, and `Dev` was fast-forwarded to this
+   branch.** The push to `Dev` publishes nothing. It starts `build.yml` and
+   `flathub` there; check that both are green.
 2. **The release itself**, per [RELEASE-0.2.17.md](RELEASE-0.2.17.md). The
    09-27 handoff's item 1 still applies word for word, including the notes check
    and "pack, verify, tag in one sitting". **The user pushes the tag and
