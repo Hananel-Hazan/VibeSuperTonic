@@ -284,13 +284,19 @@ packages pinned in `build/flatpak/nuget-sources.json`, builds espeak-ng at
 `build-espeak.sh`'s pin, and runs `pack-tar.sh` inside the build, so every packer
 assertion runs there too. The tree it installs is the one the tarball holds.
 
-- Rehearsed here: `pack-tar.sh` against a feed holding only the 34 pinned
-  packages, with a fresh package cache and NativeAOT forced onto gcc (the SDK has
+- Rehearsed here: `pack-tar.sh` against a feed holding only the 34 packages
+  then pinned, with a fresh package cache and NativeAOT forced onto gcc (the SDK has
   no clang), passes all its assertions.
 - CI's `flathub` workflow ([flathub.yml](../.github/workflows/flathub.yml)) is
   the real check: it regenerates the package list inside the SDK (runtime packs
   are versioned by the SDK that restores them, so a list made on a workstation
   can be wrong), then runs `pack-flatpak.sh --from-source --test-install`.
+  **It found exactly that.** The workstation list named runtime packs 10.0.12,
+  while Flathub's `dotnet10//25.08` restores 10.0.8 and brings its own apphost:
+  33 packages. Run 3 (2026-09-27) was the first full pass of the build,
+  `--test-install` included, and `467913a` re-pinned the list from that run.
+  The Flathub build therefore ships .NET runtime 10.0.8, while the other
+  artifacts ship 10.0.12.
 
 Submission, once CI is green and v0.2.17 is tagged and pushed:
 
