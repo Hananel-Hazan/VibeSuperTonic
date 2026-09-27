@@ -89,6 +89,18 @@ out="$root/dist/VibeSuperTonic-$version-x86_64.flatpak"
 # this path, for this call.
 vst_git() { git -c safe.directory="$root" -C "$root" "$@"; }
 
+# The store screenshots, as the metainfo names them, into the array `shots`.
+# They point at the release tag, so they resolve only once it is pushed.
+vst_screenshots() {
+    mapfile -t shots < <(python3 - "$root/build/desktop/$app_id.metainfo.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+for img in ET.parse(sys.argv[1]).getroot().iter("image"):
+    print(img.text.strip())
+PY
+)
+    (( ${#shots[@]} > 0 )) || die "the metainfo lists no screenshots; Flathub requires at least one"
+}
+
 # shellcheck source=check-composed-tree.sh
 source "$root/build/check-composed-tree.sh"
 
@@ -185,14 +197,7 @@ if [[ -n "$flathub_tag" ]]; then
     # --lint cannot check (see there): the metainfo points at tag URLs, so they
     # resolve only once the tag is pushed. An unreachable one drops out of the
     # store listing, and Flathub requires at least one.
-    metainfo="$root/build/desktop/$app_id.metainfo.xml"
-    mapfile -t shots < <(python3 - "$metainfo" <<'PY'
-import sys, xml.etree.ElementTree as ET
-for img in ET.parse(sys.argv[1]).getroot().iter("image"):
-    print(img.text.strip())
-PY
-)
-    (( ${#shots[@]} > 0 )) || die "the metainfo lists no screenshots; Flathub requires at least one"
+    vst_screenshots
     for url in "${shots[@]}"; do
         [[ "$url" == *"/$flathub_tag/"* ]] || die "screenshot $url is not pinned to $flathub_tag.
        Flathub mirrors it at build time; a branch URL can change under the listing."
@@ -362,7 +367,10 @@ fi
 # which do not exist until the release is tagged and pushed. Their reachability
 # is checked by --flathub instead, which runs after the push. Nothing else goes
 # in that file: a new finding is fixed, or taken to Flathub as an exception
-# request, never silenced here.
+# request, never silenced here. NOT YET OBSERVED: before the tag exists, compose
+# drops the screenshots, so neither mirroring check has fired. They are
+# expected once the screenshots resolve; if the first post-tag run shows either
+# one not firing, take it out of the file.
 if (( lint )); then
     step "Running Flathub's linter…"
 
@@ -390,7 +398,39 @@ if (( lint )); then
     fbl manifest "$lintdir/$app_id.yml" \
         || die "Flathub's linter did not pass the manifest (above). Findings would block the submission."
     info "manifest: clean, no exceptions"
-    fbl --exceptions --user-exceptions "$root/build/flatpak/lint-exceptions.json" repo "$repo" \
+    # THE SCREENSHOTS BEFORE THE TAG. appstreamcli compose drops a screenshot
+    # it cannot fetch, and before the release tag is pushed every one of ours
+    # is a 404, so the repo check reports appstream-missing-screenshots (run 7,
+    # the first time the linter ran). That is the expected state until the
+    # push, and ONLY then: so the exception is added for this run alone, and
+    # only when every screenshot is pinned to v$version and every one is
+    # unreachable. Once the tag is pushed they resolve, the exception is not
+    # added, and the finding is back in force. One reachable and one not is a
+    # broken URL, and fails.
+    exceptions="$lintdir/exceptions.json"
+    vst_screenshots
+    missing=0
+    for url in "${shots[@]}"; do
+        [[ "$url" == *"/v$version/"* ]] || die "screenshot $url is not pinned to v$version, the release being built"
+        curl -fsSL -o /dev/null --retry 2 "$url" || missing=$((missing + 1))
+    done
+    if (( missing == 0 )); then
+        cp "$root/build/flatpak/lint-exceptions.json" "$exceptions"
+        info "screenshots: all ${#shots[@]} reachable at v$version, checked in full"
+    elif (( missing == ${#shots[@]} )); then
+        python3 - "$root/build/flatpak/lint-exceptions.json" "$exceptions" "$app_id" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d[sys.argv[3]] = d[sys.argv[3]] + ["appstream-missing-screenshots"]
+json.dump(d, open(sys.argv[2], "w"), indent=4)
+PY
+        info "screenshots: none reachable yet, because v$version is not pushed. UNVERIFIED until it is;"
+        info "             --flathub v$version checks them again after the push"
+    else
+        die "$missing of ${#shots[@]} screenshots do not resolve at v$version, and the rest do: a broken URL"
+    fi
+
+    fbl --exceptions --user-exceptions "$exceptions" repo "$repo" \
         || die "Flathub's linter did not pass the built repository (above). Findings would block the submission."
     info "repo: clean, apart from the two screenshot-mirroring findings only Flathub's builders can clear"
 fi
