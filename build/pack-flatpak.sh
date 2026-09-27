@@ -13,8 +13,12 @@
 #                       published at URL, and stop. NOT what Flathub takes: below.
 #   --from-source       build Flathub's manifest instead: everything from source,
 #                       offline, no tarball needed. Writes ...-source.flatpak.
-#   --flathub TAG       write Flathub's submission (manifest + nuget-sources.json)
-#                       pinned to TAG's commit, into dist/flathub/, and stop.
+#   --flathub TAG       write Flathub's submission (manifest, nuget-sources.json,
+#                       flathub.json) pinned to TAG's commit, into dist/flathub/,
+#                       and stop.
+#   --lint              with --from-source: after the build, run Flathub's own
+#                       linter (org.flatpak.Builder) on the submission's manifest
+#                       and on the built repository. CI's flathub job does.
 #
 # ---------------------------------------------------------------------------
 # THIS SCRIPT PUBLISHES NOTHING, like pack-appimage.sh and pack-snap.sh. The
@@ -41,6 +45,7 @@ test_install=0
 manifest_url=""
 from_source=0
 flathub_tag=""
+lint=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,8 +56,9 @@ while [[ $# -gt 0 ]]; do
         --from-source)   from_source=1; shift ;;
         --flathub)       flathub_tag="${2:-}"; from_source=1; shift 2
                          [[ -n "$flathub_tag" ]] || { echo "--flathub needs a tag, e.g. v0.2.17" >&2; exit 64; } ;;
+        --lint)          lint=1; shift ;;
         -h|--help)
-            sed -n '3,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
@@ -78,6 +84,9 @@ out="$root/dist/VibeSuperTonic-$version-x86_64.flatpak"
 
 # shellcheck source=check-composed-tree.sh
 source "$root/build/check-composed-tree.sh"
+
+(( lint )) && [[ -n "$flathub_tag" || $from_source -eq 0 ]] \
+    && { echo "--lint goes with --from-source: it lints what that builds" >&2; exit 64; }
 
 if (( from_source )); then
 # --------------------------------------------------- the from-source manifest
@@ -165,6 +174,26 @@ fi
 info "$manifest"
 
 if [[ -n "$flathub_tag" ]]; then
+    # THE SCREENSHOTS, which Flathub's builders download and mirror, and which
+    # --lint cannot check (see there): the metainfo points at tag URLs, so they
+    # resolve only once the tag is pushed. An unreachable one drops out of the
+    # store listing, and Flathub requires at least one.
+    metainfo="$root/build/desktop/$app_id.metainfo.xml"
+    mapfile -t shots < <(python3 - "$metainfo" <<'PY'
+import sys, xml.etree.ElementTree as ET
+for img in ET.parse(sys.argv[1]).getroot().iter("image"):
+    print(img.text.strip())
+PY
+)
+    (( ${#shots[@]} > 0 )) || die "the metainfo lists no screenshots; Flathub requires at least one"
+    for url in "${shots[@]}"; do
+        [[ "$url" == *"/$flathub_tag/"* ]] || die "screenshot $url is not pinned to $flathub_tag.
+       Flathub mirrors it at build time; a branch URL can change under the listing."
+        curl -fsSL -o /dev/null --retry 2 "$url" || die "screenshot $url does not resolve.
+       Push the tag first: git push origin $flathub_tag"
+    done
+    info "${#shots[@]} screenshots, all at $flathub_tag and all reachable"
+
     step "Done: Flathub's submission, pinned to $flathub_tag ($tag_commit)."
     info "$manifest"
     info "$work/nuget-sources.json"
@@ -303,6 +332,56 @@ if (( test_install )); then
     [[ "$inside" == *"flatpak info --show-location"* ]] || die "sandbox-setup.sh inside the Flatpak did not print the host command.
        It said: $inside"
     info "the deployment's vst-ctl finds the shared socket; sandbox-setup.sh refuses inside"
+fi
+
+# ------------------------------------------------------------ Flathub's linter
+#
+# What Flathub's CI runs on a submission, and a finding there blocks the pull
+# request. Two checks, as Flathub runs them:
+#
+#   manifest  on the manifest as submitted: git source pinned to a commit, with
+#             nuget-sources.json and flathub.json beside it. Not the one built
+#             above: that one names this checkout as a `dir`, and its directory
+#             holds the build state, which the linter measures ("more than
+#             25 MB").
+#   repo      on the OSTree repository the build exported: desktop file,
+#             metainfo, icons, the ELF architectures, finish-args, size.
+#
+# The manifest check has NO exceptions. The repo check has two, in
+# build/flatpak/lint-exceptions.json, and both are about screenshot MIRRORING,
+# which only Flathub's builders do: they copy each screenshot to
+# dl.flathub.org/media and commit it to a screenshots/<arch> ref. Outside that
+# pipeline the catalogue keeps our own URLs, and the linter says so. Doing the
+# mirroring here would mean downloading the screenshots from their tag URLs,
+# which do not exist until the release is tagged and pushed. Their reachability
+# is checked by --flathub instead, which runs after the push. Nothing else goes
+# in that file: a new finding is fixed, or taken to Flathub as an exception
+# request, never silenced here.
+if (( lint )); then
+    step "Running Flathub's linter…"
+
+    lintdir="$work/lint"
+    rm -rf "$lintdir"
+    mkdir -p "$lintdir"
+    head_commit="$(git -C "$root" rev-parse HEAD)"
+    lint_source="      - type: git
+        url: https://github.com/Hananel-Hazan/VibeSuperTonic.git
+        commit: $head_commit"
+    awk -v src="$lint_source" '$0 == "@APP_SOURCE@" { print src; next } { print }' "$template" > "$lintdir/$app_id.yml"
+    cp "$nuget" "$lintdir/nuget-sources.json"
+    cp "$flathub_json" "$lintdir/flathub.json"
+
+    flatpak --user install -y --noninteractive flathub org.flatpak.Builder >/dev/null \
+        || die "could not install org.flatpak.Builder, which carries Flathub's linter"
+    fbl() { flatpak run --filesystem="$work" --filesystem="$root/build/flatpak:ro" \
+                --command=flatpak-builder-lint org.flatpak.Builder "$@"; }
+
+    fbl manifest "$lintdir/$app_id.yml" \
+        || die "Flathub's linter refuses the manifest (above). Flathub's CI would block the submission on it."
+    info "manifest: clean, no exceptions"
+    fbl --exceptions --user-exceptions "$root/build/flatpak/lint-exceptions.json" repo "$repo" \
+        || die "Flathub's linter refuses the built repository (above). Flathub's CI would block the submission on it."
+    info "repo: clean, apart from the two screenshot-mirroring findings only Flathub's builders can clear"
 fi
 
 size="$(du -h "$out" | cut -f1)"

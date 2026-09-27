@@ -20,6 +20,10 @@ name: flathub
 #    daemon, module and host-side client all work? pack-flatpak.sh
 #    --from-source --test-install, which runs pack-tar.sh and every one of its
 #    assertions inside the build.
+#
+# 3. Does Flathub's own linter pass it? --lint runs flatpak-builder-lint, from
+#    org.flatpak.Builder as Flathub's CI does, on the submission-shaped manifest
+#    and on the built repository. A finding there blocks the submission PR.
 
 on:
   push:
@@ -65,10 +69,10 @@ jobs:
             echo "same=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build from source, offline, and test the installed deployment
+      - name: Build from source, offline, test the installed deployment, and lint it
         run: |
           export XDG_RUNTIME_DIR="$(mktemp -d)"
-          bash build/pack-flatpak.sh --from-source --test-install
+          bash build/pack-flatpak.sh --from-source --test-install --lint
 
       - name: Refuse a stale package list
         if: steps.nuget.outputs.same != 'true'
