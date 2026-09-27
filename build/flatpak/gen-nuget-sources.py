@@ -47,7 +47,7 @@ PROJECTS = [
 ]
 
 
-def dotnet_prefix(sdk):
+def dotnet_prefix(sdk, home):
     if not sdk:
         return ["dotnet"]
     ext = "org.freedesktop.Sdk.Extension.dotnet10"
@@ -55,8 +55,18 @@ def dotnet_prefix(sdk):
     # SDK as its runtime, the extension is mounted where the manifest's
     # append-path finds it. --filesystem so it can read the repository and
     # write the packages folder. The same shape as flatpak-dotnet-generator's.
+    #
+    # HOME is a directory of our own, because the caller's may not be writable
+    # from inside: dotnet's first run creates ~/.dotnet, and in CI's container
+    # HOME is /github/home, owned by the runner's user while the job is root,
+    # and bwrap drops the capability that lets root write there anyway. The
+    # first flathub run died on exactly that (UnauthorizedAccessException on
+    # '/github/home/.dotnet'). NuGet's own caches follow HOME too.
+    home.mkdir(parents=True, exist_ok=True)
     return [
         "flatpak", "run",
+        f"--env=HOME={home}",
+        f"--env=DOTNET_CLI_HOME={home}",
         "--env=DOTNET_CLI_TELEMETRY_OPTOUT=1",
         "--env=DOTNET_NOLOGO=1",
         "--env=DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1",
@@ -78,12 +88,12 @@ def main():
     ap.add_argument("-o", "--out", default=str(DEFAULT_OUT))
     args = ap.parse_args()
 
-    prefix = dotnet_prefix(args.in_sdk)
     # Inside the home directory rather than /tmp: `flatpak run` gives the
     # sandbox its own /tmp, and --filesystem=host does not reach it.
     (ROOT / "dist").mkdir(exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".vst-nuget-", dir=str(ROOT / "dist")))
     try:
+        prefix = dotnet_prefix(args.in_sdk, tmp / "home")
         packages = tmp / "packages"
         for proj, extra in PROJECTS:
             cmd = prefix + [
