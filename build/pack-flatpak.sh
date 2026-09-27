@@ -379,14 +379,19 @@ if (( lint )); then
 
     flatpak --user install -y --noninteractive flathub org.flatpak.Builder >/dev/null \
         || die "could not install org.flatpak.Builder, which carries Flathub's linter"
-    fbl() { flatpak run --filesystem="$work" --filesystem="$root/build/flatpak:ro" \
-                --command=flatpak-builder-lint org.flatpak.Builder "$@"; }
+    # From inside $lintdir: the manifest check runs flatpak-builder, which makes
+    # a .flatpak-builder state directory in its working directory, and the
+    # checkout root is not writable from the linter's sandbox (run 6 crashed on
+    # exactly that). A crash and a finding both exit non-zero; findings are the
+    # JSON with "errors", a crash is a traceback.
+    fbl() ( cd "$lintdir" && flatpak run --filesystem="$work" --filesystem="$root/build/flatpak:ro" \
+                --command=flatpak-builder-lint org.flatpak.Builder "$@" )
 
     fbl manifest "$lintdir/$app_id.yml" \
-        || die "Flathub's linter refuses the manifest (above). Flathub's CI would block the submission on it."
+        || die "Flathub's linter did not pass the manifest (above). Findings would block the submission."
     info "manifest: clean, no exceptions"
     fbl --exceptions --user-exceptions "$root/build/flatpak/lint-exceptions.json" repo "$repo" \
-        || die "Flathub's linter refuses the built repository (above). Flathub's CI would block the submission on it."
+        || die "Flathub's linter did not pass the built repository (above). Findings would block the submission."
     info "repo: clean, apart from the two screenshot-mirroring findings only Flathub's builders can clear"
 fi
 
