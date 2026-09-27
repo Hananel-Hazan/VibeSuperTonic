@@ -95,19 +95,12 @@ through the VibeSuperTonic voice**.
 
 - **KDE reads new shortcuts only when you log in.** After `sandbox-setup.sh bind`,
   log out and back in once.
-- **Updates no longer wait for you to stop it.** snapd normally refuses a
-  manual `snap refresh`, and holds automatic ones back for up to 14 days, while
-  any of a snap's programs runs. The background service and the screen-reader
-  voice run all day, so no update would ever have arrived on its own. Both are
-  now marked so that snapd updates underneath them. The service moves to the
-  new version by itself after five minutes without use. The screen-reader
-  voice moves at your next login, because Speech Dispatcher does not restart a
-  voice that exits. An open window still holds an update back, as any open app
-  does.
-
-  **Once, to get here:** the revisions already on `edge` do not have this yet,
-  so the refresh that brings 0.2.17 still needs `vibesupertonic.ctl shutdown`,
-  `systemctl --user stop speech-dispatcher.service`, and the window closed.
+- **An update waits while it runs.** snapd refuses a manual `snap refresh`,
+  and holds automatic ones back, while any of a snap's programs runs, and the
+  background service and the screen-reader voice usually are. To update now:
+  `vibesupertonic.ctl shutdown`, `systemctl --user stop
+  speech-dispatcher.service`, close the window, then `sudo snap refresh
+  vibesupertonic`.
 
 ## On stock Ubuntu (GNOME on Wayland)
 

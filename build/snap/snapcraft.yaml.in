@@ -99,20 +99,14 @@ apps:
       - wayland
       - opengl
 
-  # IGNORE-RUNNING on the two that live for hours. snapd otherwise refuses a
-  # manual refresh, and postpones an automatic one for up to 14 days, while
-  # either runs, and both usually are: the daemon from the first hotkey press
-  # until logout, the module for as long as speech-dispatcher lives (seen on
-  # Kubuntu 2026-09-25, "has running apps (speechd)"). With it, snapd updates
-  # underneath them and they keep running from the old revision, which the
-  # AppArmor profile still lets them read. The daemon then exits once idle
-  # (SnapRefreshWatch); the module cannot, since speech-dispatcher does not
-  # restart a module that exits, so it moves at the next login. Not on the
-  # window or ctl: a window the user can see is theirs to close, and ctl lives
-  # for one key press. pack-snap.sh asserts both lines.
+  # NO refresh-mode HERE, although the daemon and the module hold back every
+  # refresh while they run ("has running apps", Kubuntu 2026-09-25). The Store
+  # accepts refresh-mode only on services (`daemon:` apps), and these are not:
+  # upload of a snap carrying it failed schema validation on 2026-09-27, after
+  # local snapd had installed it without complaint. The refresh problem is open;
+  # STORE-SUBMISSION's checklist has it.
   daemon:
     command: vibesupertonicd
-    refresh-mode: ignore-running
     plugs: *daemon-plugs
 
   ctl:
@@ -121,7 +115,6 @@ apps:
 
   speechd:
     command: vst-speechd
-    refresh-mode: ignore-running
     plugs: *daemon-plugs
 
   setup:

@@ -101,7 +101,7 @@ What is uncommitted, all prepared on 2026-09-26:
 | `docs/screenshots/*` | three screenshots and the GIF |
 | `README.md` (again) | Flathub and AppImage badges beside the Snap Store's, the portable AppImage folder, a Sponsor badge and section |
 | `.github/FUNDING.yml` | the repository's Sponsor button (appears once the GitHub Sponsors profile exists) |
-| `build/snap/snapcraft.yaml.in`, `build/pack-snap.sh` | `refresh-mode: ignore-running` on `daemon` and `speechd`, asserted |
+| `build/snap/snapcraft.yaml.in`, `build/pack-snap.sh` | ~~`refresh-mode: ignore-running`~~: withdrawn 2026-09-27, the Store accepts it only on services; pack-snap.sh now refuses it on any other app |
 | `src/VibeSuperTonic.Daemon/SnapRefreshWatch.cs`, `DaemonServer.cs`, `…Tests/SnapRefreshWatchTests.cs` | the daemon steps aside, when idle, for a newer current revision |
 | `build/pack-appimage.sh` | the store listing inside the AppImage, for AppImageHub; help text's speech-dispatcher stop command |
 | `build/pack-tar.sh` | INSTALL.txt's speech-dispatcher stop command (`-x speech-dispatch`: the full name matches nothing) |
@@ -148,6 +148,10 @@ to main), so do it when edge may change, and not while a manual publishing run
 is in flight: the later one to finish wins `edge`.
 
 ## 2b. Prove the refresh fix on the desktop (before packing)
+
+**Withdrawn 2026-09-27**: the Store refused `refresh-mode` on non-service apps,
+so there is no refresh fix to prove. Skip this step; the refresh problem is open
+in STORE-SUBMISSION.
 
 It needs two revisions that both carry it, so it takes two CI publishes to
 `edge` (a push to main, or a manual run with `publish_edge`).
@@ -329,7 +333,7 @@ bash build/pack-flatpak.sh -v 0.2.17 --manifest-only \
 
 - Fixed in 0.2.17, and each still needs its desktop proof on a revision that
   carries it: the hidden menu entry after a logout (re-run `sandbox-setup.sh
-  bind`, log out and in, press Ctrl+`); the refresh (step 2b); and the hotkey
+  bind`, log out and in, press Ctrl+`), and the hotkey
   after a reboot, pressed before any window opens (STORE-SUBMISSION's checklist).
   The 2026-09-27 re-login on revision 5 tested none of them: it is what found
   the third.

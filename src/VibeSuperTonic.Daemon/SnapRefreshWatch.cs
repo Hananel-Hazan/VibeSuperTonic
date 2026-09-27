@@ -4,6 +4,13 @@ namespace VibeSuperTonic.Daemon;
 /// Inside a snap: step aside, when idle, for a revision that snapd has made
 /// current while this daemon was running.
 ///
+/// <para><b>Inert since 2026-09-27.</b> It was written for
+/// <c>refresh-mode: ignore-running</c>, which the Store refuses on an app that
+/// is not a service, so snapd still will not refresh while the daemon runs and
+/// <c>current</c> cannot move under it. Kept because it is correct if that ever
+/// changes (a service daemon, or a forced refresh); see STORE-SUBMISSION's
+/// refresh item. The paragraphs below describe the design as intended.</para>
+///
 /// <para><b>Why the daemon has to do this itself.</b> snapd refuses a manual
 /// <c>snap refresh</c>, and postpones an automatic one for up to 14 days,
 /// while any of a snap's apps runs. This daemon is long-lived by design (a warm

@@ -143,6 +143,16 @@ did not help on its own and was kept.)
       Still to see: CI's `--test-install` accepting the snap, then a real refresh
       on the desktop with the daemon and the module running. Today's workaround: `vibesupertonic.ctl shutdown`,
       `systemctl --user stop speech-dispatcher.service`, close the window.
+      **Withdrawn 2026-09-27: the Store refuses it.** The first publishing run
+      failed at upload: `refresh-mode` is allowed only on services (`daemon:`
+      apps), and neither app is one. Local snapd had installed the snap without
+      complaint, so `--test-install` passed. The lines are gone, and pack-snap.sh
+      now refuses `refresh-mode` on any app that is not a service.
+      `SnapRefreshWatch` stays but does nothing, because `current` cannot move
+      while the daemon runs. **Still open, and the workaround above is the answer
+      for now.** Options to weigh: the daemon exiting after a long idle (costs a
+      cold start on the next press), or snapd's own refresh-app-awareness
+      notification, which asks the user to close the app.
 - [ ] **After installing or re-binding, log out and back in** before the hotkey
       works on KDE: kglobalaccel reads shortcuts only at login (by design, see
       keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
