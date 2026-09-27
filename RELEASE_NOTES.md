@@ -35,6 +35,16 @@ they work:
   the same daemon**, and a daemon started by a hotkey press keeps running after
   the press ends.
 
+**On Flathub, the Flatpak is built by Flathub, from source.** Flathub does not
+take prebuilt archives, so its build compiles this release's tag and espeak-ng
+there, offline, from pinned sources, and runs the same packer and the same
+checks as the tarball. One
+visible difference: it carries the .NET runtime that Flathub's SDK provides,
+10.0.8 at the time of writing, where the other packages carry 10.0.12. It gets
+.NET fixes when Flathub updates that SDK. The listing appears once Flathub's
+review is done; until then, the `.flatpak` file on this page installs the same
+program.
+
 ## Hotkeys and the screen reader: one command in a terminal
 
 A sandbox cannot change the desktop's shortcut settings or Speech Dispatcher's
@@ -89,6 +99,12 @@ before revision 5 met some of it:
   puts it, and when it was not there settled on X11 for as long as it ran. It now
   makes that connection itself before it chooses. Found on Kubuntu on
   2026-09-27, after a reboot.
+
+- **The Voices tab's Download buttons line up.** Each row put its licence text
+  first, and licences run from nothing to a long Creative Commons link, so every
+  button sat somewhere else. The button now comes first, the id and details are
+  fixed columns with the full text on hover, and a non-commercial licence says
+  so in three words, with the link on hover.
 
 - **`bind` no longer adds a second VibeSuperTonic to KDE's menu** in the snap and
   the Flatpak. The entry that carries the hotkeys is now hidden, because the
