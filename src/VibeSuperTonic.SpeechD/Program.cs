@@ -45,6 +45,11 @@ if (SnapPeer.Current is not null
                     && SnapUpdateMarker.ShouldExit(own, File.ReadAllText(marker), File.GetLastWriteTimeUtc(marker), started))
                 {
                     Console.Error.WriteLine($"vst-speechd: revision {own} stepping aside for an update the user asked for");
+                    try
+                    {
+                        File.WriteAllText(Path.Combine(Path.GetDirectoryName(marker)!, SnapUpdateMarker.SteppedAsideFileName), own);
+                    }
+                    catch (IOException) { /* the voice still goes; only the hint is lost */ }
                     Environment.Exit(0);
                 }
             }

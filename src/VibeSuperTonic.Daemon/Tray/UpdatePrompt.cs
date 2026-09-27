@@ -1,4 +1,5 @@
 using Tmds.DBus.Protocol;
+using VibeSuperTonic.Core.Ipc;
 
 namespace VibeSuperTonic.Daemon.Tray;
 
@@ -41,7 +42,8 @@ internal sealed class UpdatePrompt : IDisposable
         ("VibeSuperTonic has an update",
          $"Revision {revision} is ready. Updating closes VibeSuperTonic for a moment; " +
          "the next hotkey press takes a few seconds longer while the voice loads, and a " +
-         "screen reader uses its default voice until you next log in. " +
+         "screen reader uses its default voice until you next log in, or until you run " +
+         $"{SnapUpdateMarker.RestoreCommand}. " +
          "Choose Later to keep working: the tray menu keeps the option, and the system " +
          "applies the update by itself within 14 days.");
 

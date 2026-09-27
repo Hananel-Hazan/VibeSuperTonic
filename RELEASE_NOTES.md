@@ -110,8 +110,11 @@ through the VibeSuperTonic voice**.
   "Update now" item until you use it. Update now closes the window, the service
   and the screen-reader voice, and snapd installs the update straight away. The
   next hotkey press takes a few seconds longer while the voice loads, and the
-  screen reader uses its default voice until you next log in. Later changes
-  nothing; snapd installs the update by itself within 14 days.
+  screen reader uses its default voice until you next log in, or until you run
+  `systemctl --user restart speech-dispatcher.service`; the notification and
+  the window both say so, and the window's note goes once the screen reader is
+  speaking through VibeSuperTonic again. Later changes nothing; snapd installs
+  the update by itself within 14 days.
 
   **Once, to get here:** the revisions already on `edge` do not have this, so
   the update that brings it still needs `vibesupertonic.ctl shutdown`,

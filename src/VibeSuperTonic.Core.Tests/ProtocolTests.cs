@@ -368,4 +368,23 @@ public class ProtocolTests
         Assert.Null(bare.Benchmark);
         Assert.Equal(CpuBudget.Auto, bare.IntraOpThreads);
     }
+
+    /// <summary>
+    /// After a snap update the user chose, the window says how to bring the
+    /// screen reader's voice back. It must travel, and an older daemon's reply,
+    /// which lacks it, must read as "nothing to say" (2026-09-27).
+    /// </summary>
+    [Fact]
+    public void Config_carries_whether_the_screen_reader_stepped_aside()
+    {
+        var payload = new ConfigPayload("/o", "/o/data", "/o/models", true, false, false, 0, true,
+            "M1", "en", 8, 200, 100, 200, [], ScreenReaderSteppedAside: true);
+        string line = Protocol.Encode(new Response { Ok = true, Config = payload });
+        Assert.True(Protocol.TryDecode<Response>(line)!.Config!.ScreenReaderSteppedAside);
+
+        string older = line.Replace(",\"ScreenReaderSteppedAside\":true", "", StringComparison.OrdinalIgnoreCase)
+                           .Replace(",\"screenReaderSteppedAside\":true", "");
+        Assert.DoesNotContain("teppedAside", older);
+        Assert.False(Protocol.TryDecode<Response>(older)!.Config!.ScreenReaderSteppedAside);
+    }
 }

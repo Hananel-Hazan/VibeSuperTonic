@@ -475,6 +475,14 @@ public sealed partial class DaemonServer : IDisposable
                     // The third multi-reply verb. Same contract: replies until
                     // one carries Audio.Final, and the writer belongs to it for
                     // the duration.
+                    //
+                    // A render comes from the Speech Dispatcher module, so the screen
+                    // reader is on this voice again: the note saying otherwise goes.
+                    if (SteppedAsidePath() is { } note && File.Exists(note))
+                    {
+                        try { File.Delete(note); Log("update: the screen reader is speaking through VibeSuperTonic again"); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                    }
                     await RenderAsync(writer, request, token);
                     continue;
                 }
@@ -895,8 +903,17 @@ public sealed partial class DaemonServer : IDisposable
         Execution.Reason,
         BenchmarkSnapshot(),
         LinuxDataPaths.StoreRoot,
-        _installCheck);
+        _installCheck,
+        File.Exists(SteppedAsidePath() ?? ""));
     }
+
+    /// <summary>The module's "I stepped aside" note, or null outside a snap. See <see cref="SnapUpdateMarker"/>.</summary>
+    private static string? SteppedAsidePath() =>
+        SnapPeer.Current is null
+            ? null
+            : SnapUpdateMarker.PathIn(Environment.GetEnvironmentVariable("SNAP_USER_COMMON")) is { } marker
+                ? Path.Combine(Path.GetDirectoryName(marker)!, SnapUpdateMarker.SteppedAsideFileName)
+                : null;
 
     /// <summary>
     /// The stored profile as reported, re-tested against the machine as it is

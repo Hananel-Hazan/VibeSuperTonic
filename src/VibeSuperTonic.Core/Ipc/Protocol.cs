@@ -521,7 +521,8 @@ public sealed record ConfigPayload(
     string ThreadsReason = "",
     BenchmarkSummary? Benchmark = null,
     string StoreRoot = "",
-    VibeSuperTonic.Core.Install.InstallCheck? Install = null);
+    VibeSuperTonic.Core.Install.InstallCheck? Install = null,
+    bool ScreenReaderSteppedAside = false);
 
 /// <summary>
 /// The stored profile as <c>config</c> reports it — enough to judge it without

@@ -22,6 +22,23 @@ public static class SnapUpdateMarker
     public const string FileName = "update-now";
 
     /// <summary>
+    /// Left by a module that stepped aside, and removed by the next daemon the
+    /// first time the screen reader speaks through it again. While it exists the
+    /// window says how to get the voice back, because speech-dispatcher does not
+    /// restart a module that exits and falls back to another voice until it is
+    /// itself restarted (2026-09-27: "say hi in a different voice").
+    /// </summary>
+    public const string SteppedAsideFileName = "screen-reader-stepped-aside";
+
+    /// <summary>The one command that brings the voice back without logging out.</summary>
+    public const string RestoreCommand = "systemctl --user restart speech-dispatcher.service";
+
+    /// <summary>What the window shows while <see cref="SteppedAsideFileName"/> exists.</summary>
+    public const string SteppedAsideNotice =
+        "Since the update, your screen reader has been using its fallback voice. " +
+        "Log out and back in, or run this in a terminal, to bring VibeSuperTonic's voice back:";
+
+    /// <summary>
     /// Should a module of revision <paramref name="own"/>, started at
     /// <paramref name="startedUtc"/>, exit for this marker?
     /// </summary>
