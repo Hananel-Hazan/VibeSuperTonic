@@ -65,6 +65,13 @@ internal sealed class UpdatePrompt : IDisposable
                 (Exception? ex, (uint Id, string Action) e, object? _, object? _) =>
                 {
                     if (ex is not null || e.Id != _id || _id == 0) return;
+                    // Closed by us, whichever button: Plasma keeps a notification
+                    // on screen after an action unless the sender closes it, and
+                    // on 2026-09-27 "Later" was clicked thirteen times in four
+                    // seconds because nothing seemed to happen.
+                    uint answered = _id;
+                    _id = 0;
+                    _ = CloseAsync(answered);
                     if (e.Action == ActionUpdate) _updateNow();
                     else _log("update: the user chose Later");
                 },
@@ -97,13 +104,32 @@ internal sealed class UpdatePrompt : IDisposable
         writer.WriteString(summary);
         writer.WriteString(body);
         writer.WriteArray(new[] { ActionUpdate, "Update now", ActionLater, "Later" });
+        // Not "resident": that hint keeps it on screen after a button is
+        // pressed, which reads as the button not working.
         writer.WriteDictionary(new Dictionary<string, VariantValue>
         {
-            // Stays until answered, on servers that honour it.
-            ["resident"] = true,
             ["urgency"] = (byte)1,
         });
         writer.WriteInt32(0);                            // no timeout
+        return writer.CreateMessage();
+    }
+
+    private async Task CloseAsync(uint id)
+    {
+        try { await _connection.CallMethodAsync(BuildClose(id)); }
+        catch (Exception ex) { _log($"update: could not close the notification: {ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    private MessageBuffer BuildClose(uint id)
+    {
+        using var writer = _connection.GetMessageWriter();
+        writer.WriteMethodCallHeader(
+            destination: Service,
+            path: ObjectPath,
+            @interface: Service,
+            member: "CloseNotification",
+            signature: "u");
+        writer.WriteUInt32(id);
         return writer.CreateMessage();
     }
 

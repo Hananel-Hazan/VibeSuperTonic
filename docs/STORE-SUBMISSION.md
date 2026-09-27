@@ -164,8 +164,16 @@ did not help on its own and was kept.)
       `$SNAP_USER_COMMON`, honoured only if written after the module started) and
       the daemon; snapd applies a held refresh when the apps stop.
       `SnapUpdateWatch`, `SnapUpdateMarker`, `UpdatePrompt`; 19 tests, two
-      sabotages caught. **To see on the desktop:** the prompt, the three
-      processes going, and the refresh following.
+      sabotages caught.
+      **Confirmed on Kubuntu 2026-09-27, revision 8 to 9**, with snapd's timer
+      moved to force the check: 04:06:55 snapd pre-downloaded
+      `vibesupertonic_9.snap` and showed its own "Update available" notice;
+      04:10:03 the daemon logged revision 9 waiting; 04:15:36 Update now from the
+      tray; 04:15:56 snapd's auto-refresh completed, 20 s later, nothing typed.
+      Found by it: the notification stayed on screen after Later ("resident"), so
+      Later was clicked 13 times; fixed in the next revision by dropping the hint
+      and closing it on either answer. **Not yet seen:** the Speech Dispatcher
+      module stepping aside (it was not running during the test).
 - [ ] **After installing or re-binding, log out and back in** before the hotkey
       works on KDE: kglobalaccel reads shortcuts only at login (by design, see
       keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
