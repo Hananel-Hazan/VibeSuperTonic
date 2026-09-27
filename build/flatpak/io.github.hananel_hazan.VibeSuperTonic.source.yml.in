@@ -75,9 +75,14 @@ modules:
           </packageSources>
         </configuration>
         EOF
+      # set -e: flatpak-builder runs each entry with `sh -c`, which carries on
+      # past a failed line. The first CI build did exactly that: build-espeak.sh
+      # failed and pack-tar.sh ran anyway, so the error that reached the log was
+      # pack-tar.sh's "no espeak-ng payload" rather than the cause.
       - |
+        set -e
         export NUGET_PACKAGES="$PWD/.nuget-packages" DOTNET_CLI_HOME="$PWD/.dotnet-home"
-        bash build/build-espeak.sh
+        bash build/build-espeak.sh --sonic-src build/espeak-out/sonic
         bash build/pack-tar.sh
       - install -d /app/lib/vibesupertonic /app/bin
       - cp -a dist/release-linux/VibeSuperTonic/. /app/lib/vibesupertonic/
@@ -109,4 +114,12 @@ modules:
         commit: 724808c5a83f9ef95fdd0db886ba7ba537ff224a
         disable-shallow-clone: true
         dest: build/espeak-out/src
+      # libsonic, which espeak-ng's CMake clones at configure time unless it is
+      # given (build-espeak.sh --sonic-src). Not linked: USE_LIBSONIC is off. The
+      # commit is the GIT_TAG in espeak-ng's cmake/deps.cmake at the pin above,
+      # and build-espeak.sh refuses any other.
+      - type: git
+        url: https://github.com/waywardgeek/sonic.git
+        commit: fbf75c3d6d846bad3bb3d456cbc5d07d9fd8c104
+        dest: build/espeak-out/sonic
       - nuget-sources.json

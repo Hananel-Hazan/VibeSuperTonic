@@ -375,7 +375,9 @@ refuses one that installs a prebuilt archive:
 [the .source.yml.in](build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in),
 with the `dotnet10` SDK extension, the NuGet packages pinned in
 [nuget-sources.json](build/flatpak/nuget-sources.json), espeak-ng at
-`build-espeak.sh`'s pin, and **`pack-tar.sh` run inside the build**, so it is
+`build-espeak.sh`'s pin (and libsonic, which espeak-ng's CMake otherwise clones
+at configure time even though nothing links it: `build-espeak.sh --sonic-src`
+refuses any commit but the one espeak-ng names), and **`pack-tar.sh` run inside the build**, so it is
 still the one packer and its assertions still run. `pack-flatpak.sh
 --from-source` builds it and `--flathub TAG` writes the submission. The package
 list must be the one **the SDK's own dotnet** restores (runtime packs follow the

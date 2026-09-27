@@ -3,7 +3,7 @@
 # Build the libespeak-ng that the Piper engine phonemises with, and compose the
 # espeak/ payload the release archive ships.
 #
-#     bash build/build-espeak.sh [-o DIR] [--full-data] [--clean]
+#     bash build/build-espeak.sh [-o DIR] [--full-data] [--clean] [--sonic-src DIR]
 #
 # Roughly two minutes on a warm machine, most of it compiling dictionaries. Run
 # it before build/pack-tar.sh; the packer refuses to compose an archive whose
@@ -74,12 +74,14 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$root/build/espeak-out"
 full_data=0
 clean=0
+sonic_src=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o|--out)    out="${2:?}"; shift 2 ;;
         --full-data) full_data=1; shift ;;
         --clean)     clean=1; shift ;;
+        --sonic-src) sonic_src="${2:?}"; shift 2 ;;
         -h|--help)
             sed -n '3,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -151,8 +153,30 @@ step "Configuring and building"
 # tarball that does not correspond to the binary beside it. The flag adds $ORIGIN
 # ahead of the build machine's path, the loader tries it first, and the stale
 # absolute entry is simply a directory that does not exist on a user's machine.
+#
+# --sonic-src IS FOR A BUILD WITH NO NETWORK: Flathub's. espeak-ng's
+# cmake/deps.cmake clones libsonic at configure time whenever the machine has
+# none installed, even with USE_LIBSONIC=OFF, where nothing links it. Offline,
+# that clone fails, and the first flathub CI run died on it (2026-09-27). The
+# manifest carries sonic as a source and passes it here; CMake then uses that
+# directory instead of cloning. It must be the commit espeak-ng itself names, or
+# a moved espeak pin would configure against a sonic nobody chose.
+sonic_args=()
+if [[ -n "$sonic_src" ]]; then
+    [[ -f "$sonic_src/sonic.c" ]] || die "--sonic-src $sonic_src has no sonic.c"
+    sonic_src="$(cd "$sonic_src" && pwd)"
+    want="$(awk '/sonic.git/ { hit = 1; next } hit && /GIT_TAG/ && !seen { print $2; seen = 1 }' "$src/cmake/deps.cmake")"
+    [[ "$want" =~ ^[0-9a-f]{40}$ ]] || die "could not read sonic's GIT_TAG from $src/cmake/deps.cmake"
+    have="$(git -C "$sonic_src" rev-parse HEAD 2>/dev/null || true)"
+    [[ "$have" == "$want" ]] || die "--sonic-src is at '${have:-not a git checkout}', but espeak-ng $PIN pins sonic $want.
+       Update the sonic source in the Flathub manifest to that commit."
+    info "sonic $want, from $sonic_src"
+    sonic_args=("-DFETCHCONTENT_SOURCE_DIR_SONIC-GIT=$sonic_src")
+fi
+
 cmake -S "$src" -B "$src/build" \
     -DCMAKE_BUILD_TYPE=Release \
+    "${sonic_args[@]}" \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DCMAKE_EXE_LINKER_FLAGS='-Wl,-rpath,$ORIGIN' \
     -DCMAKE_C_FLAGS="-std=gnu17" \
