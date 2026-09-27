@@ -335,8 +335,20 @@ if (( test_install )); then
     # daemon it started runs under.
     "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
     said="$("${as_user[@]}" timeout 90 /snap/vibesupertonic/current/vst-ctl status 2>&1 || true)"
-    [[ "$said" == *"\"Version\":\"$version\""* ]] || die "the host-side hotkey client (/snap/vibesupertonic/current/vst-ctl) got no answer. It said:
+    if [[ "$said" != *"\"Version\":\"$version\""* ]]; then
+        # vst-ctl discards the daemon's output, so show the daemon's own log and
+        # what the sandbox refused. Read to the end: no early-exiting consumer.
+        printf '    the daemon log said:\n' >&2
+        tail -n 25 "$user_home/snap/vibesupertonic/common/data/logs/daemon.log" 2>/dev/null | sed 's/^/      | /' >&2 || true
+        printf '    the sandbox refused:\n' >&2
+        journalctl -k --since "-5min" --no-pager 2>/dev/null \
+            | grep -E 'apparmor="DENIED".*snap\.vibesupertonic|type=1326.*vibesupertonic' \
+            | tail -25 | sed 's/^/      | /' >&2 || true
+        printf '    snap run vibesupertonic.daemon, as the client starts it, said:\n' >&2
+        "${as_user[@]}" timeout 20 /snap/bin/vibesupertonic.daemon 2>&1 | tail -25 | sed 's/^/      | /' >&2 || true
+        die "the host-side hotkey client (/snap/vibesupertonic/current/vst-ctl) got no answer. It said:
        $said"
+    fi
     label=""
     for proc in /proc/[0-9]*; do
         [[ "$(readlink "$proc/exe" 2>/dev/null)" == /snap/vibesupertonic/*/vibesupertonicd ]] || continue
