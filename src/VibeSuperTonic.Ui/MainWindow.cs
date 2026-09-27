@@ -228,6 +228,14 @@ public sealed class MainWindow : Window
                 return;
             }
 
+            // The user chose "Update now" in the tray. An open window holds the
+            // snap's update back like any running app, so it goes too.
+            if (evt.Kind == SessionEventKind.UpdateStarting)
+            {
+                Close();
+                return;
+            }
+
             _reader.Apply(evt);
         });
 

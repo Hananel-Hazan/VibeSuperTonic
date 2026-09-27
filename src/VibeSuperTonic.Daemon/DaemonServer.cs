@@ -86,15 +86,15 @@ public sealed partial class DaemonServer : IDisposable
     /// <summary>True when the socket is an abstract name (a snap's) rather than a file.</summary>
     private bool _abstractSocket;
 
-    /// <summary>Clients connected right now. See <see cref="SnapRefreshWatch"/>.</summary>
-    private int _openConnections;
-
     /// <summary>
-    /// <see cref="Environment.TickCount64"/> when a connection last opened or
-    /// closed, or speech was last seen playing. See <see cref="SnapRefreshWatch"/>.
+    /// Raised, with the waiting revision, when snapd is holding an update back
+    /// because this snap is running. The tray asks the user. See
+    /// <see cref="SnapUpdateWatch"/>.
     /// </summary>
-    private long _lastActivity = Environment.TickCount64;
+    public event Action<int>? UpdatePending;
 
+    /// <summary>The revision last reported through <see cref="UpdatePending"/>, or 0.</summary>
+    private int _pendingRevision;
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
@@ -285,7 +285,7 @@ public sealed partial class DaemonServer : IDisposable
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
         _stopping = stopping;
         var serving = stopping.Token;
-        _ = WatchForRefreshAsync(serving);
+        _ = WatchForUpdateAsync(serving);
 
         try
         {
@@ -380,8 +380,6 @@ public sealed partial class DaemonServer : IDisposable
     private async Task ServeAsync(Socket client, CancellationToken token)
     {
         Guid id = Guid.NewGuid();
-        Interlocked.Increment(ref _openConnections);
-        Volatile.Write(ref _lastActivity, Environment.TickCount64);
         try
         {
             using var _ = client;
@@ -510,8 +508,6 @@ public sealed partial class DaemonServer : IDisposable
         catch (Exception ex) { Log($"connection error: {ex.GetType().Name}: {ex.Message}"); }
         finally
         {
-            Interlocked.Decrement(ref _openConnections);
-            Volatile.Write(ref _lastActivity, Environment.TickCount64);
             if (_subscribers.TryRemove(id, out var gone) && gone.Kind is { } kind)
             {
                 Log($"{kind} detached (pid {gone.Pid?.ToString() ?? "unknown"})");
@@ -521,41 +517,83 @@ public sealed partial class DaemonServer : IDisposable
     }
 
     /// <summary>
-    /// Inside a snap only: exit, when idle, once snapd has made another revision
-    /// current. The rule and the reasons are in <see cref="SnapRefreshWatch"/>.
+    /// Inside a snap only: look for an update snapd is holding back, and report
+    /// each new one once. Never acts on it; see <see cref="SnapUpdateWatch"/>.
     /// Runs on the serving token, so it ends with the accept loop.
     /// </summary>
-    private async Task WatchForRefreshAsync(CancellationToken token)
+    private async Task WatchForUpdateAsync(CancellationToken token)
     {
         // Validated, not just "$SNAP is set": a tarball daemon started from a
         // snap's terminal inherits $SNAP and must not act on it.
         if (SnapPeer.Current is null) return;
         string? snap = Environment.GetEnvironmentVariable("SNAP");
-        string? own = SnapRefreshWatch.OwnRevision(snap);
-        if (own is null) return;
+        string? instance = Environment.GetEnvironmentVariable("SNAP_INSTANCE_NAME");
+        string? own = SnapUpdateWatch.OwnRevision(snap);
+        if (own is null || instance is null) return;
+        ClearStaleUpdateMarker(own);
 
         try
         {
-            using var timer = new PeriodicTimer(SnapRefreshWatch.Interval);
-            while (await timer.WaitForNextTickAsync(token))
+            // Once at start as well: a daemon started while an update already
+            // waits should say so on the first look, not five minutes later.
+            do
             {
-                bool speaking = _session.State != SpeechState.Idle || Volatile.Read(ref _benchmarking) != 0;
-                // Speech counts as use, so a long read that ends is followed by
-                // the full grace, not by an immediate exit.
-                if (speaking) Volatile.Write(ref _lastActivity, Environment.TickCount64);
-
-                var idleFor = TimeSpan.FromMilliseconds(Environment.TickCount64 - Volatile.Read(ref _lastActivity));
-                string? why = SnapRefreshWatch.StepAside(own, SnapRefreshWatch.CurrentRevision(snap),
-                    Volatile.Read(ref _openConnections), speaking, idleFor);
-                if (why is null) continue;
-
-                Log(why);
-                RequestShutdown();
-                return;
+                int? pending = SnapUpdateWatch.Pending(instance, own, SnapUpdateWatch.CurrentRevision(snap), File.Exists);
+                if (pending is { } rev && rev != _pendingRevision)
+                {
+                    _pendingRevision = rev;
+                    Log($"update: revision {rev} is waiting to replace revision {own}; asking the user");
+                    UpdatePending?.Invoke(rev);
+                }
             }
+            while (await WaitAsync(SnapUpdateWatch.Interval, token));
         }
         catch (OperationCanceledException) { /* shutting down anyway */ }
-        catch (Exception ex) { Log($"refresh watch stopped: {ex.GetType().Name}: {ex.Message}"); }
+        catch (Exception ex) { Log($"update watch stopped: {ex.GetType().Name}: {ex.Message}"); }
+
+        static async Task<bool> WaitAsync(TimeSpan delay, CancellationToken token)
+        {
+            await Task.Delay(delay, token);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The user chose to update now. Close everything of ours that holds the
+    /// update back, and snapd applies it once the last one is gone: the window
+    /// (told through its event stream), the Speech Dispatcher module (through
+    /// the marker file it watches), and this daemon.
+    /// </summary>
+    public void ApplyUpdate()
+    {
+        string? own = SnapUpdateWatch.OwnRevision(Environment.GetEnvironmentVariable("SNAP"));
+        string? common = Environment.GetEnvironmentVariable("SNAP_USER_COMMON");
+        if (SnapPeer.Current is null || own is null || string.IsNullOrEmpty(common)) return;
+
+        try { File.WriteAllText(Path.Combine(common, SnapUpdateMarker.FileName), own); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"update: could not tell the Speech Dispatcher module to step aside: {ex.Message}");
+        }
+
+        Log($"update: the user chose to update now; closing revision {own}");
+        _session.Stop();
+        OnSessionEvent(new SessionEvent { Kind = SessionEventKind.UpdateStarting });
+        // A moment for the event to reach the window before the socket closes.
+        _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(_ => RequestShutdown(), TaskScheduler.Default);
+    }
+
+    /// <summary>A marker naming another revision was for a module that is gone by now.</summary>
+    private static void ClearStaleUpdateMarker(string own)
+    {
+        string? common = Environment.GetEnvironmentVariable("SNAP_USER_COMMON");
+        if (string.IsNullOrEmpty(common)) return;
+        string path = Path.Combine(common, SnapUpdateMarker.FileName);
+        try
+        {
+            if (File.Exists(path) && File.ReadAllText(path).Trim() != own) File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* harmless */ }
     }
 
     private static async Task WriteAsync(StreamWriter writer, Response response) =>

@@ -95,12 +95,20 @@ through the VibeSuperTonic voice**.
 
 - **KDE reads new shortcuts only when you log in.** After `sandbox-setup.sh bind`,
   log out and back in once.
-- **An update waits while it runs.** snapd refuses a manual `snap refresh`,
-  and holds automatic ones back, while any of a snap's programs runs, and the
-  background service and the screen-reader voice usually are. To update now:
-  `vibesupertonic.ctl shutdown`, `systemctl --user stop
-  speech-dispatcher.service`, close the window, then `sudo snap refresh
-  vibesupertonic`.
+- **You choose when an update happens.** snapd holds an update back while any
+  of a snap's programs runs, and the background service and the screen-reader
+  voice usually are. When one is waiting, VibeSuperTonic now says so in a
+  notification with **Update now** and **Later**, and the tray menu keeps an
+  "Update now" item until you use it. Update now closes the window, the service
+  and the screen-reader voice, and snapd installs the update straight away. The
+  next hotkey press takes a few seconds longer while the voice loads, and the
+  screen reader uses its default voice until you next log in. Later changes
+  nothing; snapd installs the update by itself within 14 days.
+
+  **Once, to get here:** the revisions already on `edge` do not have this, so
+  the update that brings it still needs `vibesupertonic.ctl shutdown`,
+  `systemctl --user stop speech-dispatcher.service`, the window closed, and
+  `sudo snap refresh vibesupertonic`.
 
 ## On stock Ubuntu (GNOME on Wayland)
 

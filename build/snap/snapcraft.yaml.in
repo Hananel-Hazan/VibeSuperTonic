@@ -103,8 +103,8 @@ apps:
   # refresh while they run ("has running apps", Kubuntu 2026-09-25). The Store
   # accepts refresh-mode only on services (`daemon:` apps), and these are not:
   # upload of a snap carrying it failed schema validation on 2026-09-27, after
-  # local snapd had installed it without complaint. The refresh problem is open;
-  # STORE-SUBMISSION's checklist has it.
+  # local snapd had installed it without complaint. Instead the daemon notices a
+  # held update and asks the user (SnapUpdateWatch, UpdatePrompt).
   daemon:
     command: vibesupertonicd
     plugs: *daemon-plugs

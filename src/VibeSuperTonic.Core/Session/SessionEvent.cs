@@ -34,6 +34,14 @@ public enum SessionEventKind
     /// tray precisely because they cannot see it.</para>
     /// </summary>
     WindowRequested,
+
+    /// <summary>
+    /// The window should close, because the user chose to apply a snap update
+    /// and snapd applies it only once nothing of ours runs. Not a speech event;
+    /// it travels this channel for the same reason <see cref="WindowRequested"/>
+    /// does. The daemon exits a moment later.
+    /// </summary>
+    UpdateStarting,
 }
 
 /// <summary>

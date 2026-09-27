@@ -61,8 +61,10 @@ internal sealed class TrayIcon : IDisposable
         Func<bool> uiAttached,
         Action<string> log,
         Action? raiseWindow = null,
-        Func<IReadOnlyDictionary<string, string?>>? windowSession = null)
+        Func<IReadOnlyDictionary<string, string?>>? windowSession = null,
+        Action? updateNow = null)
     {
+        _updateNow = updateNow ?? (() => { });
         _invoke = invoke;
         _uiAttached = uiAttached;
         _log = log;
@@ -78,6 +80,9 @@ internal sealed class TrayIcon : IDisposable
     private readonly Func<IReadOnlyDictionary<string, string?>>? _windowSession;
 
     private readonly Action _raiseWindow;
+
+    /// <summary>The user chose to apply a waiting snap update. DaemonServer.ApplyUpdate.</summary>
+    private readonly Action _updateNow;
 
     /// <summary>
     /// What <c>status</c> reports. Never "fine" by default: until
@@ -270,7 +275,32 @@ internal sealed class TrayIcon : IDisposable
         new MenuRow(4,
             () => "Stop the engine (the next press starts it again)",
             () => Invoke(RequestVerb.Shutdown)),
+
+        // Only while snapd holds an update back because we are running. Never
+        // applied without this click or the notification's; see SnapUpdateWatch.
+        new MenuRow(5,
+            () => $"Update now (revision {_pendingUpdate} is ready)",
+            _updateNow)
+        { Visible = () => _pendingUpdate != 0 },
     ];
+
+    private int _pendingUpdate;
+    private UpdatePrompt? _prompt;
+
+    /// <summary>
+    /// snapd is holding revision <paramref name="revision"/> back. Show the menu
+    /// row and ask once, through a notification.
+    /// </summary>
+    public void OnUpdatePending(int revision)
+    {
+        _pendingUpdate = revision;
+        Refresh();
+        if (_connection is { } connection)
+        {
+            _prompt ??= new UpdatePrompt(connection, _updateNow, _log);
+            _ = _prompt.ShowAsync(revision);
+        }
+    }
 
     private void Invoke(RequestVerb verb)
     {
@@ -560,6 +590,7 @@ internal sealed class TrayIcon : IDisposable
     public void Dispose()
     {
         _stopping.Cancel();
+        _prompt?.Dispose();
         _connection?.Dispose();
         _stopping.Dispose();
     }

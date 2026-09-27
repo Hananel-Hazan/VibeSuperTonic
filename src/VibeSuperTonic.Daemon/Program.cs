@@ -461,8 +461,10 @@ foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGINT, PosixSig
 // trade is the whole reason `status` carries a Tray field.
 using var tray = new TrayIcon(
     server.Invoke, () => server.UiAttached, DaemonLog.Write, server.RaiseWindow,
-    () => server.ClientDisplay.ForWindow(File.Exists));
+    () => server.ClientDisplay.ForWindow(File.Exists),
+    server.ApplyUpdate);
 server.TrayStatus = () => tray.Status;
+server.UpdatePending += tray.OnUpdatePending;
 session.Emitted += tray.OnSessionEvent;
 server.UiAttachedChanged += tray.OnUiAttachedChanged;
 await tray.StartAsync();

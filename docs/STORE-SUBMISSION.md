@@ -153,6 +153,19 @@ did not help on its own and was kept.)
       for now.** Options to weigh: the daemon exiting after a long idle (costs a
       cold start on the next press), or snapd's own refresh-app-awareness
       notification, which asks the user to close the app.
+      **Built 2026-09-27: the user chooses.** The user ruled out anything
+      automatic (no surprise restart, no unannounced slow press). The daemon
+      notices a held revision by the file snapd pre-downloads,
+      `/var/lib/snapd/snaps/<instance>_<rev>.snap`, which every snap's AppArmor
+      profile lets it stat (`snapctl refresh --pending` is refused to a non-root
+      app, and the notices API needs a reviewed interface). It then shows a
+      notification with Update now / Later and a tray row. Update now closes the
+      window (`UpdateStarting` event), the module (the `update-now` marker in
+      `$SNAP_USER_COMMON`, honoured only if written after the module started) and
+      the daemon; snapd applies a held refresh when the apps stop.
+      `SnapUpdateWatch`, `SnapUpdateMarker`, `UpdatePrompt`; 19 tests, two
+      sabotages caught. **To see on the desktop:** the prompt, the three
+      processes going, and the refresh following.
 - [ ] **After installing or re-binding, log out and back in** before the hotkey
       works on KDE: kglobalaccel reads shortcuts only at login (by design, see
       keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.

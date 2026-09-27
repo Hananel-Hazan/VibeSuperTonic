@@ -1,4 +1,5 @@
 using System.Reflection;
+using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.SpeechD;
 
 // vst-speechd — the Speech Dispatcher output module.
@@ -23,6 +24,35 @@ if (args.Contains("--version"))
             ?.Split('+')[0]
             ?? "unknown");
     return 0;
+}
+
+// Inside a snap: step aside when the user chooses to apply an update now. See
+// SnapUpdateMarker. Speech Dispatcher then uses its fallback voice until it next
+// starts this module, which the choice warned about.
+if (SnapPeer.Current is not null
+    && SnapUpdateMarker.PathIn(Environment.GetEnvironmentVariable("SNAP_USER_COMMON")) is { } marker)
+{
+    string? own = Path.GetFileName(Environment.GetEnvironmentVariable("SNAP")?.TrimEnd('/'));
+    DateTime started = DateTime.UtcNow;
+    var watch = new Thread(() =>
+    {
+        while (true)
+        {
+            Thread.Sleep(TimeSpan.FromSeconds(3));
+            try
+            {
+                if (File.Exists(marker)
+                    && SnapUpdateMarker.ShouldExit(own, File.ReadAllText(marker), File.GetLastWriteTimeUtc(marker), started))
+                {
+                    Console.Error.WriteLine($"vst-speechd: revision {own} stepping aside for an update the user asked for");
+                    Environment.Exit(0);
+                }
+            }
+            catch (IOException) { /* written as we read; look again */ }
+            catch (UnauthorizedAccessException) { return; }
+        }
+    }) { IsBackground = true, Name = "snap-update-marker" };
+    watch.Start();
 }
 
 using var stdin = Console.OpenStandardInput();

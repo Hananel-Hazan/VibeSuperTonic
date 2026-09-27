@@ -6,7 +6,11 @@ namespace VibeSuperTonic.Daemon.Tray;
 /// <param name="Id">Stable across revisions — the host sends it back in <c>Event</c>.</param>
 /// <param name="Label">Evaluated on every layout request, because two of the four change with state.</param>
 /// <param name="Click">What the row does. Every one of these is a verb — see <see cref="TrayIcon"/>.</param>
-internal sealed record MenuRow(int Id, Func<string> Label, Action Click, bool IsSeparator = false);
+internal sealed record MenuRow(int Id, Func<string> Label, Action Click, bool IsSeparator = false)
+{
+    /// <summary>Null means always shown. The update row exists only while an update waits.</summary>
+    public Func<bool>? Visible { get; init; }
+}
 
 /// <summary>
 /// The tray menu, over <c>com.canonical.dbusmenu</c>.
@@ -214,7 +218,7 @@ internal sealed class TrayMenu : IMethodHandler
         {
             ["label"] = row.Label(),
             ["enabled"] = true,
-            ["visible"] = true,
+            ["visible"] = row.Visible?.Invoke() ?? true,
         };
 
     private static readonly ReadOnlyMemory<byte> IntrospectXml = System.Text.Encoding.UTF8.GetBytes(
