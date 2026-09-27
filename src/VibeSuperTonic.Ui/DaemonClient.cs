@@ -242,6 +242,12 @@ public sealed class DaemonClient
     /// directory, so any other guess describes a layout this product does not
     /// produce.
     /// </summary>
+    /// <summary>
+    /// Start the daemon now, for the window's "Start it now". Null on success;
+    /// the run loop connects once the socket answers.
+    /// </summary>
+    public static string? StartDaemon() => TryStartDaemon(out string error) ? null : error;
+
     private static bool TryStartDaemon(out string error)
     {
         string exe = Environment.GetEnvironmentVariable("VST_DAEMON")

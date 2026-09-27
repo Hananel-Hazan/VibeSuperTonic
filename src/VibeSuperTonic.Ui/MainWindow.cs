@@ -36,6 +36,7 @@ public sealed class MainWindow : Window
     private readonly StatusTab _status;
     private readonly TuneTab _tune;
     private readonly InstallBanner _banner = new();
+    private readonly EngineOfflineBar _offline = new(DaemonClient.StartDaemon);
     private readonly TabControl _tabs;
     private readonly TextBlock _connection = new() { VerticalAlignment = VerticalAlignment.Center, Opacity = 0.75 };
 
@@ -194,7 +195,7 @@ public sealed class MainWindow : Window
         // control with two visual parents, so leaving it in the shell's children
         // as well is not a layout quirk — it is a hard crash at startup, every
         // time, which is how this was found.
-        Content = new DockPanel { Children = { _banner, _screen } };
+        Content = new DockPanel { Children = { _banner, _offline, _screen } };
 
         // Deliberately after the window exists: a fresh install has no models,
         // and the screen that fixes that is the first thing it should show.
@@ -203,6 +204,7 @@ public sealed class MainWindow : Window
         client.Snapshotted += status => Dispatcher.UIThread.Post(async () =>
         {
             _connection.Text = $"connected — daemon {status.Version}";
+            _offline.Show(false);
             _reader.ApplySnapshot(status);
 
             // The check also runs on connect, because the window opens before
@@ -244,6 +246,7 @@ public sealed class MainWindow : Window
             if (connected) return;
             _connection.Text = "not connected";
             _reader.ShowDisconnected();
+            _offline.Show(true);
         });
     }
 

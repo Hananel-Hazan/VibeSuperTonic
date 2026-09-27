@@ -75,6 +75,10 @@ before revision 5 met some of it:
   was started without its libraries, and then again after a logout, because a
   daemon that outlived the session still pointed at the old one. The daemon now
   takes the display from the latest program that talks to it.
+- **The window says when the engine is not running.** Stopped from the tray or
+  a terminal, the engine went away and the open window still looked as if it
+  worked. A bar across the top now says so, on every tab, with a Start it now
+  button, and goes away when the engine is back.
 - **On X11, the hotkey could stop working after you logged out and back in**,
   with "could not open X display", if the background service had kept running
   from the earlier session. It now uses the display login the key press
