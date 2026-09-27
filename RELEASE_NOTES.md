@@ -2,9 +2,8 @@
 
 *A snap and a Flatpak, so it can be installed from the Ubuntu App Center and from KDE Discover.*
 
-**Under development.** Nothing below has been packed for release or published to
-either store yet. The steps and the list of what still needs checking on a real
-desktop are in [docs/STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md).
+**Ready to pack; not packed yet.** Delete this paragraph in the release commit.
+The steps are in [docs/RELEASE-0.2.17.md](docs/RELEASE-0.2.17.md).
 
 ```
 VibeSuperTonic-0.2.17-linux-x64.tar.gz     61 MB
@@ -50,6 +49,65 @@ bash /snap/vibesupertonic/current/sandbox-setup.sh speechd-install
 
 It uses the same binding and Speech Dispatcher code as the tarball and the
 AppImage.
+
+## For everyone on Linux: the screen reader installer is safer
+
+These reach the tarball and the AppImage too, not only the store packages.
+
+- **`speechd-install` undoes itself if it silences anything.** It compares the
+  voices Speech Dispatcher offered before the install with the ones it offers
+  after. If any is missing, it restores the old configuration, restarts Speech
+  Dispatcher, checks again and exits with an error. Before, it printed a warning
+  and left the machine as it was, which could mean a screen reader with no voice.
+- **It no longer waits forever on a stuck Speech Dispatcher.** It waits on every
+  process it asked to stop, and after five seconds it stops them by force.
+- **`speechd-install --remove` works when our module is the only thing in the
+  configuration.** It used to exit silently at that point.
+
+## Fixed along the way to the store
+
+Nothing below reached a stable channel, but anyone who installed from `edge`
+before revision 5 met some of it:
+
+- The daemon could not start inside the snap (the sandbox refused to let it
+  listen for the hotkey), there was no tray icon, and there was no sound.
+- A click on the tray icon could not open the window, at first because the window
+  was started without its libraries, and then again after a logout, because a
+  daemon that outlived the session still pointed at the old one. The daemon now
+  takes the display from the latest program that talks to it.
+- **After a restart, the hotkey read nothing in Wayland applications** until the
+  window had been opened once. The daemon looked for the desktop's Wayland
+  connection inside the snap's private folder, where only the window's launcher
+  puts it, and when it was not there settled on X11 for as long as it ran. It now
+  makes that connection itself before it chooses. Found on Kubuntu on
+  2026-09-27, after a reboot.
+
+- **`bind` no longer adds a second VibeSuperTonic to KDE's menu** in the snap and
+  the Flatpak. The entry that carries the hotkeys is now hidden, because the
+  package has its own. It looked like a duplicate, and deleting it deleted the
+  hotkeys too. `sandbox-setup.sh status` now says so if that has happened.
+
+Checked on Kubuntu (KDE Plasma 6, Wayland) with revision 5: the hotkey reads the
+selection, the tray opens the window after a logout and login, and **Orca reads
+through the VibeSuperTonic voice**.
+
+## Two things to know about the snap
+
+- **KDE reads new shortcuts only when you log in.** After `sandbox-setup.sh bind`,
+  log out and back in once.
+- **Updates no longer wait for you to stop it.** snapd normally refuses a
+  manual `snap refresh`, and holds automatic ones back for up to 14 days, while
+  any of a snap's programs runs. The background service and the screen-reader
+  voice run all day, so no update would ever have arrived on its own. Both are
+  now marked so that snapd updates underneath them. The service moves to the
+  new version by itself after five minutes without use. The screen-reader
+  voice moves at your next login, because Speech Dispatcher does not restart a
+  voice that exits. An open window still holds an update back, as any open app
+  does.
+
+  **Once, to get here:** the revisions already on `edge` do not have this yet,
+  so the refresh that brings 0.2.17 still needs `vibesupertonic.ctl shutdown`,
+  `systemctl --user stop speech-dispatcher.service`, and the window closed.
 
 ## On stock Ubuntu (GNOME on Wayland)
 

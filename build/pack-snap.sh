@@ -221,6 +221,22 @@ for app in daemon ctl speechd; do
 done
 info "version $version, strict, five apps, ctl is bare, and the daemon's starters carry its plugs and the window's"
 
+# THE TWO LONG-LIVED APPS DO NOT HOLD BACK A REFRESH. Without ignore-running a
+# manual `snap refresh` is refused, and an automatic one waits up to 14 days,
+# for as long as the daemon or the Speech Dispatcher module runs, which for a
+# screen reader user is always. Nothing reports it: the update just never comes.
+refresh_pairs="$(awk '
+    /^apps:/ { inapps = 1; next }
+    inapps && /^[^ ]/ { inapps = 0 }
+    inapps && /^  [A-Za-z0-9-]+:/ { app = $1; sub(/:$/, "", app); next }
+    inapps && /^    refresh-mode:/ { print app, $2 }' "$meta")"
+for app in daemon speechd; do
+    [[ $'\n'"$refresh_pairs"$'\n' == *$'\n'"$app ignore-running"$'\n'* ]] || die "the '$app' app is not refresh-mode: ignore-running, so while it runs
+       snapd refuses a manual refresh and holds automatic ones for up to 14 days.
+       See snapcraft.yaml.in."
+done
+info "the daemon and the module do not hold back a refresh"
+
 # THE SOUND SERVER, for every app. Without PULSE_SERVER a daemon started by the
 # bare ctl looks for PulseAudio under the snap's own XDG_RUNTIME_DIR, finds
 # nothing, and every hotkey press is refused with "no audio device available"

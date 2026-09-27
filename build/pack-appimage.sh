@@ -187,7 +187,7 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   image open for your whole session, so overwriting it fails with "Text file
 #   busy" (and forcing past that leaves a module that dies on its next spawn,
 #   which a screen reader sees as every utterance hanging):
-#       pkill -u "$USER" -x speech-dispatcher
+#       pkill -u "$USER" -x speech-dispatch   # the kernel keeps 15 chars of a name
 #   Run that AFTER replacing the image as well: anything that spoke during the
 #   copy will have started a new speech-dispatcher holding the old image, and it
 #   then answers nothing at all — not us, not espeak-ng — until it is restarted.
@@ -306,6 +306,25 @@ if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$appdir/VibeSuperTonic.desktop" \
         || die "the .desktop entry does not validate"
     info "desktop entry validates"
+fi
+
+# The store listing, the one the tarball carries, for AppImageHub: its catalog
+# takes the description and screenshots from here. Same component id as the
+# snap and the Flatpak; only the launchable changes, because inside the image
+# the desktop entry is VibeSuperTonic.desktop. *.appdata.xml is the name
+# appimagetool looks for.
+listing_src="$staging/desktop/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml"
+listing="$appdir/usr/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.appdata.xml"
+[[ -f "$listing_src" ]] || die "the composed tree has no store listing at $listing_src"
+mkdir -p "$(dirname "$listing")"
+sed 's|<launchable type="desktop-id">io.github.hananel_hazan.VibeSuperTonic.desktop</launchable>|<launchable type="desktop-id">VibeSuperTonic.desktop</launchable>|' \
+    "$listing_src" > "$listing"
+[[ "$(grep -c '<launchable type="desktop-id">VibeSuperTonic.desktop</launchable>' "$listing")" == 1 ]] \
+    || die "the listing's launchable was not pointed at VibeSuperTonic.desktop; did its text change?"
+if command -v appstreamcli >/dev/null 2>&1; then
+    appstreamcli validate --no-net "$listing" >/dev/null \
+        || { appstreamcli validate --no-net "$listing" >&2 || true; die "the AppImage's store listing does not validate"; }
+    info "store listing validates"
 fi
 
 # --------------------------------------------------------------------- build

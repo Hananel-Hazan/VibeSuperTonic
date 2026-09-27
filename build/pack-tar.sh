@@ -874,7 +874,10 @@ If you have registered the Speech Dispatcher module (./speechd-install.sh), stop
 speech-dispatcher too — it holds vst-speechd open for your whole login session,
 so an upgrade otherwise leaves the OLD module answering your screen reader:
 
-    pkill -u "$USER" -x speech-dispatcher     # it restarts on the next request
+    pkill -u "$USER" -x speech-dispatch       # it restarts on the next request
+
+(speech-dispatch, not speech-dispatcher: the kernel keeps only the first 15
+characters of a process name, and pkill -x with the full name matches nothing.)
 
 install.sh does both for you, and it runs AFTER you extract, which is the half
 that matters: anything that spoke while you were extracting will have started a
@@ -887,7 +890,7 @@ fail outright with "Text file busy", which is the friendly version. Skipping the
 "after" is the quiet one: a speech-dispatcher that spawned the module from the
 image during the copy is left holding a dead one, and it then answers NOTHING —
 not our module, not espeak-ng — until it is restarted. Measured on 2026-08-28,
-recovered by one `pkill -u "$USER" -x speech-dispatcher`.
+recovered by stopping it: `pkill -u "$USER" -x speech-dispatch`.
 
 Stop it BEFORE you extract over an existing folder, not after. `shutdown` with
 nothing running is a success, so it is always safe to type. The next hotkey

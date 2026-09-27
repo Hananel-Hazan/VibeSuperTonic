@@ -21,6 +21,14 @@ on:
         description: 'Upload the snap to the Snap Store edge channel'
         type: boolean
         default: false
+      snap_grade:
+        # stable only for a release run, from the tagged commit. The edge-only
+        # credential still decides where it can go: a stable-grade snap reaches
+        # edge, and a person promotes it with `snapcraft release`.
+        description: 'Snap grade (stable is for a release run only)'
+        type: choice
+        options: [devel, stable]
+        default: devel
 
 jobs:
   # ---------------------------------------------------------------- Windows
@@ -509,7 +517,8 @@ jobs:
       # other check runs the snap's files outside confinement, which is how
       # revision 1 reached the store with a daemon seccomp killed on every press.
       - name: Pack the snap, with its assertions, and test it under snapd
-        run: sudo bash build/pack-snap.sh --destructive-mode --test-install
+        # inputs.snap_grade is empty on a push, hence the default.
+        run: sudo bash build/pack-snap.sh --destructive-mode --test-install --grade "${{ inputs.snap_grade || 'devel' }}"
 
       - name: Upload the snap
         uses: actions/upload-artifact@v4
@@ -524,7 +533,8 @@ jobs:
       # The credential is `snapcraft export-login --snaps=vibesupertonic
       # --channels=edge ...`, so it cannot reach beta, candidate or stable
       # whatever this step is changed to say. CI builds are grade devel, which
-      # the store also keeps off candidate and stable.
+      # the store also keeps off candidate and stable, unless a manual run asked
+      # for snap_grade stable; that one is promoted by hand, never from here.
       #
       # Asked for and no credential is a failure, not a skip: a green run that
       # silently published nothing is how somebody waits for a revision that is

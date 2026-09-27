@@ -49,6 +49,23 @@
     </p>
   </description>
 
+  <!-- Pinned to the release tag so the URLs never move (Flathub asks for that).
+       They resolve once v0.2.17 is pushed; the build validates with no network. -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Reading the selection aloud, highlighting each word</caption>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.17/docs/screenshots/reader.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Downloading voices, with each voice's licence shown first</caption>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.17/docs/screenshots/voices.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Engine, voice, speed and quality, for all voices or just one</caption>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.17/docs/screenshots/tune.png</image>
+    </screenshot>
+  </screenshots>
+
   <launchable type="desktop-id">io.github.hananel_hazan.VibeSuperTonic.desktop</launchable>
 
   <categories>
@@ -79,9 +96,20 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.2.17" date="2026-09-25" type="development">
+    <!-- The date is the day it is packed; docs/RELEASE-0.2.17.md step 3 sets it. -->
+    <release version="0.2.17" date="2026-09-25" type="stable">
       <description>
-        <p>First release as a snap and a Flatpak.</p>
+        <p>First release as a snap and a Flatpak, so it can be installed from the
+          Ubuntu App Center and from KDE Discover.</p>
+        <ul>
+          <li>Models and settings are kept in the sandbox's own folder and survive updates</li>
+          <li>The hotkeys and the screen reader voice are connected with one command,
+            which the Status tab shows</li>
+          <li>Installing the screen reader voice now undoes itself if any other voice
+            stops answering afterwards, and it no longer waits forever on a stuck
+            Speech Dispatcher</li>
+          <li>The window opens from the tray again after you log out and back in</li>
+        </ul>
       </description>
     </release>
   </releases>

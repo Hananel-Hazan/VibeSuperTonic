@@ -137,6 +137,10 @@ case "$verb" in
        Reinstall the Flatpak, or bind the keys by hand to:  $ctl_cmd read"
         fi
         export VST_KB_UI_COMMAND="$ui_cmd"
+        # The package already puts VibeSuperTonic in the menu, so the entry that
+        # carries the keys stays out of it. A visible second one gets deleted as
+        # a duplicate, and the hotkeys go with it. See keybindings.sh, item 4.
+        export VST_KB_KDE_NO_DISPLAY=1
         # shellcheck source=keybindings.sh
         source "$here/keybindings.sh"
         case "$verb" in

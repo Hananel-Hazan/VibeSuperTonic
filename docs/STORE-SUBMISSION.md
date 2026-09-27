@@ -128,11 +128,36 @@ did not help on its own and was kept.)
       it alive), the daemon, or a window the tray opened (which snapd counts as
       `ctl`). snapd's normal rule; automatic refreshes wait instead. Decide
       between telling users (listing, INSTALL notes) and making the module and
-      daemon step aside. Today's workaround: `vibesupertonic.ctl shutdown`,
+      daemon step aside.
+      **Measured 2026-09-26, speech-dispatcher 0.12.1: a module that exits is not
+      restarted.** speechd logs "Output module terminated abnormally, probably
+      crashed", routes every later request to the fallback module, and still lists
+      the dead one in `spd-say -O`. So "the module exits when idle" would silently
+      move a screen-reader user to espeak. Ruled out. The candidate instead is
+      `refresh-mode: ignore-running` on the `speechd` and `daemon` apps, with the
+      daemon exiting when idle once it sees `current` point at a newer revision.
+      Needs a CI snap build to verify.
+      **Built 2026-09-26, uncommitted**: both lines in snapcraft.yaml.in, asserted
+      by pack-snap.sh (a synthetic snap without either line is refused), and
+      `SnapRefreshWatch` in the daemon with 17 tests, three sabotages caught.
+      Still to see: CI's `--test-install` accepting the snap, then a real refresh
+      on the desktop with the daemon and the module running. Today's workaround: `vibesupertonic.ctl shutdown`,
       `systemctl --user stop speech-dispatcher.service`, close the window.
 - [ ] **After installing or re-binding, log out and back in** before the hotkey
       works on KDE: kglobalaccel reads shortcuts only at login (by design, see
       keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
+
+- [ ] **The hotkey after a reboot, before any window has opened** (snap). Revision
+      5 read nothing in Wayland applications then: the daemon's probe looked for
+      `wayland-0` in the snap's private `$XDG_RUNTIME_DIR`, where only the window's
+      `desktop-launch` links it, and fell back to X11 PRIMARY for its whole life.
+      Log line: `selection source: x11 (PRIMARY)` on a Wayland session. Found on
+      Kubuntu 2026-09-27 and reproduced by removing the link and restarting the
+      daemon. **Fixed 2026-09-27, uncommitted**: `SnapWaylandLink` makes the same
+      link before the probe (7 tests, the sabotage caught by 4). To see on the
+      desktop with the next revision: reboot, press the hotkey before opening the
+      window, and the log says `linked ... wayland-0` then `selection source:
+      wayland`.
 
 - [ ] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** `snap run` adds
       its own startup; the AppImage's comparable cost was +14.7 ms. Measure it
@@ -145,17 +170,28 @@ did not help on its own and was kept.)
       it, the hotkey reads nothing.
 - [ ] **The tray icon** in both sandboxes. **Snap: done on Kubuntu 2026-09-25**
       (revision 5): the icon registers (`unity7`), a click opens the window, and
-      "Read selected text" speaks. Flatpak (`--talk-name=org.kde.StatusNotifierWatcher`)
-      not yet tried.
+      "Read selected text" speaks. **A click after a logout and login opens the
+      window too** (the `ClientDisplay` fix), confirmed 2026-09-26. Flatpak
+      (`--talk-name=org.kde.StatusNotifierWatcher`) not yet tried.
 - [ ] **Orca end to end**: `sandbox-setup.sh speechd-install`, then Orca speaking
-      through the module, in both. Snap: the install and `spd-say -o
-      vibesupertonic` work on Kubuntu (2026-09-25); Orca itself not yet tried.
+      through the module, in both. **Snap: done on Kubuntu 2026-09-26**, Orca
+      reading through the VibeSuperTonic voice (revision 5). Flatpak not yet
+      tried.
 - [ ] **KDE's menu gains a second VibeSuperTonic entry** after `bind`: the store's
       own, plus the one keybindings.sh writes to carry the shortcuts. **Confirmed**
       on Kubuntu with the snap (`vibesupertonic_vibesupertonic.desktop` beside
       `vibesupertonic.desktop`). Decide
       whether that one should be `NoDisplay=true`, and test that the shortcuts
       survive it.
+      **Decided 2026-09-26: yes, in the snap and the Flatpak only** (sandbox-setup.sh
+      sets `VST_KB_KDE_NO_DISPLAY=1`; the tarball and AppImage keep theirs visible,
+      since it is their only entry). Plasma's own "Add Command" shortcuts are
+      NoDisplay entries, which is the reason to expect it to work. **Not yet seen
+      after a real logout.** The user's re-login on 2026-09-27 did not test it:
+      revision 5's `sandbox-setup.sh` predates the change, `bind` was not re-run,
+      and the entry on disk has no `NoDisplay` line. The user had hidden the entry with KDE's menu editor
+      on 2026-09-26, thinking it a mistake; `keybindings.sh status` now warns when
+      the shortcuts point at an entry that no longer exists.
 - [ ] **GNOME on Wayland**, which is stock Ubuntu: the hotkey cannot read the
       selection there (no `ext-data-control`), so on the App Center's default
       desktop the product is its screen-reader voice plus the window. The listing
@@ -190,6 +226,11 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
    `edge` → `stable` once the checklist above is done.
 
 ### Flathub
+
+**Blocked on a source build (checked 2026-09-26).** Flathub requires source-available
+apps to be "built entirely from source code"; the manifest below repackages the
+tarball and would be rejected. See docs/RELEASE-0.2.17.md, step 6, for what a
+source-build manifest needs. The steps below still apply once it exists.
 
 1. **Screenshots first.** Flathub's linter requires `<screenshots>` in the
    metainfo, with image URLs that stay put (a file in this repository at a tag

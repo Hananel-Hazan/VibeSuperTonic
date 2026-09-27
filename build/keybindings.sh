@@ -402,6 +402,15 @@ _vst_kb_preflight() {
 #     does not write one of its own and there is exactly one "VibeSuperTonic" in
 #     the menu rather than two.
 #
+#     EXCEPT IN A SNAP OR A FLATPAK, which ship a menu entry of their own. There
+#     a visible one here makes two, confirmed on Kubuntu 2026-09-25 — and the
+#     user who tidies the "duplicate" away by deleting this file has deleted
+#     the hotkeys with it, with nothing reporting it. So sandbox-setup.sh sets
+#     VST_KB_KDE_NO_DISPLAY=1 and this entry is written NoDisplay=true. That is
+#     the mechanism Plasma's own Shortcuts page uses for "Add Command": it
+#     writes a NoDisplay entry and binds the key to it. Still to be seen after
+#     a real logout on a real Plasma; STORE-SUBMISSION's checklist says so.
+#
 # ACCELERATORS ARE SPELLED DIFFERENTLY HERE THAN ON CINNAMON, and it is not a
 # style choice. The Cinnamon half writes <Control><Shift>grave because GTK grabs
 # a KEYCODE plus modifiers, and the tilde is merely the shifted backtick.
@@ -569,6 +578,10 @@ Categories=Utility;Accessibility;
 X-KDE-StartupNotify=false
 Actions=$(IFS=';'; printf '%s;' "${VST_KB_KDE_ACTIONS[*]}")
 "
+    # A store package's own entry is the menu entry; this one only carries the
+    # keys. See item 4 above. Never Hidden=true, which would unbind them.
+    [[ "${VST_KB_KDE_NO_DISPLAY:-0}" == "1" ]] && body+="NoDisplay=true
+"
     for i in "${!VST_KB_KDE_ACTIONS[@]}"; do
         body+="
 [Desktop Action ${VST_KB_KDE_ACTIONS[$i]}]
@@ -714,6 +727,13 @@ _vst_kde_status() {
         fi
     done
     (( found )) || _vst_kb_info "no VibeSuperTonic shortcuts are registered."
+    # Keys bound to an entry that is gone do nothing when pressed, and nothing
+    # else says so. The likely cause is someone deleting what looked like a
+    # duplicate menu entry.
+    if (( found )) && [[ ! -f "$path" ]]; then
+        _vst_kb_warn "these shortcuts point at $VST_KB_KDE_DESKTOP_ID, which is missing,"
+        _vst_kb_warn "so pressing them does nothing. Run bind again to restore it."
+    fi
     return 0
 }
 

@@ -1,5 +1,11 @@
 # Handoff — snap and Flatpak (0.2.17), for 2026-09-26
 
+**Update, 2026-09-26:** items 1 and the Orca line are done. The user confirmed the
+tray opens after a logout and login, and Orca reads through the voice. The release
+is prepared, uncommitted, in [RELEASE-0.2.17.md](RELEASE-0.2.17.md), which is where
+to start now. **Nothing touches git on Shabbat**: from Friday sunset in Israel to
+Saturday nightfall in the US, reads included.
+
 Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`. No PR. Read `CLAUDE.md`
 ("The store packages") and `docs/STORE-SUBMISSION.md` first; the previous
 handoff, [HANDOFF-2026-09-25-store.md](HANDOFF-2026-09-25-store.md), is the

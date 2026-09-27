@@ -86,6 +86,15 @@ public sealed partial class DaemonServer : IDisposable
     /// <summary>True when the socket is an abstract name (a snap's) rather than a file.</summary>
     private bool _abstractSocket;
 
+    /// <summary>Clients connected right now. See <see cref="SnapRefreshWatch"/>.</summary>
+    private int _openConnections;
+
+    /// <summary>
+    /// <see cref="Environment.TickCount64"/> when a connection last opened or
+    /// closed, or speech was last seen playing. See <see cref="SnapRefreshWatch"/>.
+    /// </summary>
+    private long _lastActivity = Environment.TickCount64;
+
     /// <param name="sink">
     /// The deferred audio device, so the speak path can open it and report a
     /// failure to the caller. Null in tests that drive the session directly.
@@ -276,6 +285,7 @@ public sealed partial class DaemonServer : IDisposable
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
         _stopping = stopping;
         var serving = stopping.Token;
+        _ = WatchForRefreshAsync(serving);
 
         try
         {
@@ -370,6 +380,8 @@ public sealed partial class DaemonServer : IDisposable
     private async Task ServeAsync(Socket client, CancellationToken token)
     {
         Guid id = Guid.NewGuid();
+        Interlocked.Increment(ref _openConnections);
+        Volatile.Write(ref _lastActivity, Environment.TickCount64);
         try
         {
             using var _ = client;
@@ -498,12 +510,52 @@ public sealed partial class DaemonServer : IDisposable
         catch (Exception ex) { Log($"connection error: {ex.GetType().Name}: {ex.Message}"); }
         finally
         {
+            Interlocked.Decrement(ref _openConnections);
+            Volatile.Write(ref _lastActivity, Environment.TickCount64);
             if (_subscribers.TryRemove(id, out var gone) && gone.Kind is { } kind)
             {
                 Log($"{kind} detached (pid {gone.Pid?.ToString() ?? "unknown"})");
                 if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
             }
         }
+    }
+
+    /// <summary>
+    /// Inside a snap only: exit, when idle, once snapd has made another revision
+    /// current. The rule and the reasons are in <see cref="SnapRefreshWatch"/>.
+    /// Runs on the serving token, so it ends with the accept loop.
+    /// </summary>
+    private async Task WatchForRefreshAsync(CancellationToken token)
+    {
+        // Validated, not just "$SNAP is set": a tarball daemon started from a
+        // snap's terminal inherits $SNAP and must not act on it.
+        if (SnapPeer.Current is null) return;
+        string? snap = Environment.GetEnvironmentVariable("SNAP");
+        string? own = SnapRefreshWatch.OwnRevision(snap);
+        if (own is null) return;
+
+        try
+        {
+            using var timer = new PeriodicTimer(SnapRefreshWatch.Interval);
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                bool speaking = _session.State != SpeechState.Idle || Volatile.Read(ref _benchmarking) != 0;
+                // Speech counts as use, so a long read that ends is followed by
+                // the full grace, not by an immediate exit.
+                if (speaking) Volatile.Write(ref _lastActivity, Environment.TickCount64);
+
+                var idleFor = TimeSpan.FromMilliseconds(Environment.TickCount64 - Volatile.Read(ref _lastActivity));
+                string? why = SnapRefreshWatch.StepAside(own, SnapRefreshWatch.CurrentRevision(snap),
+                    Volatile.Read(ref _openConnections), speaking, idleFor);
+                if (why is null) continue;
+
+                Log(why);
+                RequestShutdown();
+                return;
+            }
+        }
+        catch (OperationCanceledException) { /* shutting down anyway */ }
+        catch (Exception ex) { Log($"refresh watch stopped: {ex.GetType().Name}: {ex.Message}"); }
     }
 
     private static async Task WriteAsync(StreamWriter writer, Response response) =>

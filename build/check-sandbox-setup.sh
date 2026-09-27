@@ -85,6 +85,10 @@ STUB
         || { red "snap: the menu entry does not open /snap/bin/<name>:"; printf '%s\n' "$out"; return 1; }
     [[ "$out" != *"/x5/"* ]] \
         || { red "snap: a command names the revision directory, which the next refresh removes:"; printf '%s\n' "$out"; return 1; }
+    # The snap ships its own menu entry, so ours only carries the keys. Visible,
+    # it is a duplicate that invites deleting it, and the hotkeys with it.
+    [[ "$out" == *"| NoDisplay=true"$'\n'* ]] \
+        || { red "snap: the entry carrying the keys is visible beside the snap's own:"; printf '%s\n' "$out"; return 1; }
 
     out="$("${env_base[@]}" VST_SANDBOX_SNAP_ROOT="$snap" bash "$rev/sandbox-setup.sh" speechd-install 2>&1)" \
         || { red "snap: speechd-install failed: $out"; return 1; }
@@ -131,6 +135,8 @@ FAKE
         || { red "flatpak: a command names the commit directory, which the next update removes:"; printf '%s\n' "$out"; return 1; }
     [[ "$out" == *"Exec=$inst/exports/bin/$app_id"$'\n'* ]] \
         || { red "flatpak: the menu entry does not open the exported launcher:"; printf '%s\n' "$out"; return 1; }
+    [[ "$out" == *"| NoDisplay=true"$'\n'* ]] \
+        || { red "flatpak: the entry carrying the keys is visible beside the Flatpak's own:"; printf '%s\n' "$out"; return 1; }
 
     local wrapper="$home/.local/bin/vst-speechd"
     out="$("${env_base[@]}" bash "$from" speechd-install --check 2>&1)" \
@@ -176,6 +182,7 @@ if [[ "${1:-}" == --negative-control ]]; then
         [flatpak-commit-path]='s|stable_deploy="$(dirname "$deploy")/active"|stable_deploy="$deploy"|'
         [snap-ctl-in-mount]='s|\[\[ "$kind" == snap \]\] \&\& VST_KB_CTL_COMMAND="$ctl_cmd"|:|'
         [wrapper-on-check]='s/\[\[ "$arg" == --remove || "$arg" == --check \]\]/[[ "$arg" == --remove ]]/'
+        [menu-entry-visible]='s|export VST_KB_KDE_NO_DISPLAY=1|:|'
     )
     for name in "${!breaks[@]}"; do
         sed "${breaks[$name]}" "$root/build/sandbox-setup.sh" > "$sab/sandbox-setup.sh"
