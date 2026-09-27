@@ -172,8 +172,11 @@ did not help on its own and was kept.)
       tray; 04:15:56 snapd's auto-refresh completed, 20 s later, nothing typed.
       Found by it: the notification stayed on screen after Later ("resident"), so
       Later was clicked 13 times; fixed in the next revision by dropping the hint
-      and closing it on either answer. **Not yet seen:** the Speech Dispatcher
-      module stepping aside (it was not running during the test).
+      and closing it on either answer. **Second round, 9 to 10, 04:47:** the
+      Speech Dispatcher module was running and stepped aside (left `<defunct>`:
+      speechd never reaps it, and a zombie does not hold a refresh), and the
+      refresh followed at once. speechd then spoke through espeak-ng until it was
+      restarted, which the notification and the window now explain (62a7bc0).
 - [ ] **After installing or re-binding, log out and back in** before the hotkey
       works on KDE: kglobalaccel reads shortcuts only at login (by design, see
       keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
