@@ -28,8 +28,9 @@ on the user's machine and on the tooling. This one adds only what changed.
   - Run 3 (`25f8231`, id 36320821518): **the whole build passed**, including
     `--test-install`. The only failing step was the refusal of a stale package
     list, and it was right to fail (see `467913a` below).
-  - Run 4 (`467913a`) was started by the push, and should be the first fully
-    green run. **Read its result first.**
+  - Run 4 (`c0edc74`, id 36321933374): **green**, every step. It is the first
+    fully green run: the offline source build, `--test-install`, and the
+    package-list check all passed.
 - The user's Kubuntu still runs **snap revision 10** from `edge`. Nothing new
   was published. Merging to `main` still publishes to `edge`.
 
@@ -70,8 +71,8 @@ add a network grant.
 
 ## Open, in rough order
 
-1. **Confirm run 4 of `flathub.yml` is green** (above). Then merge this branch
-   into `Dev`, and check that `build.yml` is still green there. `bf71b44`
+1. **`flathub.yml` is green** (run 4). Next, run `build.yml` by hand on this
+   branch's head, then merge the branch into `Dev` (with the user's go-ahead). `bf71b44`
    touched `build-espeak.sh`, which the `pack` job runs without `--sonic-src`,
    so it should be unaffected. A manual `build.yml` run is the check.
 2. **The release itself**, per [RELEASE-0.2.17.md](RELEASE-0.2.17.md). The
