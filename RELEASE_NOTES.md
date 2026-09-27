@@ -95,11 +95,13 @@ before revision 5 met some of it:
   package has its own. It looked like a duplicate, and deleting it deleted the
   hotkeys too. `sandbox-setup.sh status` now says so if that has happened.
 
-Checked on Kubuntu (KDE Plasma 6, Wayland) with revision 5: the hotkey reads the
-selection, the tray opens the window after a logout and login, and **Orca reads
-through the VibeSuperTonic voice**.
+Checked on Kubuntu (KDE Plasma 6, Wayland), up to revision 10: the hotkey reads
+the selection, also after a reboot before any window has opened; the tray opens
+the window after a logout and login; **Orca reads through the VibeSuperTonic
+voice**; and a held update is applied from the prompt, with the screen-reader
+voice running.
 
-## Two things to know about the snap
+## Three things to know about the snap
 
 - **KDE reads new shortcuts only when you log in.** After `sandbox-setup.sh bind`,
   log out and back in once.
@@ -120,6 +122,11 @@ through the VibeSuperTonic voice**.
   the update that brings it still needs `vibesupertonic.ctl shutdown`,
   `systemctl --user stop speech-dispatcher.service`, the window closed, and
   `sudo snap refresh vibesupertonic`.
+
+- **A hotkey press in the snap costs about a tenth of a second more** than in the
+  other packages: 108 ms per press, measured on Kubuntu, all of it snapd
+  setting up the sandbox before our program starts. The tarball, the AppImage
+  and the Flatpak do not pay it.
 
 ## On stock Ubuntu (GNOME on Wayland)
 

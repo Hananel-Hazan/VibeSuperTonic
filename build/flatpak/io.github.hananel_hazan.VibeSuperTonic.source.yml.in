@@ -1,0 +1,112 @@
+# The Flatpak manifest FLATHUB builds: everything from source, offline. A
+# TEMPLATE: build/pack-flatpak.sh --from-source fills the APP_SOURCE line with this
+# checkout (CI, and a local build), and --flathub TAG fills it with the tagged
+# commit on GitHub (the submission).
+#
+# WHY A SECOND MANIFEST. Flathub builds every submission "entirely from source
+# code", on servers with no network. The other manifest installs the released
+# tarball, which is right for CI and wrong for Flathub. This one runs the same
+# packer that composes that tarball, so nothing is composed twice:
+#
+#   - the .NET SDK is Flathub's own extension, org.freedesktop.Sdk.Extension.dotnet10;
+#   - every NuGet package is a pinned source (nuget-sources.json, written by
+#     build/flatpak/gen-nuget-sources.py --in-sdk), restored through a
+#     NuGet.Config that names only that folder, so a package the list lacks
+#     fails the build instead of being fetched;
+#   - espeak-ng is a pinned git source, placed where build/build-espeak.sh keeps
+#     its checkout, so the phonemiser is built by the script and at the commit
+#     the tarball's is, and pack-tar.sh's pin check still applies;
+#   - build/pack-tar.sh then publishes, composes and runs all its assertions,
+#     exactly as a release run does. The tarball it also writes is discarded.
+#
+# NativeAOT (vst-ctl, vst-speechd) links with gcc here: the SDK has no clang, and
+# the ILCompiler targets fall back to gcc and bfd by themselves.
+#
+# THE LAYOUT IS A CONTRACT WITH CODE, as in the other manifest: the tree goes to
+# /app/lib/vibesupertonic, where FlatpakPeer and DaemonLaunch look. Keep the
+# install commands below identical to that manifest's.
+
+id: io.github.hananel_hazan.VibeSuperTonic
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.dotnet10
+command: vibesupertonic
+
+finish-args:
+  # The window, on either display server. X11 only when Wayland is absent.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # The voice.
+  - --socket=pulseaudio
+  # The first-run model download, from Hugging Face.
+  - --share=network
+  # GPU inference. The optional CUDA pack is not offered inside the sandbox.
+  - --device=dri
+  # The tray icon.
+  - --talk-name=org.kde.StatusNotifierWatcher
+
+modules:
+  - name: vibesupertonic
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/dotnet10/bin
+      append-ld-library-path: /usr/lib/sdk/dotnet10/lib
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+        DOTNET_NOLOGO: '1'
+        DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      # The packer's assertions checked these bytes; stripping afterwards would
+      # ship others. The AOT binaries are stripped by their own publish.
+      no-debuginfo: true
+      strip: false
+    build-commands:
+      # Offline restore: only the pinned packages, and a package cache inside the
+      # build directory rather than a $HOME the sandbox may not have.
+      - |
+        cat > NuGet.Config <<EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="flatpak" value="$PWD/nuget-sources" />
+          </packageSources>
+        </configuration>
+        EOF
+      - |
+        export NUGET_PACKAGES="$PWD/.nuget-packages" DOTNET_CLI_HOME="$PWD/.dotnet-home"
+        bash build/build-espeak.sh
+        bash build/pack-tar.sh
+      - install -d /app/lib/vibesupertonic /app/bin
+      - cp -a dist/release-linux/VibeSuperTonic/. /app/lib/vibesupertonic/
+      # A wrapper, not a symlink: the window resolves its own directory, and a
+      # script is certain to leave it the real one.
+      - |
+        cat > /app/bin/vibesupertonic <<'EOF'
+        #!/bin/sh
+        exec /app/lib/vibesupertonic/vibesupertonic-ui "$@"
+        EOF
+      - chmod 755 /app/bin/vibesupertonic
+      # For `flatpak run --command=sandbox-setup.sh <id>`, which prints the host
+      # command for this install.
+      - ln -s ../lib/vibesupertonic/sandbox-setup.sh /app/bin/sandbox-setup.sh
+      # From the composed tree, as the other manifest installs them.
+      - install -Dm644 dist/release-linux/VibeSuperTonic/desktop/io.github.hananel_hazan.VibeSuperTonic.desktop
+          /app/share/applications/io.github.hananel_hazan.VibeSuperTonic.desktop
+      - install -Dm644 dist/release-linux/VibeSuperTonic/desktop/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+          /app/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+      - install -Dm644 dist/release-linux/VibeSuperTonic/desktop/io.github.hananel_hazan.VibeSuperTonic.png
+          /app/share/icons/hicolor/256x256/apps/io.github.hananel_hazan.VibeSuperTonic.png
+    sources:
+@APP_SOURCE@
+      # build-espeak.sh's pin (PIN=724808c5), in full. It checks the commit out
+      # and runs `git describe` and `git archive` (the GPL source offer), so it
+      # needs the history and tags: no shallow clone.
+      - type: git
+        url: https://github.com/espeak-ng/espeak-ng.git
+        commit: 724808c5a83f9ef95fdd0db886ba7ba537ff224a
+        disable-shallow-clone: true
+        dest: build/espeak-out/src
+      - nuget-sources.json

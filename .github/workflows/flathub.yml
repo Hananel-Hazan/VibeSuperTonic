@@ -1,0 +1,77 @@
+name: flathub
+
+# FLATHUB'S BUILD, REHEARSED: the from-source manifest, built offline in
+# Flathub's own image by flatpak-builder, then installed and checked as a real
+# deployment. Separate from build.yml because it is slow (every NuGet package,
+# 1.6 GB, is a source it fetches, and espeak-ng and all four binaries are built
+# inside the SDK) and because it only needs to run when what it builds from
+# changes. It publishes nothing.
+#
+# Two questions, in this order:
+#
+# 1. Is build/flatpak/nuget-sources.json the list the SDK's own dotnet
+#    restores? The runtime and AOT compiler packs are versioned by the SDK that
+#    restores them, and Flathub's dotnet10 extension moves on its own schedule.
+#    A list generated anywhere else can name packages the offline build never
+#    asks for. On a mismatch the job prints the regenerated file, builds with
+#    it anyway so the second question still gets answered, and fails at the end.
+#
+# 2. Does the manifest build, offline, and install into a deployment whose
+#    daemon, module and host-side client all work? pack-flatpak.sh
+#    --from-source --test-install, which runs pack-tar.sh and every one of its
+#    assertions inside the build.
+
+on:
+  push:
+    branches: [main, Dev, 'claude/**']
+    paths:
+      - 'build/flatpak/**'
+      - 'build/pack-flatpak.sh'
+      - 'build/pack-tar.sh'
+      - 'build/build-espeak.sh'
+      - 'build/check-*.sh'
+      - 'src/**/*.csproj'
+      - 'Directory.Build.*'
+      - '.github/workflows/flathub.yml'
+  workflow_dispatch:
+
+jobs:
+  flathub:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the SDK and its .NET extension
+        run: |
+          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.dotnet10//25.08
+          flatpak --user info org.freedesktop.Sdk.Extension.dotnet10//25.08
+
+      - name: Regenerate the NuGet sources inside the SDK
+        id: nuget
+        run: |
+          python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08 -o "$RUNNER_TEMP/nuget-sources.json"
+          if diff -u build/flatpak/nuget-sources.json "$RUNNER_TEMP/nuget-sources.json"; then
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error file=build/flatpak/nuget-sources.json::the SDK restores a different package set; the regenerated file follows"
+            cat "$RUNNER_TEMP/nuget-sources.json"
+            cp "$RUNNER_TEMP/nuget-sources.json" build/flatpak/nuget-sources.json
+            echo "same=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build from source, offline, and test the installed deployment
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          bash build/pack-flatpak.sh --from-source --test-install
+
+      - name: Refuse a stale package list
+        if: steps.nuget.outputs.same != 'true'
+        run: |
+          echo "::error::build/flatpak/nuget-sources.json is not what the SDK restores. Commit the file printed by the regenerate step."
+          exit 1

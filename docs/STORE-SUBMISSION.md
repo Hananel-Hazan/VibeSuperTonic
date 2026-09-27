@@ -275,24 +275,38 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
 
 ### Flathub
 
-**Blocked on a source build (checked 2026-09-26).** Flathub requires source-available
-apps to be "built entirely from source code"; the manifest below repackages the
-tarball and would be rejected. See docs/RELEASE-0.2.17.md, step 6, for what a
-source-build manifest needs. The steps below still apply once it exists.
+**A source-build manifest exists since 2026-09-27; not yet seen building on
+Flathub's image.** Flathub requires source-available apps to be "built entirely
+from source code", so the tarball manifest cannot be submitted. The second
+manifest, `build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in`,
+builds with the `dotnet10` SDK extension, restores offline from the NuGet
+packages pinned in `build/flatpak/nuget-sources.json`, builds espeak-ng at
+`build-espeak.sh`'s pin, and runs `pack-tar.sh` inside the build, so every packer
+assertion runs there too. The tree it installs is the one the tarball holds.
 
-1. **Screenshots first.** Flathub's linter requires `<screenshots>` in the
-   metainfo, with image URLs that stay put (a file in this repository at a tag
-   works). There are none yet.
-2. Publish the tarball as a GitHub release asset, then generate the manifest
-   pinned to it:
-   `bash build/pack-flatpak.sh -v 0.2.17 --manifest-only <asset URL>`.
-3. Fork `flathub/flathub`, add the manifest on a branch off `new-pr`, and open
+- Rehearsed here: `pack-tar.sh` against a feed holding only the 34 pinned
+  packages, with a fresh package cache and NativeAOT forced onto gcc (the SDK has
+  no clang), passes all its assertions.
+- CI's `flathub` workflow ([flathub.yml](../.github/workflows/flathub.yml)) is
+  the real check: it regenerates the package list inside the SDK (runtime packs
+  are versioned by the SDK that restores them, so a list made on a workstation
+  can be wrong), then runs `pack-flatpak.sh --from-source --test-install`.
+
+Submission, once CI is green and v0.2.17 is tagged and pushed:
+
+1. Screenshots are in the metainfo (done), at tag URLs.
+2. `bash build/pack-flatpak.sh -v 0.2.17 --flathub v0.2.17` writes
+   `dist/flathub/`: the manifest pinned to the tag's commit, and
+   `nuget-sources.json` beside it.
+3. Fork `flathub/flathub`, add both files on a branch off `new-pr`, and open
    the pull request. Reviewers will ask about `--device=dri` (GPU inference)
    and `--share=network` (the model download); both are in the manifest's
-   comments.
+   comments. Answers to the likely questions are in RELEASE-0.2.17.md step 6.
 4. Once merged, the app gets its own repository,
    `flathub/io.github.hananel_hazan.VibeSuperTonic`. Each release is then a PR
-   there that bumps the URL and hash.
+   there that bumps the tag, the commit, and `nuget-sources.json` if it moved.
+
+The tarball manifest stays for CI's `flatpak` job and a local bundle.
 
 The app id is permanent once published. `io.github.hananel_hazan` is verified
 through the GitHub account, so there is no domain to prove.

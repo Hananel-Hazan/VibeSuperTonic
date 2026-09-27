@@ -9,8 +9,12 @@
 #
 #   --test-install      also install the bundle for this user, run the checks
 #                       that need a real deployment, and uninstall it. CI does.
-#   --manifest-only URL write the manifest Flathub builds from, pointing at the
-#                       tarball as published at URL, and stop. See below.
+#   --manifest-only URL write the tarball manifest, pointing at the tarball as
+#                       published at URL, and stop. NOT what Flathub takes: below.
+#   --from-source       build Flathub's manifest instead: everything from source,
+#                       offline, no tarball needed. Writes ...-source.flatpak.
+#   --flathub TAG       write Flathub's submission (manifest + nuget-sources.json)
+#                       pinned to TAG's commit, into dist/flathub/, and stop.
 #
 # ---------------------------------------------------------------------------
 # THIS SCRIPT PUBLISHES NOTHING, like pack-appimage.sh and pack-snap.sh. The
@@ -19,11 +23,14 @@
 # the tarball is what the Flatpak installs, and on Flathub it is the only input
 # there is.
 #
-# FLATHUB. Its build servers take a manifest and fetch every source themselves.
-# So a submission is the manifest from --manifest-only, with the tarball's
-# GitHub release URL, committed to the flathub/io.github.hananel_hazan.VibeSuperTonic
-# repository. The tarball must be published first, and never replaced under the
-# same name: the hash pins the bytes.
+# FLATHUB builds every submission from source, offline, and does not accept one
+# that installs a prebuilt archive (checked 2026-09-26). So Flathub gets the
+# second manifest, build/flatpak/<id>.source.yml.in: the .NET SDK extension, the
+# NuGet packages pinned in build/flatpak/nuget-sources.json, espeak-ng at
+# build-espeak.sh's pin, and pack-tar.sh run inside the build. The tree it
+# installs is composed and asserted by the same packer as the tarball's, so
+# this script's checks after the build apply to both. --from-source builds it
+# here (CI's flathub job does), and --flathub TAG writes what to submit.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -32,6 +39,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version=""
 test_install=0
 manifest_url=""
+from_source=0
+flathub_tag=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,8 +48,11 @@ while [[ $# -gt 0 ]]; do
         --test-install)  test_install=1; shift ;;
         --manifest-only) manifest_url="${2:-}"; shift 2
                          [[ "$manifest_url" == https://* ]] || { echo "--manifest-only needs an https:// URL" >&2; exit 64; } ;;
+        --from-source)   from_source=1; shift ;;
+        --flathub)       flathub_tag="${2:-}"; from_source=1; shift 2
+                         [[ -n "$flathub_tag" ]] || { echo "--flathub needs a tag, e.g. v0.2.17" >&2; exit 64; } ;;
         -h|--help)
-            sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '3,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
@@ -67,6 +79,85 @@ out="$root/dist/VibeSuperTonic-$version-x86_64.flatpak"
 # shellcheck source=check-composed-tree.sh
 source "$root/build/check-composed-tree.sh"
 
+if (( from_source )); then
+# --------------------------------------------------- the from-source manifest
+#
+# No tarball: pack-tar.sh runs inside the build, and its assertions with it.
+# What can drift here, and is checked before a twenty-minute build:
+step "Writing the from-source manifest…"
+
+work="$root/dist/build-flatpak-source"
+manifest="$work/$app_id.yml"
+out="$root/dist/VibeSuperTonic-$version-x86_64-source.flatpak"
+template="$root/build/flatpak/$app_id.source.yml.in"
+nuget="$root/build/flatpak/nuget-sources.json"
+
+# THE ESPEAK PIN. build-espeak.sh checks out its PIN inside the build, and the
+# manifest supplies the commit. Two copies of one number: when the script's
+# moves and the manifest's does not, the offline checkout fails at best.
+pin="$(awk -F= '/^PIN=/ { print $2; exit }' "$root/build/build-espeak.sh")"
+[[ -n "$pin" ]] || die "no PIN= line in build/build-espeak.sh"
+commit="$(awk '/espeak-ng.git/ { want = 1; next } want && /commit:/ { print $2; exit }' "$template")"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "the manifest's espeak-ng commit is not a full SHA-1: '$commit'"
+[[ "$commit" == "$pin"* ]] || die "the manifest builds espeak-ng $commit, but build-espeak.sh pins $pin.
+       Put the new pin's full commit in $template."
+info "espeak-ng $commit, build-espeak.sh's pin"
+
+# THE PACKAGE LIST. Only a restore inside the SDK can say it is complete (CI's
+# flathub job regenerates it and compares); what is checked here is that it
+# exists, and pins every package by hash.
+[[ -f "$nuget" ]] || die "no $nuget. Generate it: python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08"
+python3 - "$nuget" <<'PY' || die "nuget-sources.json is malformed"
+import json, re, sys
+src = json.load(open(sys.argv[1]))
+assert src, "empty"
+for s in src:
+    assert s["type"] == "file" and s["url"].startswith("https://api.nuget.org/"), s
+    assert re.fullmatch(r"[0-9a-f]{128}", s["sha512"]), s
+    assert s["dest"] == "nuget-sources", s
+print(f"    {len(src)} NuGet packages, each pinned by SHA-512")
+PY
+
+if [[ -n "$flathub_tag" ]]; then
+    tag_commit="$(git -C "$root" rev-parse --verify -q "$flathub_tag^{commit}")" \
+        || die "no tag $flathub_tag here. Tag the release first (CLAUDE.md), then write the submission."
+    app_source="      - type: git
+        url: https://github.com/Hananel-Hazan/VibeSuperTonic.git
+        tag: $flathub_tag
+        commit: $tag_commit"
+    work="$root/dist/flathub"
+    manifest="$work/$app_id.yml"
+else
+    # This checkout, as it is. What flatpak-builder must not copy: dist/ (its
+    # own state is there too), a local espeak build (the git source goes to
+    # that path), and the repository's history.
+    app_source="      - type: dir
+        path: $root
+        skip:
+          - dist
+          - .git
+          - .flatpak-builder
+          - build/espeak-out"
+fi
+
+rm -rf "$work"
+mkdir -p "$work"
+awk -v src="$app_source" '$0 == "@APP_SOURCE@" { print src; next } { print }' "$template" > "$manifest"
+cp "$nuget" "$work/nuget-sources.json"
+if grep -c '@[A-Z_]*@' "$manifest" >/dev/null; then
+    die "a placeholder survived in $manifest"
+fi
+info "$manifest"
+
+if [[ -n "$flathub_tag" ]]; then
+    step "Done: Flathub's submission, pinned to $flathub_tag ($tag_commit)."
+    info "$manifest"
+    info "$work/nuget-sources.json"
+    info "Both go into the pull request against flathub/flathub's new-pr branch."
+    info "The tag must be pushed before Flathub can fetch it."
+    exit 0
+fi
+else
 # --------------------------------------------------------------- preconditions
 step "Checking the tarball the Flatpak installs…"
 
@@ -109,6 +200,8 @@ if [[ -n "$manifest_url" ]]; then
     exit 0
 fi
 
+fi
+
 # --------------------------------------------------------------------- build
 step "Building the Flatpak…"
 
@@ -120,8 +213,10 @@ builddir="$work/build"
 repo="$work/repo"
 # --disable-rofiles-fuse: containers, CI's included, usually have no FUSE, and
 # the build does not need it.
+# --state-dir under dist/: the from-source manifest copies this checkout, and a
+# state directory inside it would be copied into itself.
 flatpak-builder --force-clean --disable-rofiles-fuse --user --install-deps-from=flathub \
-    --repo="$repo" "$builddir" "$manifest" || die "flatpak-builder failed"
+    --state-dir="$work/state" --repo="$repo" "$builddir" "$manifest" || die "flatpak-builder failed"
 
 rm -f "$out"
 flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
@@ -202,4 +297,4 @@ printf '\n'
 printf 'Try it:    flatpak install --user %s\n' "$(basename "$out")"
 # shellcheck disable=SC2016  # printed for the user to type, not expanded here
 printf 'Hotkeys:   bash "$(flatpak info --show-location %s)/files/lib/vibesupertonic/sandbox-setup.sh" bind\n' "$app_id"
-printf 'Flathub:   bash build/pack-flatpak.sh -v %s --manifest-only <published tarball URL>\n' "$version"
+printf 'Flathub:   bash build/pack-flatpak.sh -v %s --flathub v%s   (after tagging)\n' "$version" "$version"

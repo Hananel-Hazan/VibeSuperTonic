@@ -370,6 +370,20 @@ runs only these, which is how all seven were seen failing. `pack-flatpak.sh
 the daemon in the shared runtime directory. If that were wrong, every press
 would start a second daemon nobody talks to.
 
+**Flathub gets a second manifest, built from source** (2026-09-27), because it
+refuses one that installs a prebuilt archive:
+[the .source.yml.in](build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in),
+with the `dotnet10` SDK extension, the NuGet packages pinned in
+[nuget-sources.json](build/flatpak/nuget-sources.json), espeak-ng at
+`build-espeak.sh`'s pin, and **`pack-tar.sh` run inside the build**, so it is
+still the one packer and its assertions still run. `pack-flatpak.sh
+--from-source` builds it and `--flathub TAG` writes the submission. The package
+list must be the one **the SDK's own dotnet** restores (runtime packs follow the
+SDK's version, not ours): regenerate it with
+`python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08`, and CI's
+[flathub workflow](.github/workflows/flathub.yml) refuses a stale one. When a
+`PackageReference` changes, that file changes with it.
+
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
 nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a
