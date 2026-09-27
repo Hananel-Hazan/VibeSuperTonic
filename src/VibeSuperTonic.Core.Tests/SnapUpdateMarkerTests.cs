@@ -46,7 +46,7 @@ public sealed class SnapUpdateMarkerTests
     [Fact]
     public void The_marker_lives_in_the_shared_common_directory()
     {
-        Assert.Equal("/home/u/snap/x/common/update-now", SnapUpdateMarker.PathIn("/home/u/snap/x/common"));
+        Assert.Equal(Path.Combine("/home/u/snap/x/common", "update-now"), SnapUpdateMarker.PathIn("/home/u/snap/x/common"));
         Assert.Null(SnapUpdateMarker.PathIn(null));
     }
 }
