@@ -302,9 +302,11 @@ Submission, once CI is green and v0.2.17 is tagged and pushed:
 
 1. Screenshots are in the metainfo (done), at tag URLs.
 2. `bash build/pack-flatpak.sh -v 0.2.17 --flathub v0.2.17` writes
-   `dist/flathub/`: the manifest pinned to the tag's commit, and
-   `nuget-sources.json` beside it.
-3. Fork `flathub/flathub`, add both files on a branch off `new-pr`, and open
+   `dist/flathub/`: the manifest pinned to the tag's commit, with
+   `nuget-sources.json` and `flathub.json` beside it. `flathub.json` limits Flathub
+   to x86_64. The packer refuses to write the submission without it, because an
+   aarch64 build of this package cannot succeed.
+3. Fork `flathub/flathub`, add all three files on a branch off `new-pr`, and open
    the pull request. Reviewers will ask about `--device=dri` (GPU inference)
    and `--share=network` (the model download); both are in the manifest's
    comments. Answers to the likely questions are in RELEASE-0.2.17.md step 6.

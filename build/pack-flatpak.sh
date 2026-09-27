@@ -118,6 +118,20 @@ for s in src:
 print(f"    {len(src)} NuGet packages, each pinned by SHA-512")
 PY
 
+# THE ARCHITECTURES. Flathub builds x86_64 AND aarch64 unless flathub.json says
+# otherwise, and this build is x86_64 only: pack-tar.sh publishes linux-x64, and
+# the NuGet list pins linux-x64 runtime packs. Without the file, the submission's
+# aarch64 build fails and blocks the pull request. If an aarch64 build is ever
+# added, this check and the file change together.
+flathub_json="$root/build/flatpak/flathub.json"
+[[ -f "$flathub_json" ]] || die "no $flathub_json. Flathub would build aarch64 too, and that build cannot succeed."
+python3 - "$flathub_json" <<'PY' || die "flathub.json must say {\"only-arches\": [\"x86_64\"]}: this build is linux-x64 only"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get("only-arches") == ["x86_64"], d
+PY
+info "flathub.json limits Flathub to x86_64, the one architecture this builds"
+
 if [[ -n "$flathub_tag" ]]; then
     tag_commit="$(git -C "$root" rev-parse --verify -q "$flathub_tag^{commit}")" \
         || die "no tag $flathub_tag here. Tag the release first (CLAUDE.md), then write the submission."
@@ -144,6 +158,7 @@ rm -rf "$work"
 mkdir -p "$work"
 awk -v src="$app_source" '$0 == "@APP_SOURCE@" { print src; next } { print }' "$template" > "$manifest"
 cp "$nuget" "$work/nuget-sources.json"
+cp "$flathub_json" "$work/flathub.json"
 if grep -c '@[A-Z_]*@' "$manifest" >/dev/null; then
     die "a placeholder survived in $manifest"
 fi
@@ -153,7 +168,8 @@ if [[ -n "$flathub_tag" ]]; then
     step "Done: Flathub's submission, pinned to $flathub_tag ($tag_commit)."
     info "$manifest"
     info "$work/nuget-sources.json"
-    info "Both go into the pull request against flathub/flathub's new-pr branch."
+    info "$work/flathub.json"
+    info "All three go into the pull request against flathub/flathub's new-pr branch."
     info "The tag must be pushed before Flathub can fetch it."
     exit 0
 fi

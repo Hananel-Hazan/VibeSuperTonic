@@ -289,11 +289,13 @@ STORE-SUBMISSION.md, "Flathub".
 
 ```bash
 bash build/pack-flatpak.sh -v 0.2.17 --flathub v0.2.17
-ls dist/flathub/        # the manifest and nuget-sources.json, both submitted
+ls dist/flathub/        # the manifest, nuget-sources.json and flathub.json, all submitted
 ```
 
-3. Fork `flathub/flathub`, branch off `new-pr`, add both files, and open the pull
-   request against `new-pr`. Suggested description:
+3. Fork `flathub/flathub`, branch off `new-pr`, add all three files, and open the
+   pull request against `new-pr`. `flathub.json` limits the build to x86_64:
+   without it Flathub also builds aarch64, which this package cannot do, and the
+   PR is blocked. Suggested description:
 
 > **VibeSuperTonic**: text to speech for the Linux desktop. Select text, press a
 > key, and a neural voice reads it aloud. It runs entirely on the user's machine
