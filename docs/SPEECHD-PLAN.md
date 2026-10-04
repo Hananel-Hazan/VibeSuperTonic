@@ -1428,6 +1428,31 @@ the runner and been "fixed" by loosening it.
 
 ---
 
+## Screen-reader fidelity and SSML, 2026-10-03
+
+Landed after the non-goals below were written; where they disagree, this wins.
+
+- **SSML is parsed, not only stripped** — `SsmlDocument` in Core (the Linux
+  counterpart of what SAPI hands the Windows engine): `xml:lang` per fragment,
+  `prosody rate` as SAPI's -10..10 adjustment (applied as `1.5^(n/10)`, same as
+  `SapiEngine`), `break` as silence (clamped at 10 s per break, 60 s per render),
+  `mark` as a bookmark. Malformed input returns "not a document" and is stripped
+  exactly as before. **Unverified on Windows:** SAPI's own keyword and percentage
+  conversions are undocumented, so those values are assumptions.
+- **Index marks:** `vst-ctl render --marks` prints `@vst-mark <sample> <name>` on
+  stderr; the module turns each into `700-<name>` / `700 INDEX MARK` just before
+  the audio block containing it. The espeak fallback speaks per fragment and
+  reports marks exactly between them. Marks are not synchronised to playback
+  (server-side audio, same as upstream's modules).
+- **PAUSE** stops the audio loop and answers `704 PAUSE` instead of `702 END`;
+  speechd resumes by re-sending the remainder from the last mark. The daemon's
+  Pause/Resume verbs are not used: a render is not session playback.
+- **Volume** (-100..100) is a gain on the render (`--volume`, unity at 0, +6 dB
+  at 100) and espeak `-a` on the fallback. **Pitch stays accepted and ignored**:
+  Supertonic has no pitch input and resampling would change speed too (trap 5).
+- Render now runs every text fragment through `SynthTextPipeline`, so
+  pronunciation rules apply to a screen reader as to the hotkey.
+
 ## Non-goals for 0.2.13
 
 - **Index marks and word highlighting.** The protocol reserves `700 INDEX MARK`

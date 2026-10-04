@@ -377,6 +377,7 @@ public class SsmlFragmentsTests
     [InlineData("<speak><!-- never ends")]
     [InlineData("<speak><![CDATA[never ends")]
     [InlineData("<speak><br>line</speak>")]
+    [InlineData("<speak><s></p><p></s></speak>")]
     [InlineData("<speak><mark name=\"x\"></speak>")]
     public void Malformed_documents_are_refused_so_the_caller_strips(string ssml)
     {

@@ -397,6 +397,20 @@ public class FidelityTests
         Assert.DoesNotContain("702 END", replies);
     }
 
+    [Fact]
+    public void Silence_is_bounded_across_the_whole_utterance()
+    {
+        string root = Install();
+        string eight = string.Concat(Enumerable.Repeat("w<break time=\"9s\"/>", 8));   // 72 s asked for
+
+        var replies = Speak(root, "<speak>" + eight + "end</speak>");
+
+        // 60 s at 22050 Hz, 16-bit, is 2.6M bytes: 265 blocks of 10000, plus the
+        // handful carrying the words themselves. 72 s would be over 318.
+        int blocks = replies.Count(r => r == "705 AUDIO");
+        Assert.InRange(blocks, 250, 285);
+    }
+
     // --------------------------------------------------- BEGIN / END framing
 
     [Fact]
