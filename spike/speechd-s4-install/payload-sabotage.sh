@@ -87,6 +87,17 @@ run_case "--check no longer verifies the configured path" \
     'sed -i "s@if \[\[ -e .*declared.*then@if true; then@" speechd-install.sh' \
     "naming a module path that does not exist"
 
+
+# The screen reader's controls. A module can load, answer INIT and speak while
+# having stopped reporting index marks or honouring PAUSE; each wrapper below
+# runs the real module with exactly one of them taken away.
+run_case "the module stopped reporting SSML index marks" \
+    'mv vst-speechd vst-speechd.real && printf "#!/bin/sh\nd=\$(dirname \"\$0\")\n\"\$d/vst-speechd.real\" | grep -a -v \"^700\"\n" > vst-speechd && chmod 755 vst-speechd' \
+    "index mark"
+run_case "the module no longer honours PAUSE" \
+    'mv vst-speechd vst-speechd.real && printf "#!/bin/sh\nd=\$(dirname \"\$0\")\ngrep -a -v \"^PAUSE\\$\" | \"\$d/vst-speechd.real\"\n" > vst-speechd && chmod 755 vst-speechd' \
+    "honour PAUSE"
+
 rm -rf "$work"
 printf '\n%s caught, %s not\n' "$pass" "$fail"
 exit $(( fail > 0 ))

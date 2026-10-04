@@ -37,6 +37,13 @@ public sealed partial class DaemonServer
     private const int RenderChunkSamples = 32768;
 
     /// <summary>
+    /// A cap on silence across one render, in milliseconds. A guard: nothing a
+    /// real document asks for comes near it, and without it a client can name
+    /// any number of breaks of any length.
+    /// </summary>
+    internal const int MaxRenderSilenceMs = 60_000;
+
+    /// <summary>
     /// Render <paramref name="request"/>'s text, one reply per chunk.
     ///
     /// <para>Owns the writer for the duration, like <c>BenchmarkAsync</c> and
@@ -52,18 +59,37 @@ public sealed partial class DaemonServer
         // TRAP 11, AND IT ARRIVES WHETHER ANYONE ASKED FOR IT. speechd clients
         // can set SSML mode, and the gate probe measured what that means here: a
         // plain `spd-say "hello"` reaches a module as <speak>hello</speak>. Fed
-        // to the model, "speak" is a word the user hears. Stripped here rather
-        // than in the module so that every future caller of this verb gets it,
-        // and narrowly — see Ssml, which leaves text that is not a document
-        // alone so that reading source code aloud still reads the brackets.
+        // to the model, "speak" is a word the user hears.
+        //
+        // SINCE 2026-10-03 THE DOCUMENT IS PARSED RATHER THAN ONLY STRIPPED, and
+        // that is what brings Linux level with Windows, where SAPI hands the
+        // engine the same pieces already parsed: xml:lang switches the language
+        // for the text it encloses, <prosody rate> adjusts the pace of its own
+        // fragment, <break> is silence and <mark> a bookmark. See SsmlDocument.
+        // Anything it cannot parse comes back as "not a document" and is
+        // STRIPPED exactly as before — never an error to the client — and text
+        // that is not SSML at all reaches this unchanged (Ssml leaves it alone,
+        // so reading source code aloud still reads the brackets).
         //
         // PUNCTUATION VERBOSITY IS DECIDED BY OMISSION, DELIBERATELY. speechd's
         // four levels mean "say the punctuation out loud" and this product has
         // no concept of it. All four map to nothing, INSTALL.txt says so (S4),
         // and that is a better answer than a half-implementation the user has to
         // discover the shape of.
-        string text = Ssml.Strip(request.Text ?? "");
-        if (string.IsNullOrWhiteSpace(text))
+        string raw = request.Text ?? "";
+        IReadOnlyList<SsmlFragment> fragments = SsmlDocument.TryParse(raw, out var parsedFragments)
+            ? parsedFragments
+            : new[] { SsmlFragment.Speak(Ssml.Strip(raw), null, 0) };
+
+        // The whole text path, once per text fragment: the same
+        // SynthTextPipeline the hotkey and the Windows engine run, so
+        // pronunciation rules, hyphen joins and the invisible-character strip
+        // apply to a screen reader as they do everywhere else.
+        var renderOptions = _config.SessionOptionsFor(request.Voice);
+        var steps = PlanRender(_config, fragments, renderOptions, request);
+        int chunkCount = steps.Count(x => x.Text is not null);
+
+        if (chunkCount == 0)
         {
             // Not an error. A screen reader sends whatever the focused widget
             // held, and an empty label is a real thing that happens dozens of
@@ -97,12 +123,6 @@ public sealed partial class DaemonServer
             return;
         }
 
-        // THE SCREEN READER'S RATE, and this verb is the only one that takes one
-        // — see Request.Rate. It multiplies whatever settings.json asks for, so a
-        // client that sends nothing is unchanged.
-        var plan = _config.Utterance(
-            request.Voice, request.Language,
-            request.Rate is { } speechdRate ? SpeechRate.SpeechdRateScale(speechdRate) : 1.0);
         int rate = engines.SampleRate;
 
         // The format, before any audio. A caller writing a WAV header needs the
@@ -113,23 +133,69 @@ public sealed partial class DaemonServer
             Audio = new AudioChunk(rate, 1, null, Final: false),
         });
 
-        // The rendering voice's own chunk sizes, so `render` and the hotkey
-        // break text the same way for the same voice — the Speech Dispatcher
-        // module goes through this path, and a chunk size that differed from the
-        // one the settings scope asks for would change where it pauses.
-        var renderOptions = _config.SessionOptionsFor(request.Voice);
-        var chunks = SentenceChunker.Chunk(text,
-            renderOptions.MaxChunkChars,
-            renderOptions.MinChunkChars);
+        // THE SCREEN READER'S VOLUME, beside its rate. Applied after the
+        // configured trim, in the same place, so the two compose as a product.
+        float gain = renderOptions.VolumeScale
+                     * (request.Volume is { } speechdVolume ? SpeechRate.SpeechdVolumeScale(speechdVolume) : 1f);
+
+        bool wantMarks = request.Marks == true;
+        var pendingMarks = new List<RenderMark>();
+        long emitted = 0;                              // samples written so far, silence included
+        int silenceBudgetMs = MaxRenderSilenceMs;
+
+        // Streams samples in bounded replies. A bookmark waiting rides on the
+        // FIRST reply written after it was reached, so its position and the audio
+        // that follows it arrive together.
+        async Task WriteSamplesAsync(short[] pcm)
+        {
+            for (int at = 0; at < pcm.Length; at += RenderChunkSamples)
+            {
+                int count = Math.Min(RenderChunkSamples, pcm.Length - at);
+                var bytes = new byte[count * 2];
+                Buffer.BlockCopy(pcm, at * 2, bytes, 0, bytes.Length);
+
+                IReadOnlyList<RenderMark>? marks = null;
+                if (pendingMarks.Count > 0)
+                {
+                    marks = pendingMarks.ToArray();
+                    pendingMarks.Clear();
+                }
+
+                await WriteAsync(writer, new Response
+                {
+                    Ok = true,
+                    Audio = new AudioChunk(rate, 1, Convert.ToBase64String(bytes), Final: false, marks),
+                });
+
+                emitted += count;
+            }
+        }
 
         try
         {
-            foreach (string chunk in chunks)
+            foreach (var step in steps)
             {
                 token.ThrowIfCancellationRequested();
 
+                if (step.Mark is { } markName)
+                {
+                    if (wantMarks) pendingMarks.Add(new RenderMark(markName, emitted));
+                    continue;
+                }
+
+                if (step.SilenceMs > 0)
+                {
+                    int ms = Math.Min(step.SilenceMs, silenceBudgetMs);
+                    silenceBudgetMs -= ms;
+                    long samples = (long)rate * ms / 1000;
+                    if (samples > 0) await WriteSamplesAsync(new short[samples]);
+                    continue;
+                }
+
                 // Off the socket thread: Synthesize is a blocking inference and
                 // this connection is one of a handful the daemon serves.
+                string chunk = step.Text!;
+                var plan = step.Plan;
                 short[] pcm = await Task.Run(
                     () => engines.Synthesize(chunk, plan.Synthesis, token), token);
 
@@ -147,20 +213,9 @@ public sealed partial class DaemonServer
                 if (Math.Abs(plan.StretchFactor - 1.0) > 0.001)
                     pcm = TimeStretch.Stretch(pcm, plan.StretchFactor, rate);
 
-                SpeechRate.ApplyGain(pcm, renderOptions.VolumeScale);
+                SpeechRate.ApplyGain(pcm, gain);
 
-                for (int at = 0; at < pcm.Length; at += RenderChunkSamples)
-                {
-                    int count = Math.Min(RenderChunkSamples, pcm.Length - at);
-                    var bytes = new byte[count * 2];
-                    Buffer.BlockCopy(pcm, at * 2, bytes, 0, bytes.Length);
-
-                    await WriteAsync(writer, new Response
-                    {
-                        Ok = true,
-                        Audio = new AudioChunk(rate, 1, Convert.ToBase64String(bytes), Final: false),
-                    });
-                }
+                await WriteSamplesAsync(pcm);
             }
         }
         catch (OperationCanceledException)
@@ -186,16 +241,82 @@ public sealed partial class DaemonServer
         catch (Exception ex)
         {
             string why = $"{ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}";
-            Log($"render: failed after {chunks.Count} chunk(s): {why}");
+            Log($"render: failed after {chunkCount} chunk(s): {why}");
             try { await WriteAsync(writer, Response.Fail($"render failed — {why}")); }
             catch (IOException) { /* the client went away first */ }
             return;
         }
 
+        // A bookmark after the last word is still a bookmark. It rides on the
+        // final reply, which has no samples of its own.
         await WriteAsync(writer, new Response
         {
             Ok = true,
-            Audio = new AudioChunk(rate, 1, null, Final: true),
+            Audio = new AudioChunk(rate, 1, null, Final: true,
+                pendingMarks.Count > 0 ? pendingMarks.ToArray() : null),
         });
+    }
+
+    /// <summary>One thing for the render loop to do: speak a chunk, pause, or note a mark.</summary>
+    internal readonly record struct RenderStep(
+        string? Text, HostConfig.UtterancePlan Plan, int SilenceMs, string? Mark);
+
+    /// <summary>
+    /// Turn parsed fragments into steps, running each text fragment through
+    /// <see cref="SynthTextPipeline"/> and the chunker, and resolving the plan —
+    /// language and pace — that fragment is spoken with.
+    ///
+    /// <para>Separated from <see cref="RenderAsync"/>, which is reachable only
+    /// through a socket, so that what a fragment turns into is testable.</para>
+    /// </summary>
+    internal static List<RenderStep> PlanRender(
+        HostConfig config,
+        IReadOnlyList<SsmlFragment> fragments, SpeechSessionOptions options, Request request)
+    {
+        var steps = new List<RenderStep>();
+
+        // The speechd rate multiplies whatever the settings ask for, and a
+        // fragment's own <prosody rate> adjusts that further — the engine's rule
+        // on Windows, where SAPI's RateAdj is added to the site rate and applied
+        // as 1.5^(n/10), reproduced here as a factor on the same scale.
+        double speechdScale = request.Rate is { } r ? SpeechRate.SpeechdRateScale(r) : 1.0;
+
+        foreach (var fragment in fragments)
+        {
+            switch (fragment.Kind)
+            {
+                case SsmlFragmentKind.Silence:
+                    steps.Add(new RenderStep(null, default, fragment.SilenceMs, null));
+                    break;
+
+                case SsmlFragmentKind.Mark:
+                    steps.Add(new RenderStep(null, default, 0, fragment.Mark));
+                    break;
+
+                default:
+                {
+                    string spoken = SynthTextPipeline.Prepare(
+                        fragment.Text, options.Pronunciations, options.CompiledPronunciations, out _);
+                    if (string.IsNullOrWhiteSpace(spoken)) break;
+
+                    // A fragment's language beats the request's, which beats the
+                    // configured one — null falls through each, as on Windows.
+                    var plan = config.Utterance(
+                        request.Voice,
+                        fragment.Lang ?? request.Language,
+                        speechdScale * SpeechRate.RateAdjScale(fragment.RateAdj));
+
+                    foreach (string chunk in SentenceChunker.Chunk(
+                                 spoken, options.MaxChunkChars, options.MinChunkChars))
+                    {
+                        if (!string.IsNullOrWhiteSpace(chunk))
+                            steps.Add(new RenderStep(chunk, plan, 0, null));
+                    }
+                    break;
+                }
+            }
+        }
+
+        return steps;
     }
 }

@@ -41,12 +41,19 @@ public static class RenderWav
     /// Called with the running sample count after each chunk is written, on the
     /// calling thread. The Export tab's progress line; nothing else passes it.
     /// </param>
+    /// <param name="onMark">
+    /// Called for each SSML bookmark, in order, BEFORE the samples of the reply
+    /// that carried it are written — so a reader that sees the audio past a mark's
+    /// position has already been told about the mark, as far as two pipes allow.
+    /// Null ignores marks, which is every caller that did not ask for them.
+    /// </param>
     public static int Read(
         Func<string?> readLine,
         Stream output,
         TextWriter error,
         Func<bool>? stopped = null,
-        Action<long>? progress = null)
+        Action<long>? progress = null,
+        Action<RenderMark>? onMark = null)
     {
         bool wroteHeader = false;
         int headerRate = 0;
@@ -131,6 +138,11 @@ public static class RenderWav
                 error.WriteLine(
                     $"the render changed sample rate mid-stream ({headerRate} -> {audio.SampleRate})");
                 return 1;
+            }
+
+            if (audio.Marks is { } marks && onMark is not null)
+            {
+                foreach (var mark in marks) onMark(mark);
             }
 
             if (audio.Pcm is { Length: > 0 } encoded)

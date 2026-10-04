@@ -89,4 +89,58 @@ $(sed 's/^/       /' <<< "$out")"
     && die "the installer wrote a config before refusing"
 
 info "speechd-install.sh checks out, and refuses to register a voiceless install"
+
+# THE SCREEN READER'S CONTROLS, which a module that answers INIT can still get
+# wrong in ways nothing else sees. 0.2.17's module honours PAUSE and reports SSML
+# index marks; a module that quietly stopped doing either would still load, still
+# speak and still pass every check above — and Orca's pause key would do nothing
+# while a highlighted word never moved. Asked of the SHIPPED binary, through the
+# fast voice (CHAR routes to espeak, so no daemon, model or display is needed).
+#
+# Input goes in through a file and output comes out through a file: the module
+# writes binary audio blocks, and an early-exiting consumer on that pipe is the
+# SIGPIPE race CLAUDE.md warns about. EOF on stdin is a legitimate end of a
+# session, and the whole script is already buffered when the module starts, which
+# is what makes a PAUSE in it land on the first audio block deterministically.
+run_module() {
+    local script="$1" out="$2"
+    printf '%b' "$script" > "$scratch/session.in"
+    timeout 60 "$module" < "$scratch/session.in" > "$out" 2> "$scratch/session.err" || true
+}
+
+# C locale: the output holds audio bytes, which are not valid text in any other.
+mark_out="$scratch/marks.out"
+run_module 'INIT\nCHAR\n<speak>one <mark name="vst-check"/>two</speak>\n.\n' "$mark_out"
+
+n_marks="$(LC_ALL=C grep -a -c -x '700 INDEX MARK' "$mark_out" || true)"
+n_named="$(LC_ALL=C grep -a -c -x '700-vst-check' "$mark_out" || true)"
+[[ "$n_marks" == 1 && "$n_named" == 1 ]] || die "the shipped vst-speechd did not report the SSML <mark> as an index mark.
+       It reported $n_marks '700 INDEX MARK' event(s) and $n_named naming the mark;
+       expected one of each. Without them a screen reader cannot highlight the
+       word being read and speech-dispatcher cannot resume a paused message from
+       the right place."
+
+# BEGIN, then the mark, then END — in that order. A mark after the END is one the
+# server has already stopped listening for.
+LC_ALL=C awk '/^701 BEGIN$/ {b = NR} /^700 INDEX MARK$/ {m = NR} /^702 END$/ {e = NR}
+              END {exit !(b && m > b && e > m)}' "$mark_out" \
+    || die "the index mark was not reported between BEGIN and END."
+
+# And not spoken: espeak-ng must have been handed words, not markup.
+if LC_ALL=C grep -a -q -e '<speak' -e 'vst-check"/>' "$mark_out"; then
+    die "SSML markup reached the output unparsed."
+fi
+
+pause_out="$scratch/pause.out"
+run_module 'INIT\nCHAR\nhello there, this is a long enough sentence\n.\nPAUSE\n' "$pause_out"
+
+n_pause="$(LC_ALL=C grep -a -c -x '704 PAUSE' "$pause_out" || true)"
+n_end="$(LC_ALL=C grep -a -c -x '702 END' "$pause_out" || true)"
+[[ "$n_pause" == 1 && "$n_end" == 0 ]] || die "the shipped vst-speechd did not honour PAUSE mid-utterance.
+       It sent $n_pause '704 PAUSE' and $n_end '702 END'; expected one and none.
+       A module that ignores a pause plays the whole message to the end and then
+       answers late, so the pause key does nothing until it no longer matters."
+
+info "vst-speechd reports SSML index marks and honours PAUSE"
+
 exit 0

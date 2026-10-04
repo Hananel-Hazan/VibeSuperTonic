@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using VibeSuperTonic.Core.Export;
 using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.SpeechD;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Core.Telemetry;
 
@@ -157,6 +158,29 @@ if (rateAt >= 0)
     rate = parsedRate;
 }
 
+// --volume, the screen reader's, -100..100, and `render` only for the same
+// reason --rate is: the hotkey plays at the level settings.json trims it to, and
+// a second place deciding loudness would let the two disagree. Applied by the
+// daemon as a gain (SpeechRate.SpeechdVolumeScale).
+int? volume = null;
+int volumeAt = Array.IndexOf(args, "--volume");
+if (volumeAt >= 0)
+{
+    if (volumeAt + 1 >= args.Length
+        || !int.TryParse(args[volumeAt + 1], System.Globalization.NumberStyles.Integer,
+                         System.Globalization.CultureInfo.InvariantCulture, out int parsedVolume))
+    {
+        Console.Error.WriteLine("--volume needs a whole number from -100 to 100, e.g. `--volume -20`");
+        return 2;
+    }
+    volume = parsedVolume;
+}
+
+// --marks: report SSML <mark> positions on stderr, one `@vst-mark` line each
+// (MarkLine). `render` only. Off by default so a plain render's stderr stays
+// what it was: free text that only appears when something went wrong.
+bool marks = args.Contains("--marks");
+
 // render's destination. "-" is stdout, which is what a Speech Dispatcher module
 // asks for: the module's whole job is `... | $PLAY_COMMAND`, and a temp file in
 // the middle of that is latency a screen reader pays on every utterance.
@@ -207,10 +231,11 @@ int langValueAt = langAt >= 0 ? langAt + 1 : -1;
 // -100 does not start with "--", so without excluding its index a negative rate
 // is spoken as text — the same trap --voice documents one option above.
 int rateValueAt = rateAt >= 0 ? rateAt + 1 : -1;
+int volumeValueAt = volumeAt >= 0 ? volumeAt + 1 : -1;
 var positional = args
     .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
                      && i != voiceValueAt && i != outValueAt && i != langValueAt
-                     && i != rateValueAt && i != formatValueAt)
+                     && i != rateValueAt && i != formatValueAt && i != volumeValueAt)
     .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
@@ -303,6 +328,12 @@ var request = new Request
     // The screen reader's rate for this utterance, and only for `render`. Null
     // is "as configured", which is every caller but the speechd module.
     Rate = rate,
+
+    // The screen reader's volume, and the opt-in for bookmark positions. Both
+    // `render` only, and both null otherwise so neither can acquire a second
+    // meaning on another verb.
+    Volume = verb == RequestVerb.Render ? volume : null,
+    Marks = verb == RequestVerb.Render && marks ? true : null,
 
     // The session travels with the request, because the daemon may not have one.
     // This process was started by the keybinding, the tray or a shell — all
@@ -413,7 +444,7 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     if (verb == RequestVerb.VoiceInstall) return RunVoiceInstall(reader);
 
     // The third, and the only one whose payload is bytes rather than text.
-    if (verb == RequestVerb.Render) return RunRender(reader, socket, outPath, exportFormat);
+    if (verb == RequestVerb.Render) return RunRender(reader, socket, outPath, exportFormat, marks);
 
     string? line = reader.ReadLine();
     if (line is null)
@@ -582,6 +613,11 @@ static void PrintUsage() =>
           --json       `diagnostics` as one JSON line instead of a table
           --text       `diagnostics` includes a truncated snippet of the text being
                        read. Off by default: this is what gets pasted into reports
+          --volume N   render at a speech-dispatcher volume, -100..100, as a gain
+                       on top of the configured trim. `render` only; 0 changes
+                       nothing, -100 is silence.
+          --marks      with an SSML document, report each <mark> on stderr as
+                       `@vst-mark <sample> <percent-encoded-name>`. `render` only.
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less);
                        also removes a voice that is the configured default
@@ -993,7 +1029,7 @@ static void PrintVoices(VoicesPayload list)
 /// dead child every time; handled, the render stops, whatever was already
 /// produced is flushed, and the exit is 0. docs/SPEECHD-PLAN.md, S1.</para>
 /// </summary>
-static int RunRender(StreamReader reader, Socket socket, string outPath, ExportFormat? format)
+static int RunRender(StreamReader reader, Socket socket, string outPath, ExportFormat? format, bool reportMarks)
 {
     // A FILE GOES THROUGH ExportRunner: written beside the target and renamed
     // into place, so a SIGINT, a dead daemon or a full disk leaves either the
@@ -1063,7 +1099,14 @@ static int RunRender(StreamReader reader, Socket socket, string outPath, ExportF
         }
     }
 
-    return RenderWav.Read(ReadLine, output!, Console.Error, () => stopping);
+
+    // Marks go to stderr as they arrive. Console.Error flushes every write, so a
+    // line is on the pipe before the samples that follow it are written.
+    Action<RenderMark>? onMark = reportMarks
+        ? mark => Console.Error.WriteLine(MarkLine.Format(mark))
+        : null;
+
+    return RenderWav.Read(ReadLine, output!, Console.Error, () => stopping, null, onMark);
 }
 
 

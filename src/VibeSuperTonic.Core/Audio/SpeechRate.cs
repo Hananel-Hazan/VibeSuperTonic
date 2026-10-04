@@ -130,6 +130,38 @@ public static class SpeechRate
         SpeechdWordsPerMinute(rate) / (double)SpeechdDefaultWpm;
 
     /// <summary>
+    /// SAPI's −10…+10 per-fragment rate adjustment (an SSML <c>prosody rate</c>)
+    /// as a speed factor: <c>1.5^(n/10)</c>, the engine's own rule in
+    /// <c>SapiEngine.ComputeSpeed</c>, so the same markup is the same pace on both
+    /// platforms. Clamped to the range the engine clamps to.
+    /// </summary>
+    public static double RateAdjScale(int rateAdj) =>
+        Math.Pow(1.5, Math.Clamp(rateAdj, -10, 10) / 10.0);
+
+    /// <summary>
+    /// speech-dispatcher's volume, −100…100, as a linear gain.
+    ///
+    /// <para>0 is unity — the voice at the level settings.json already chose —
+    /// and −100 is silence, which is what the espeak module means by it too.
+    /// Below zero the map is linear toward 0, the same shape as the site volume
+    /// the Windows engine multiplies in (<c>siteVolumePct / 100</c>, unity at
+    /// 100). Above zero it rises to 2.0 (+6 dB): Windows has no such range
+    /// because SAPI's site volume stops at 100, but speechd's does, and the top
+    /// of it is the same +6 dB ceiling <see cref="VolumeScale"/> allows the trim.
+    /// <see cref="ApplyGain"/> saturates, so the loud end clips instead of
+    /// wrapping.</para>
+    ///
+    /// <para>Clamped rather than refused, for the reason
+    /// <see cref="SpeechdWordsPerMinute"/> is: a module that errors on a
+    /// parameter is a module the server drops.</para>
+    /// </summary>
+    public static float SpeechdVolumeScale(int volume)
+    {
+        volume = Math.Clamp(volume, -100, 100);
+        return volume <= 0 ? (volume + 100) / 100f : 1f + volume / 100f;
+    }
+
+    /// <summary>
     /// <c>VolumeTrimDb</c> as a linear scale, clamped to the same −12…+6 dB the
     /// engine allows. Positive values can clip, which is why the ceiling is well
     /// under what dB arithmetic would otherwise permit.

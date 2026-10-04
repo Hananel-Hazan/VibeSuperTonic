@@ -265,6 +265,24 @@ public sealed record Request
     public int? Rate { get; init; }
 
     /// <summary>
+    /// A speech-dispatcher volume, −100…100, for this utterance only, applied as a
+    /// gain on top of the configured trim — see
+    /// <see cref="VibeSuperTonic.Core.Audio.SpeechRate.SpeechdVolumeScale"/>.
+    /// Null is "as configured", which is every client but the speechd module.
+    /// Per utterance for the reason <see cref="Rate"/> is: it is a SET that can
+    /// arrive between any two messages, and a screen reader's slider must not
+    /// edit <c>settings.json</c>.
+    /// </summary>
+    public int? Volume { get; init; }
+
+    /// <summary>
+    /// <see cref="RequestVerb.Render"/> only: report SSML <c>&lt;mark&gt;</c>
+    /// positions in <see cref="AudioChunk.Marks"/>. Off unless asked, so a client
+    /// that does not understand marks receives replies it has always understood.
+    /// </summary>
+    public bool? Marks { get; init; }
+
+    /// <summary>
     /// Where to start, for <see cref="RequestVerb.Seek"/>. A character index into
     /// the text being read, in the same coordinates every reported boundary uses.
     /// Ignored by every other verb.
@@ -692,11 +710,25 @@ public sealed record VoicesPayload(
 /// rendered to silence, which is a thing that can legitimately happen.
 /// </param>
 /// <param name="Final">True on the last reply, so a reader stops without guessing.</param>
+/// <param name="Marks">
+/// SSML <c>&lt;mark&gt;</c> bookmarks that fall at the START of this reply's
+/// samples, with their position in the whole render. Null on every reply that has
+/// none, which is nearly all of them, and always null unless the request asked
+/// (<see cref="Request.Marks"/>).
+/// </param>
 public sealed record AudioChunk(
     [property: JsonPropertyName("sampleRate")] int SampleRate,
     [property: JsonPropertyName("channels")]   int Channels,
     [property: JsonPropertyName("pcm")]        string? Pcm,
-    [property: JsonPropertyName("final")]      bool Final);
+    [property: JsonPropertyName("final")]      bool Final,
+    [property: JsonPropertyName("marks")]      IReadOnlyList<RenderMark>? Marks = null);
+
+/// <summary>An SSML bookmark and where it falls in the rendered audio.</summary>
+/// <param name="Name">The <c>name</c> attribute, as written.</param>
+/// <param name="Sample">Samples of audio rendered before it, silence included.</param>
+public sealed record RenderMark(
+    [property: JsonPropertyName("name")]   string Name,
+    [property: JsonPropertyName("sample")] long Sample);
 
 public sealed record VoiceProgress(
     string VoiceId,
@@ -885,6 +917,7 @@ public static class Protocol
 [JsonSerializable(typeof(VoiceEntry))]
 [JsonSerializable(typeof(VoiceProgress))]
 [JsonSerializable(typeof(AudioChunk))]
+[JsonSerializable(typeof(RenderMark))]
 [JsonSerializable(typeof(VoiceActionPayload))]
 // The diagnostics reply. Response nests it, so the generator would find it anyway —
 // listed so the type is pinned by name and a test can ask for its TypeInfo.
