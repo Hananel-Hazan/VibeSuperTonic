@@ -72,6 +72,38 @@ public sealed class SessionSnapshot
 
     public DateTime SampleTimeUtc { get; set; }
 
+    // ------------------------------------------------------------------
+    // Added for the Linux daemon's `diagnostics` verb. All optional on the wire
+    // and all zero/empty when unreported, so a Windows engine that has never
+    // heard of them still writes a file the Linux code reads, and the reverse.
+    // ------------------------------------------------------------------
+
+    /// <summary>Execution provider in force — <c>cpu</c> or <c>cuda</c>. Empty when not reported.</summary>
+    public string Provider { get; set; } = "";
+
+    /// <summary>The inter-op thread count the session was built with. 0 when not reported.</summary>
+    public int OnnxInterOpThreads { get; set; }
+
+    /// <summary>When <see cref="LastError"/> happened, or null if it has not.</summary>
+    public DateTime? LastErrorUtc { get; set; }
+
+    /// <summary>
+    /// Length in characters of the utterance being spoken, or of the last one when
+    /// idle. Reported <em>instead of</em> the text where a caller does not need the
+    /// words — <see cref="CurrentText"/> carries a truncated snippet for the
+    /// window and is empty for <c>vst-ctl diagnostics</c>'s plain output.
+    /// </summary>
+    public int TextLength { get; set; }
+
+    /// <summary>The wall/audio ratio of the most recent render. 0 until something has rendered.</summary>
+    public double LastRtf { get; set; }
+
+    /// <summary>Utterances started since the process did.</summary>
+    public int UtteranceCount { get; set; }
+
+    /// <summary>Seconds since the process started.</summary>
+    public double UptimeSec { get; set; }
+
     /// <summary>
     /// When the reader observed this file, taken from its mtime — the heartbeat
     /// that says the writing process is still alive. A snapshot older than the

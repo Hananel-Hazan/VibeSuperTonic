@@ -7,6 +7,7 @@ using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Core.Telemetry;
 using VibeSuperTonic.Daemon;
 using VibeSuperTonic.Linux.Audio;
 using VibeSuperTonic.Onnx.Ort;
@@ -279,7 +280,12 @@ foreach (string program in installCheck.BrokenLaunchers)
 // rebuilds through — the same constructor the daemon's own session uses, so a
 // row measures what the daemon would actually get.
 Func<int, string, ISynthesizer> synthesizerFor =
-    (threads, provider) => new OrtSynthesizer(modelsRoot, provider, intraOpThreads: threads);
+    (threads, provider) => new OrtSynthesizer(
+        modelsRoot, provider, intraOpThreads: threads,
+        // Read from the config as it is NOW, not captured: ProviderSwitchingSynthesizer
+        // rebuilds between utterances when this changes, and a captured value
+        // would rebuild into the same number forever.
+        interOpThreads: CpuBudget.InterOpThreads(config.Settings.OnnxInterOpThreads));
 
 // The session speaks through the switch, not through a fixed backend: the
 // battery rule, an edited Provider setting and a freshly written benchmark all
@@ -335,7 +341,8 @@ using var engines = new EngineRoutingSynthesizer(
     modelPath => new PiperSynthesizer(
         modelPath, phonemizer.Value,
         ExecutionProviders.Cpu,
-        intraOpThreads: switcher.Decision.Threads),
+        intraOpThreads: switcher.Decision.Threads,
+        interOpThreads: CpuBudget.InterOpThreads(config.Settings.OnnxInterOpThreads)),
     () => sessionState?.Invoke() ?? SpeechStateProbe.Idle,
     DaemonLog.Write);
 
@@ -362,7 +369,10 @@ using var sink = new LazyAudioSink(
 // provider switch when the voice is Supertonic's. Three layers, each of which
 // may only change between utterances, and each of which the session is unaware
 // of by design: it holds one ISynthesizer for the life of the daemon.
-var session = new SpeechSession(engines, sink, config.SessionOptions);
+// Measured at the one place every engine's render passes, so the diagnostics verb
+// reports Piper and Supertonic alike. See DiagnosticSynthesizer.
+var diagnostics = new DiagnosticsTracker();
+var session = new SpeechSession(new DiagnosticSynthesizer(engines, diagnostics), sink, config.SessionOptions);
 sessionState = () => session.State == SpeechState.Idle ? SpeechStateProbe.Idle : SpeechStateProbe.Busy;
 // ClipboardFallback is read once here rather than per capture: a reload can
 // change it, but the selection source is built with the daemon, and a hotkey
@@ -407,7 +417,7 @@ DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1
 using var server = new DaemonServer(
     options, config, engines, session,
     selectionSource, sink,
-    synthesizerFor, switcher, engines, installCheck);
+    synthesizerFor, switcher, engines, installCheck, diagnostics);
 
 // BEFORE the tray and before --preload. A daemon that has lost the race for the
 // socket must not register a tray icon on its way out, and a preloading daemon

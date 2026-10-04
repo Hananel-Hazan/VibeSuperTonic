@@ -82,8 +82,14 @@ public static class SettingsScope
     /// means an install that already carries the key stops reporting a number
     /// nothing uses, without anybody having to re-save the file — and a key that
     /// an engine cannot act on is not a setting whose loss anyone can hear.</para>
+    ///
+    /// <para><c>RateClampCeiling</c> joined them when the Tune tab gained it: it
+    /// is the fastest the Supertonic <em>model</em> is asked to speak, and a Piper
+    /// voice takes its whole rate through <c>length_scale</c> (see
+    /// <c>PiperRateCalibration</c>), so a value scoped to Piper would save, read
+    /// back and change nothing anybody could hear.</para>
     /// </summary>
-    public static readonly string[] SupertonicOnlyKeys = ["TotalStep", "Language"];
+    public static readonly string[] SupertonicOnlyKeys = ["TotalStep", "Language", "RateClampCeiling"];
 
     /// <summary>Whether <paramref name="key"/> can do anything for an engine's voices.</summary>
     public static bool AppliesTo(string key, string engine) =>

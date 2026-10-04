@@ -24,10 +24,12 @@ namespace VibeSuperTonic.Daemon;
 /// and the file is shared, so the names must match the engine's exactly.</para>
 ///
 /// <para><b>Deliberately absent.</b> <c>UseDirectML</c>, <c>DirectMLDeviceId</c>,
-/// <c>OnnxThreads</c> and <c>OnnxInterOpThreads</c> are not read and are never
-/// written — there is no DirectML on Linux, and Phase 0 measured any manual
-/// <c>OnnxThreads</c> value at roughly 2x worse than letting ORT choose,
-/// including the setting that was harmless on Windows. <c>MaxCpuPercent</c>
+/// <c>OnnxThreads</c> are not read and are never written — there is no DirectML
+/// on Linux, and Phase 0 measured any manual <c>OnnxThreads</c> value at roughly
+/// 2x worse than letting ORT choose, including the setting that was harmless on
+/// Windows. (<c>OnnxInterOpThreads</c> used to be on this list and is now read:
+/// it is a different knob, harmless at its default of 1, and the Tune tab offers
+/// it for parity with the Windows Advanced tab.) <c>MaxCpuPercent</c>
 /// below overrides that measurement deliberately, for a cost Phase 0 was not
 /// measuring — see its own documentation.</para>
 ///
@@ -137,6 +139,26 @@ public sealed class LinuxSettings
     /// reports which of the two is in force and why.</para>
     /// </summary>
     public int MaxCpuPercent { get; set; } = 20;
+
+    /// <summary>
+    /// Threads ORT may use to run different operators at once. Default 1, which is
+    /// what the session was always built with.
+    ///
+    /// <para>Not the same knob as <see cref="MaxCpuPercent"/> (which sizes
+    /// <i>intra</i>-op, the threads inside one operator) and not subject to the
+    /// benchmark: the sweep measures intra-op only. We run one model at a time, so
+    /// raising this adds scheduler overhead for no gain on almost every machine —
+    /// the Tune tab says so beside the box. Apply it through
+    /// <see cref="VibeSuperTonic.Core.Synthesis.CpuBudget.InterOpThreads"/>, which
+    /// turns an unedited 0 into the default and holds a typo to a sane ceiling.</para>
+    ///
+    /// <para>Like <see cref="MaxCpuPercent"/> it is a property of the ONNX session,
+    /// so it takes effect when a session is built: for Supertonic at the next
+    /// utterance after the file changes (<see cref="ProviderSwitchingSynthesizer"/>
+    /// rebuilds between utterances), for a Piper voice already loaded at the next
+    /// daemon start.</para>
+    /// </summary>
+    public int OnnxInterOpThreads { get; set; } = CpuBudget.DefaultInterOp;
 
     /// <summary>
     /// Which execution provider to render on: <c>auto</c>, <c>cpu</c> or

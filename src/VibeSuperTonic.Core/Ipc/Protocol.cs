@@ -172,6 +172,26 @@ public enum RequestVerb
     Render,
 
     /// <summary>
+    /// What the running daemon has measured about itself: the last render's RTF,
+    /// how long the pipeline took to first audio, underruns, resident memory, the
+    /// last error and when, the length of the text being read, and the provider
+    /// and thread counts in force.
+    ///
+    /// <para>The Linux counterpart of the Windows Monitor tab, which reads the
+    /// same <see cref="VibeSuperTonic.Core.Telemetry.SessionSnapshot"/> from a
+    /// file the engine writes every tick. A verb here rather than a file because
+    /// the daemon is one process with one socket, and a file would be a second
+    /// copy to go stale.</para>
+    ///
+    /// <para><b>Text.</b> The reply carries the utterance's <em>length</em>
+    /// always; the truncated snippet only when <see cref="Request.Text"/> is
+    /// <see cref="Protocol.DiagnosticsSnippet"/>. Diagnostics is what people
+    /// paste into bug reports, and the default must not put their documents in
+    /// them.</para>
+    /// </summary>
+    Diagnostics,
+
+    /// <summary>
     /// Stop the daemon: stop any speech, close the socket, exit 0.
     ///
     /// <para><b>This is not "quit the application".</b> R-5 brings the daemon
@@ -400,7 +420,10 @@ public sealed record Response
     /// <summary>Present on the final reply to an install or a remove.</summary>
     public VoiceActionPayload? Voice { get; init; }
 
-    public static Response Success() => new() { Ok = true };
+    /// <summary>Present on <see cref="RequestVerb.Diagnostics"/>.</summary>
+    public VibeSuperTonic.Core.Telemetry.SessionSnapshot? Diagnostics { get; init; }
+
+    public static Response Success()=> new() { Ok = true };
 
     public static Response Success(ToggleAction action) => new() { Ok = true, Action = action };
     public static Response Fail(string error) => new() { Ok = false, Error = error };
@@ -725,6 +748,13 @@ public static class Protocol
     public const string SocketFileName = "ctl.sock";
 
     /// <summary>
+    /// The <see cref="Request.Text"/> a <see cref="RequestVerb.Diagnostics"/> sends
+    /// to ask for the truncated snippet of the text being read. Anything else —
+    /// including nothing — gets the length only.
+    /// </summary>
+    public const string DiagnosticsSnippet = "snippet";
+
+    /// <summary>
     /// Kept for callers that want the options directly. The serializer itself
     /// goes through <see cref="ProtocolJson"/> — see <see cref="Encode"/>.
     /// </summary>
@@ -856,6 +886,9 @@ public static class Protocol
 [JsonSerializable(typeof(VoiceProgress))]
 [JsonSerializable(typeof(AudioChunk))]
 [JsonSerializable(typeof(VoiceActionPayload))]
+// The diagnostics reply. Response nests it, so the generator would find it anyway —
+// listed so the type is pinned by name and a test can ask for its TypeInfo.
+[JsonSerializable(typeof(VibeSuperTonic.Core.Telemetry.SessionSnapshot))]
 public sealed partial class ProtocolJson : JsonSerializerContext
 {
 }
