@@ -111,7 +111,17 @@ public sealed partial class DaemonServer
         // ROUTE FIRST, AND REFUSE ON ERROR RATHER THAN RENDERING ANYWAY. Select
         // is what discovers "there are no models yet", and since 2026-08-27 it
         // reports that instead of throwing.
-        var selection = engines.Select(request.Voice);
+        //
+        // AND HOLD THE ENGINE IT CHOSE UNTIL THE LAST CHUNK. This loop used to
+        // route once and then synthesise every chunk through the router, which
+        // answers with whatever is selected NOW — and a render does not keep the
+        // session busy, so a hotkey press or another render could switch engines
+        // halfway through. The rest of the sentence then reached Supertonic with
+        // PiperOptions (or the reverse), Require threw, and the screen reader
+        // was cut off mid-word. Reported 2026-10-04; see Select(id, out lease)
+        // for why this pins instead of making renders count as busy.
+        var selection = engines.Select(request.Voice, out var lease);
+        using var engine = lease;
 
         // The whole admission policy, decided rather than emergent — trap 12 and
         // trap 14. It lives in Core because it is otherwise reachable only
@@ -123,7 +133,15 @@ public sealed partial class DaemonServer
             return;
         }
 
-        int rate = engines.SampleRate;
+        // Unreachable — a selection with no error and no NeedsIdle always pins —
+        // but a null here would be a NullReferenceException on the socket thread.
+        if (engine is null)
+        {
+            await WriteAsync(writer, Response.Fail("the engine could not be held for this render"));
+            return;
+        }
+
+        int rate = engine.SampleRate;
 
         // The format, before any audio. A caller writing a WAV header needs the
         // rate and cannot wait for the first samples to guess it.
@@ -197,7 +215,7 @@ public sealed partial class DaemonServer
                 string chunk = step.Text!;
                 var plan = step.Plan;
                 short[] pcm = await Task.Run(
-                    () => engines.Synthesize(chunk, plan.Synthesis, token), token);
+                    () => engine.Synthesize(chunk, plan.Synthesis, token), token);
 
                 // THE REST OF THE PLAN, WHICH THIS VERB USED TO THROW AWAY.
                 // Reported 2026-09-06: `render` computed an utterance plan and

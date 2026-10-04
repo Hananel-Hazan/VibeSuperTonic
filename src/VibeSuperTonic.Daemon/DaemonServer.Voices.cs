@@ -448,7 +448,9 @@ public sealed partial class DaemonServer
         // while the session holds it open and the utterance would finish
         // normally, but the next press would find nothing; refusing is the
         // honest answer for the two seconds it costs.
-        if (_engines?.PiperVoice is { } speaking
+        // A render does not use the session, so it is asked about separately.
+        if (_engines?.IsRendering(wanted.Bare) == true
+            || _engines?.PiperVoice is { } speaking
             && string.Equals(speaking, wanted.Bare, StringComparison.OrdinalIgnoreCase)
             && _session.State != SpeechState.Idle)
         {

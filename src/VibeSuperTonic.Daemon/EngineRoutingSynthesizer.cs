@@ -48,6 +48,18 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
     private string? _currentPiperVoice;
     private ISynthesizer? _piper;
 
+    /// <summary>
+    /// Engines a render is holding, and how many renders hold each. Compared by
+    /// reference: two instances of one voice are two sessions.
+    /// </summary>
+    private readonly Dictionary<ISynthesizer, int> _pins = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Swapped out while pinned: disposed when the last render lets go.</summary>
+    private readonly HashSet<ISynthesizer> _retired = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Piper voices a render is speaking through, for <see cref="IsRendering"/>.</summary>
+    private readonly Dictionary<string, int> _pinnedVoices = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Voices whose calibration has been attempted, so a failure is not retried per press.</summary>
     private readonly HashSet<string> _calibrationAttempted = new(StringComparer.OrdinalIgnoreCase);
     private Task _calibration = Task.CompletedTask;
@@ -109,8 +121,44 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
     /// utterance in flight is using the current engine, and the next press asks
     /// again.</para>
     /// </summary>
-    public Selection Select(string? requestedId)
+    public Selection Select(string? requestedId) => SelectCore(requestedId, pin: false, out _);
+
+    /// <summary>
+    /// <see cref="Select"/>, and hold on to the engine it chose for as long as
+    /// <paramref name="lease"/> is not disposed. For <c>render</c>.
+    ///
+    /// <para><b>Why a render pins rather than counting as "busy".</b> Select's
+    /// rule is that the engine may change only while nothing is using it, and
+    /// "nothing" was asked of the session alone — but a render is not speech and
+    /// never touches the session. Reported 2026-10-04: Orca reading through a
+    /// Piper voice, a hotkey asks for Supertonic, Select sees an idle session
+    /// and swaps; the render's remaining chunks then went to Supertonic carrying
+    /// <see cref="PiperOptions"/>, <c>Require</c> threw, and the sentence was
+    /// cut off while the Piper session it had been using was disposed under
+    /// it.</para>
+    ///
+    /// <para>Counting renders as busy would have closed that by turning it
+    /// round: the press would be refused while a screen reader renders, which
+    /// on a machine that runs one is very nearly always, and a second render for
+    /// another voice — Orca changing language straight after a STOP whose
+    /// IOException the first render has not seen yet — would be refused too.
+    /// <c>RenderAdmission</c> decided that the press wins, and that stays true.
+    /// Instead the render keeps the instance it started with: a swap moves
+    /// <c>_current</c> for everyone else, and a swapped-out Piper session that a
+    /// render still holds is disposed when the render lets go rather than
+    /// immediately. The cost is a second Piper session — 138-194 MB — for the
+    /// rest of one utterance.</para>
+    ///
+    /// <para>Taken under the same lock as the decision, so there is no window
+    /// between choosing an engine and holding it. Null whenever the selection
+    /// carries an <see cref="Selection.Error"/> or <see cref="Selection.NeedsIdle"/>.</para>
+    /// </summary>
+    public Selection Select(string? requestedId, out EngineLease? lease) =>
+        SelectCore(requestedId, pin: true, out lease);
+
+    private Selection SelectCore(string? requestedId, bool pin, out EngineLease? lease)
     {
+        lease = null;
         // Accepts either form. HostConfig.Utterance already unwraps the qualified
         // id before building the options, so the press path arrives bare — but
         // `vst-ctl speak --voice piper:xxx` and the daemon's own startup call
@@ -124,7 +172,10 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
         {
             try
             {
-                return SelectLocked(requestedId, voiceId, modelPath);
+                var selection = SelectLocked(requestedId, voiceId, modelPath);
+                if (pin && selection.Error is null && !selection.NeedsIdle)
+                    lease = PinLocked(selection.SampleRate);
+                return selection;
             }
             catch (Exception ex)
             {
@@ -388,13 +439,67 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
         return total / PiperCalibrator.Repeats;
     }
 
+    /// <summary>Under <c>_gate</c>.</summary>
+    private EngineLease PinLocked(int sampleRate)
+    {
+        var engine = _current;
+        string? voice = _currentPiperVoice;
+        _pins[engine] = _pins.GetValueOrDefault(engine) + 1;
+        if (voice is not null) _pinnedVoices[voice] = _pinnedVoices.GetValueOrDefault(voice) + 1;
+        return new EngineLease(this, engine, voice, sampleRate);
+    }
+
+    private void Release(ISynthesizer engine, string? voice)
+    {
+        lock (_gate)
+        {
+            if (voice is not null && _pinnedVoices.TryGetValue(voice, out int v))
+            {
+                if (v <= 1) _pinnedVoices.Remove(voice);
+                else _pinnedVoices[voice] = v - 1;
+            }
+
+            // Absent after Dispose, which has already released everything.
+            if (!_pins.TryGetValue(engine, out int n)) return;
+            if (n > 1) { _pins[engine] = n - 1; return; }
+
+            _pins.Remove(engine);
+            if (_retired.Remove(engine))
+                DisposeOffGate(engine, "a Piper voice a render was still using");
+        }
+    }
+
+    /// <summary>
+    /// Whether a render is speaking through <paramref name="voiceId"/> right
+    /// now, whether or not it is still the voice in force. The session's state
+    /// cannot say, because a render does not use the session — which is why
+    /// <c>voice remove</c> asks this too. A Piper session reads its model on
+    /// first use, so deleting the files under a render that has not reached its
+    /// first chunk is a render that fails.
+    /// </summary>
+    public bool IsRendering(string voiceId)
+    {
+        if (string.IsNullOrWhiteSpace(voiceId)) return false;
+        lock (_gate) return _pinnedVoices.ContainsKey(voiceId);
+    }
+
+    /// <summary>Under <c>_gate</c>.</summary>
     private void DisposeOffGate(ISynthesizer? synth, string what)
     {
         if (synth is null) return;
 
-        // The session is idle and every render goes through _current, so nothing
-        // is left inside it; the dispose is seconds of native teardown that the
-        // gate should not be held for.
+        // A render that pinned it is still inside it. Disposing now is what used
+        // to turn a hotkey press into a dead session in the middle of a screen
+        // reader's sentence; the render's last Release disposes it instead.
+        if (_pins.ContainsKey(synth))
+        {
+            _retired.Add(synth);
+            return;
+        }
+
+        // The session is idle and no render holds it, so nothing is left inside
+        // it; the dispose is seconds of native teardown that the gate should not
+        // be held for.
         Task.Run(() =>
         {
             try { synth.Dispose(); }
@@ -430,15 +535,64 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
     /// </summary>
     public void Dispose()
     {
-        ISynthesizer? piper;
+        List<ISynthesizer> release = [];
         lock (_gate)
         {
-            piper = _piper;
+            // The retired ones too: a render still holding one at shutdown would
+            // otherwise leave it for the finaliser, and the token has already
+            // cancelled that render anyway.
+            if (_piper is not null) release.Add(_piper);
+            release.AddRange(_retired);
+            _retired.Clear();
+            _pins.Clear();
+            _pinnedVoices.Clear();
             _piper = null;
             _current = _supertonic;
             _currentPiperVoice = null;
         }
 
-        try { piper?.Dispose(); } catch { /* going away either way */ }
+        foreach (var piper in release)
+        {
+            try { piper.Dispose(); } catch { /* going away either way */ }
+        }
+    }
+
+    /// <summary>
+    /// One render's hold on the engine it was routed to. Every chunk of the
+    /// render goes through this rather than through the router, so a swap made
+    /// by anyone else after the render began cannot reach it.
+    /// </summary>
+    public sealed class EngineLease : IDisposable
+    {
+        private readonly EngineRoutingSynthesizer _owner;
+        private readonly string? _voice;
+        private ISynthesizer? _engine;
+
+        internal EngineLease(EngineRoutingSynthesizer owner, ISynthesizer engine, string? voice, int sampleRate)
+        {
+            _owner = owner;
+            _engine = engine;
+            _voice = voice;
+            SampleRate = sampleRate;
+        }
+
+        /// <summary>
+        /// The pinned engine's rate: the one the render announced, and the one
+        /// every chunk is rendered at. Asking the router instead would answer for
+        /// whatever was selected since.
+        /// </summary>
+        public int SampleRate { get; }
+
+        public short[] Synthesize(string text, SynthesisOptions options, CancellationToken cancellationToken = default)
+        {
+            var engine = Volatile.Read(ref _engine) ?? throw new ObjectDisposedException(nameof(EngineLease));
+            return engine.Synthesize(text, options, cancellationToken);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _engine, null) is { } engine)
+                _owner.Release(engine, _voice);
+        }
     }
 }
