@@ -201,6 +201,32 @@ public sealed class DaemonClient
         return null;
     }
 
+    /// <summary>
+    /// Open a <c>render</c> and hand back the stream to read, or null when there
+    /// is no daemon. The caller reads lines with <see cref="RenderSession.ReadLine"/>
+    /// on its own thread and may <see cref="RenderSession.Abort"/> from another —
+    /// the read blocks, and aborting the socket is the only thing that wakes it.
+    /// </summary>
+    public RenderSession? OpenRender(Request request)
+    {
+        Socket? socket = Connect();
+        if (socket is null) return null;
+
+        try
+        {
+            var stream = new NetworkStream(socket, ownsSocket: false);
+            var reader = new StreamReader(stream, Encoding.UTF8);
+            var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+            writer.WriteLine(Protocol.Encode(request));
+            return new RenderSession(socket, stream, reader);
+        }
+        catch (IOException)
+        {
+            socket.Dispose();
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------- connecting
 
     private static Socket? Connect()
@@ -296,5 +322,32 @@ public sealed class DaemonClient
             error = $"{ex.GetType().Name}: {ex.Message}";
             return false;
         }
+    }
+}
+
+/// <summary>One render in flight: the socket, and the lines coming back on it.</summary>
+public sealed class RenderSession(Socket socket, NetworkStream stream, StreamReader reader) : IDisposable
+{
+    /// <summary>The next reply line, or null when the daemon went away or the session was aborted.</summary>
+    public string? ReadLine()
+    {
+        try { return reader.ReadLine(); }
+        catch (IOException) { return null; }
+        catch (ObjectDisposedException) { return null; }
+    }
+
+    /// <summary>Wakes a blocked <see cref="ReadLine"/>; the daemon sees the close and stops synthesising.</summary>
+    public void Abort()
+    {
+        try { socket.Shutdown(SocketShutdown.Both); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void Dispose()
+    {
+        reader.Dispose();
+        stream.Dispose();
+        socket.Dispose();
     }
 }

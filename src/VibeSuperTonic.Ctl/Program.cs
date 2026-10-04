@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using VibeSuperTonic.Core.Export;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Synthesis;
 
@@ -20,6 +21,7 @@ using VibeSuperTonic.Core.Synthesis;
 //   vst-ctl config              where config was read from, and what it made of it
 //   vst-ctl benchmark           measure this machine and record its thread count
 //   vst-ctl render "text"       synthesise to a WAV on stdout, playing nothing
+//   vst-ctl render "text" --out f.mp3   export a file (wav; mp3, aac, flac via ffmpeg)
 //   vst-ctl voices              what is installed, and what the catalog offers
 //   vst-ctl voice install ID    download a catalog voice and calibrate it
 //   vst-ctl voice remove ID     delete an installed Piper voice
@@ -161,11 +163,37 @@ if (outAt >= 0)
     outPath = args[outAt + 1];
 }
 
+// --format wav|mp3|aac|flac, for `render --out FILE`. Without it the format is
+// the file name's extension, and WAV when that says nothing (the behaviour
+// before this option existed). MP3, AAC and FLAC are encoded by the system's
+// ffmpeg: there is no encoder in .NET, and none is bundled.
+ExportFormat? exportFormat = null;
+int formatAt = Array.IndexOf(args, "--format");
+if (formatAt >= 0)
+{
+    exportFormat = formatAt + 1 < args.Length ? ExportFormats.Parse(args[formatAt + 1]) : null;
+    if (exportFormat is null)
+    {
+        Console.Error.WriteLine("--format needs one of: wav, mp3, aac, flac");
+        return 2;
+    }
+    if (outPath == "-" && exportFormat != ExportFormat.Wav)
+    {
+        Console.Error.WriteLine($"--format {args[formatAt + 1]} needs --out FILE; only WAV can go to stdout");
+        return 2;
+    }
+}
+else if (outPath != "-")
+{
+    exportFormat = ExportFormats.FromPath(outPath);
+}
+
 // -1 for "no --voice", and the guard matters: without it the excluded index is
 // 0, which is the VERB, and every command without --voice fails as "unknown
 // verb: <the text>".
 int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
 int outValueAt = outAt >= 0 ? outAt + 1 : -1;
+int formatValueAt = formatAt >= 0 ? formatAt + 1 : -1;
 int langValueAt = langAt >= 0 ? langAt + 1 : -1;
 // -100 does not start with "--", so without excluding its index a negative rate
 // is spoken as text — the same trap --voice documents one option above.
@@ -173,7 +201,7 @@ int rateValueAt = rateAt >= 0 ? rateAt + 1 : -1;
 var positional = args
     .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
                      && i != voiceValueAt && i != outValueAt && i != langValueAt
-                     && i != rateValueAt)
+                     && i != rateValueAt && i != formatValueAt)
     .ToArray();
 
 // Every argument was an option, so there is no verb to run. This is checked
@@ -364,7 +392,7 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     if (verb == RequestVerb.VoiceInstall) return RunVoiceInstall(reader);
 
     // The third, and the only one whose payload is bytes rather than text.
-    if (verb == RequestVerb.Render) return RunRender(reader, socket, outPath);
+    if (verb == RequestVerb.Render) return RunRender(reader, socket, outPath, exportFormat);
 
     string? line = reader.ReadLine();
     if (line is null)
@@ -509,6 +537,12 @@ static void PrintUsage() =>
           --rate N     render at a speech-dispatcher rate, -100..100, adjusting
                        whatever settings.json asks for. `render` only; 0 changes
                        nothing. This is what carries a screen reader's speed.
+          --out PATH   `render` only: write a file instead of stdout. The file
+                       appears whole or not at all (written beside it, then
+                       renamed), so a cancel or a crash leaves nothing behind.
+          --format F   `render --out` only: wav, mp3, aac or flac. Defaults to the
+                       file's extension, then WAV. mp3/aac/flac are encoded by the
+                       system's ffmpeg; without one the command says how to get it.
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less);
                        also removes a voice that is the configured default
@@ -920,19 +954,30 @@ static void PrintVoices(VoicesPayload list)
 /// dead child every time; handled, the render stops, whatever was already
 /// produced is flushed, and the exit is 0. docs/SPEECHD-PLAN.md, S1.</para>
 /// </summary>
-static int RunRender(StreamReader reader, Socket socket, string outPath)
+static int RunRender(StreamReader reader, Socket socket, string outPath, ExportFormat? format)
 {
-    Stream output;
-    try
+    // A FILE GOES THROUGH ExportRunner: written beside the target and renamed
+    // into place, so a SIGINT, a dead daemon or a full disk leaves either the
+    // complete file or no file, and WAV gets real sizes in its header. Stdout
+    // stays the streaming path a Speech Dispatcher module depends on.
+    bool toFile = outPath != "-";
+    ExportFormat fileFormat = format ?? ExportFormat.Wav;
+    FfmpegTools? ffmpeg = null;
+
+    if (toFile && ExportFormats.NeedsFfmpeg(fileFormat))
     {
-        output = outPath == "-"
-            ? Console.OpenStandardOutput()
-            : File.Create(outPath);
+        ffmpeg = FfmpegDetector.Detect();
+        if (FfmpegTools.Unavailable(fileFormat, ffmpeg, FfmpegDetector.IsSandboxed()) is { } why)
+        {
+            Console.Error.WriteLine(why);
+            return 1;
+        }
     }
-    catch (Exception ex)
+
+    Stream? output = null;
+    if (!toFile)
     {
-        Console.Error.WriteLine($"cannot write to {outPath}: {ex.Message}");
-        return 1;
+        output = Console.OpenStandardOutput();
     }
 
     using var _ = output;
@@ -962,7 +1007,24 @@ static int RunRender(StreamReader reader, Socket socket, string outPath)
         catch (ObjectDisposedException) { return null; }
     }
 
-    return RenderWav.Read(ReadLine, output, Console.Error, () => stopping);
+    if (toFile)
+    {
+        var outcome = ExportRunner.Run(ReadLine, fileFormat, outPath, ffmpeg, () => stopping);
+        switch (outcome.Status)
+        {
+            case ExportStatus.Done:
+                return 0;
+            case ExportStatus.Cancelled:
+                // A stop asked for by the person at the terminal; no file, no error.
+                Console.Error.WriteLine("cancelled; no file was written");
+                return 0;
+            default:
+                Console.Error.WriteLine(outcome.Message);
+                return 1;
+        }
+    }
+
+    return RenderWav.Read(ReadLine, output!, Console.Error, () => stopping);
 }
 
 

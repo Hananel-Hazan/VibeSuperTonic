@@ -37,11 +37,16 @@ public static class RenderWav
     /// failure</b>: Orca sends one on nearly every keystroke, and reporting each as
     /// an error would fill the user's log with the sound of the product working.
     /// </param>
+    /// <param name="progress">
+    /// Called with the running sample count after each chunk is written, on the
+    /// calling thread. The Export tab's progress line; nothing else passes it.
+    /// </param>
     public static int Read(
         Func<string?> readLine,
         Stream output,
         TextWriter error,
-        Func<bool>? stopped = null)
+        Func<bool>? stopped = null,
+        Action<long>? progress = null)
     {
         bool wroteHeader = false;
         int headerRate = 0;
@@ -142,6 +147,7 @@ public static class RenderWav
                 {
                     output.Write(pcm, 0, pcm.Length);
                     samples += pcm.Length / 2;
+                    progress?.Invoke(samples);
                 }
                 catch (IOException)
                 {
@@ -180,6 +186,33 @@ public static class RenderWav
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Replace the two 0xFFFFFFFF size fields of a finished, seekable WAV with
+    /// the real ones. A file, unlike a pipe, can be fixed up at the end, and a
+    /// player that opens an exported file should not have to guess its length.
+    /// Returns false (and touches nothing) when the stream is not a WAV this
+    /// class wrote.
+    /// </summary>
+    public static bool PatchSizes(Stream file)
+    {
+        if (!file.CanSeek || !file.CanWrite || !file.CanRead || file.Length < HeaderBytes) return false;
+
+        Span<byte> header = stackalloc byte[HeaderBytes];
+        file.Position = 0;
+        file.ReadExactly(header);
+        if (!header[..4].SequenceEqual("RIFF"u8) || !header[36..40].SequenceEqual("data"u8)) return false;
+
+        long data = file.Length - HeaderBytes;
+        if (data > uint.MaxValue - 36) return false;               // beyond what RIFF can say
+
+        BitConverter.TryWriteBytes(header[4..8], (uint)(data + 36));
+        BitConverter.TryWriteBytes(header[40..44], (uint)data);
+        file.Position = 0;
+        file.Write(header);
+        file.Flush();
+        return true;
     }
 
     /// <summary>
