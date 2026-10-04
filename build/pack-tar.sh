@@ -769,7 +769,10 @@ glibc_floor="2.34"
 glibc_max=""
 while IFS= read -r elf; do
     [[ "$(head -c4 "$elf" | od -An -tx1 | tr -d ' \n')" == "7f454c46" ]] || continue
-    needed=$(objdump -T "$elf" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+    # || true: an ELF with no versioned glibc imports (a static binary, a .so
+    # with none) gives grep no match, and set -e would end the pack silently
+    # before the `continue` below that exists for exactly that case.
+    needed=$(objdump -T "$elf" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1 || true)
     [[ -n "$needed" ]] || continue
     if [[ -z "$glibc_max" ]] || [[ "$(printf '%s\n%s\n' "$glibc_max" "$needed" | sort -V | tail -1)" == "$needed" ]]; then
         glibc_max="$needed"
@@ -1229,15 +1232,21 @@ fi
 
 # The Cinnamon/GNOME path binds through gsettings and writes no launcher, and
 # --no-bind writes nothing at all, so the menu entry is added here when it is
-# not already there. Idempotent: re-running install.sh never stacks entries.
-if [[ ! -e "$apps/vibesupertonic.desktop" ]]; then
+# not already there. Idempotent: re-running install.sh never stacks entries,
+# and a KDE bind after an earlier --no-bind run removes the entry that run left,
+# because the bind's own vibesupertonic.desktop is a menu entry too.
+if [[ -e "$apps/vibesupertonic.desktop" ]]; then
+    rm -f "$apps/vibesupertonic-ui.desktop"
+else
     mkdir -p "$apps"
+    # Exec quoted: the desktop-entry spec splits it with shell rules, so an
+    # install under a path with a space would otherwise run nothing.
     cat > "$apps/vibesupertonic-ui.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=VibeSuperTonic
 Comment=Read selected text aloud
-Exec=$here/vibesupertonic-ui
+Exec="$here/vibesupertonic-ui"
 Icon=audio-speakers
 Terminal=false
 Categories=Utility;Accessibility;

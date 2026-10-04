@@ -215,7 +215,7 @@ _vst_kb_sp()    { printf '%s:%s' "$VST_KB_SCHEMA_CUSTOM" "$(_vst_kb_path "$1")";
 
 _vst_kb_get() {   # <id> <key> -> unquoted value
     gsettings get "$(_vst_kb_sp "$1")" "$2" 2>/dev/null \
-        | sed "s/^@as //" | sed "s/^'//; s/'\$//"
+        | sed "s/^@as //" | sed "s/^'//; s/'\$//" || true
 }
 
 # The binding key is an array of strings on Cinnamon and a single string on

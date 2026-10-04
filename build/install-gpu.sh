@@ -242,7 +242,7 @@ echo "  - CUDA runtime, cuBLAS, cuFFT, cuRAND, NVRTC and cuDNN (from PyPI)"
 echo
 
 if [ "$assume_yes" != 1 ]; then
-  read -r -p "Continue? [y/N] " answer
+  read -r -p "Continue? [y/N] " answer || answer=""   # EOF (no tty): a no, said out loud
   case "$answer" in [yY]*) ;; *) echo "nothing was downloaded."; exit 0 ;; esac
 fi
 

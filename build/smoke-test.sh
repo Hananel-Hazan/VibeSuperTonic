@@ -176,7 +176,7 @@ fi
 step "The Speech Dispatcher module answers INIT with nothing installed"
 if [[ -x "$dir/vst-speechd" ]]; then
     reply="$(printf 'INIT\nQUIT\n' | timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY \
-        "$dir/vst-speechd" 2>/dev/null | grep -E '^(299|399) ' | tail -1)"
+        "$dir/vst-speechd" 2>/dev/null | awk '/^(299|399) / {l = $0} END {print l}' || true)"
     [[ "$reply" == 299\ * ]] || die "vst-speechd answered INIT with: ${reply:-nothing}.
        speech-dispatcher drops a module that does not answer 299. 399 means it
        could not find espeak/espeak-ng beside itself in this extracted archive."

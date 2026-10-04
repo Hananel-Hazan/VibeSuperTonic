@@ -95,8 +95,8 @@ done
 # and an AppImage packaged from whatever is on disk now.
 for binary in vibesupertonicd vibesupertonic-ui vst-ctl vst-speechd; do
     [[ -x "$staging/$binary" ]] || die "$binary is missing from $staging"
-    reported="$("$staging/$binary" --version 2>/dev/null | tr -d '[:space:]')"
-    [[ "$reported" == "$version" ]] || die "$binary in the composed tree reports $reported, not $version.
+    reported="$("$staging/$binary" --version 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$reported" == "$version" ]] || die "$binary in the composed tree reports ${reported:-nothing}, not $version.
        The tree is from another build. Re-run build/pack-tar.sh -v $version."
 done
 info "all four binaries report $version"
@@ -376,7 +376,7 @@ reported="$("$out" --version 2>/dev/null | tr -d '[:space:]')" \
        and it is what --appimage-extract-and-run exists for."
 [[ "$reported" == "$version" ]] || die "the AppImage reports $reported, not $version"
 
-ctl_reported="$("$out" ctl --version 2>/dev/null | tr -d '[:space:]')"
+ctl_reported="$("$out" ctl --version 2>/dev/null | tr -d '[:space:]' || true)"
 [[ "$ctl_reported" == "$version" ]] || die "AppRun's ctl dispatch reports '$ctl_reported', not $version.
        The hotkey path goes through that branch."
 
@@ -390,7 +390,7 @@ ctl_reported="$("$out" ctl --version 2>/dev/null | tr -d '[:space:]')"
 # utterance — and every check that ran the image by its own name would still
 # pass. Tested here with a symlink in a scratch directory, which is exactly what
 # appimage-speechd.sh installs.
-sd_reported="$("$out" speechd --version 2>/dev/null | tr -d '[:space:]')"
+sd_reported="$("$out" speechd --version 2>/dev/null | tr -d '[:space:]' || true)"
 [[ "$sd_reported" == "$version" ]] || die "AppRun's speechd dispatch reports '$sd_reported', not $version."
 
 link_dir="$(mktemp -d)"

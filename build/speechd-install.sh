@@ -105,7 +105,10 @@ die()  { printf 'speechd-install: %s\n' "$*" >&2; exit 1; }
 module_init_reply() {
     local cmd=("$@") out
     out="$(printf 'INIT\nQUIT\n' | timeout 20 "${cmd[@]}" 2>/dev/null || true)"
-    printf '%s\n' "$out" | grep -E '^(299|399) ' | tail -1
+    # awk, not grep | tail: grep exits 1 on no match, pipefail hands that to
+    # the caller's assignment, and set -e ends the script before the die that
+    # explains a module with no 299/399 reply (a missing espeak payload).
+    printf '%s\n' "$out" | awk '/^(299|399) / {l = $0} END {print l}'
 }
 
 module_speaks() {
