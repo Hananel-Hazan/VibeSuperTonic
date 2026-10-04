@@ -76,7 +76,7 @@ public sealed class PiperSynthesizer : ISynthesizer
         if (!ExecutionProviders.IsKnown(provider))
             throw new ArgumentException(
                 $"unknown execution provider '{provider}'; expected " +
-                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}' or '{ExecutionProviders.OpenVino}'", nameof(provider));
+                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}', '{ExecutionProviders.OpenVino}' or '{ExecutionProviders.WebGpu}'", nameof(provider));
 
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Piper voice model not found: {modelPath}", modelPath);

@@ -386,6 +386,21 @@ SDK's version, not ours): regenerate it with
 [flathub workflow](.github/workflows/flathub.yml) refuses a stale one. When a
 `PackageReference` changes, that file changes with it.
 
+**The WebGPU (Vulkan) pack is the vendor-neutral one, and its ORT is deliberately
+NOT the managed binding's minor** (2026-10-03). `build/install-webgpu.sh` fetches
+the `onnxruntime-webgpu` 1.27.0 wheel (Dawn linked statically; needs the system's
+`libvulkan.so.1`, which the installer refuses to go without; tagged
+`manylinux_2_27`, under the 2.34 floor) beside OpenVINO's shape: its own
+`libonnxruntime.so`, loaded by `OrtProviders.UseRuntimeFrom`, lowest precedence
+after CUDA and OpenVINO. It pairs a 1.27 runtime with the 1.22.1 binding —
+measured, not assumed: AppendExecutionProvider "WebGPU", session creation and Run
+all work against Mesa's software Vulkan, and "No supported adapters" is a clean
+exception with none. So `check-webgpu-pack.sh` (assertion 4c) asserts native
+**>=** managed and pins `MANAGED_VALIDATED`, instead of OpenVINO's same-minor
+rule; bumping the binding means repeating that measurement. It also *runs* the
+installer against stub `ldconfig` and `curl`. Sabotage:
+`build/webgpu-pack-sabotage.sh`. Never run on a physical GPU yet.
+
 **The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
 ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
 nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a

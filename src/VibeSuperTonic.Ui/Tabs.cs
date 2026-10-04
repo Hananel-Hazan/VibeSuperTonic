@@ -195,8 +195,10 @@ public sealed class AboutTab : UserControl
                     77 ms. It is not in the download: run ./install-gpu.sh once, which
                     fetches about 3.1 GB, then benchmark again. An Intel GPU can too, through
                     ./install-openvino.sh (about 64 MB; not yet measured on Intel hardware).
-                    There is no AMD pack, and the Status tab says so on a machine with
-                    an AMD GPU. ON BATTERY THE ENGINE STAYS
+                    Any other GPU with a Vulkan driver, AMD above all, can through
+                    ./install-webgpu.sh (about 25 MB; needs libvulkan1 and a Vulkan driver,
+                    not yet measured on AMD hardware), and the Status tab points an AMD
+                    machine at it. ON BATTERY THE ENGINE STAYS
                     ON THE CPU — a discrete GPU is the difference between a laptop that
                     lasts an afternoon and one that does not — unless you set GpuOnBattery.
                     The Status tab says which is in force and why.

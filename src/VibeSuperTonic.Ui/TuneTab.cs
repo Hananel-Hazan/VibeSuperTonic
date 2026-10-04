@@ -246,7 +246,8 @@ public sealed class TuneTab : UserControl
 
         grid.Children.Add(Row("Execution provider", _provider,
             "auto follows the benchmark. gpu means whichever optional GPU pack is installed — "
-            + "NVIDIA (install-gpu.sh) or Intel (install-openvino.sh). Without one, auto and gpu "
+            + "NVIDIA (install-gpu.sh), Intel (install-openvino.sh) or any Vulkan GPU such as AMD "
+            + "(install-webgpu.sh). Without one, auto and gpu "
             + "both mean CPU, and the line below says so."));
         grid.Children.Add(_clipboardFallback);
         grid.Children.Add(_gpuOnBattery);

@@ -127,6 +127,7 @@ public class GpuPackTests
     [Theory]
     [InlineData("cuda", ExecutionProviders.Cuda)]
     [InlineData("openvino", ExecutionProviders.OpenVino)]
+    [InlineData("webgpu", ExecutionProviders.WebGpu)]
     public void A_pack_is_found_by_its_directory(string dir, string provider)
     {
         Assert.Equal(provider, GpuPacks.Select(d => d == dir)!.Provider);
@@ -141,11 +142,53 @@ public class GpuPackTests
     }
 
     [Fact]
-    public void Only_the_OpenVino_pack_replaces_the_runtime()
+    public void Only_the_CUDA_pack_keeps_the_runtime_that_ships()
     {
         Assert.False(GpuPacks.For(ExecutionProviders.Cuda)!.ReplacesRuntime);
         Assert.True(GpuPacks.For(ExecutionProviders.OpenVino)!.ReplacesRuntime);
+        Assert.True(GpuPacks.For(ExecutionProviders.WebGpu)!.ReplacesRuntime);
         Assert.Null(GpuPacks.For(ExecutionProviders.Cpu));
+    }
+
+    [Fact]
+    public void The_vendor_neutral_pack_comes_last_after_CUDA_and_OpenVino()
+    {
+        Assert.Equal(
+            [ExecutionProviders.Cuda, ExecutionProviders.OpenVino, ExecutionProviders.WebGpu],
+            GpuPacks.All.Select(p => p.Provider));
+        Assert.Equal(GpuPacks.AnyVendor, GpuPacks.For(ExecutionProviders.WebGpu)!.PciVendorId);
+
+        // WebGPU alone is found; with OpenVINO beside it, OpenVINO wins.
+        Assert.Equal(ExecutionProviders.WebGpu, GpuPacks.Select(d => d == "webgpu")!.Provider);
+        Assert.Equal(ExecutionProviders.OpenVino, GpuPacks.Select(d => d is "webgpu" or "openvino")!.Provider);
+        Assert.Equal(ExecutionProviders.Cuda, GpuPacks.Select(_ => true)!.Provider);
+    }
+
+    [Fact]
+    public void WebGpu_is_a_known_GPU_provider_the_decision_treats_like_the_others()
+    {
+        Assert.True(ExecutionProviders.IsKnown(ExecutionProviders.WebGpu));
+        Assert.True(ExecutionProviders.IsGpu(ExecutionProviders.WebGpu));
+        Assert.Equal("WebGPU", ExecutionProviders.Display(ExecutionProviders.WebGpu));
+
+        var onGpu = ExecutionDecision.Decide(null, Machine(), 20, 20, ProviderPreference.Gpu,
+            gpuProvider: ExecutionProviders.WebGpu);
+        Assert.Equal(ExecutionProviders.WebGpu, onGpu.Provider);
+
+        var applied = ExecutionDecision.Decide(Profile(ExecutionProviders.WebGpu), Machine(), 20, 20,
+            gpuProvider: ExecutionProviders.WebGpu);
+        Assert.Equal(ExecutionProviders.WebGpu, applied.Provider);
+        Assert.Contains("WebGPU", applied.Describe());
+
+        // A benchmark taken on CUDA does not apply to a machine that now has the Vulkan pack.
+        var stale = ExecutionDecision.Decide(Profile(ExecutionProviders.Cuda), Machine(), 20, 20,
+            gpuProvider: ExecutionProviders.WebGpu);
+        Assert.Equal(ExecutionProviders.Cpu, stale.Provider);
+        Assert.Contains("WebGPU", stale.Reason);
+
+        var noAdapter = ExecutionDecision.Decide(Profile(ExecutionProviders.WebGpu), Machine(), 20, 20,
+            gpuUnavailable: "no adapter", gpuProvider: ExecutionProviders.WebGpu);
+        Assert.Equal(ExecutionProviders.Cpu, noAdapter.Provider);
     }
 
     [Fact]
@@ -203,12 +246,33 @@ public class GpuPackTests
     }
 
     [Fact]
-    public void AMD_hardware_is_told_the_truth_not_an_installer_that_does_not_exist()
+    public void AMD_hardware_is_pointed_at_the_vendor_neutral_Vulkan_pack()
     {
         string hint = GpuPacks.InstallHint([GpuPacks.PciAmd], null)!;
         Assert.Contains("AMD", hint);
-        Assert.Contains("no AMD GPU pack", hint);
-        Assert.DoesNotContain(".sh", hint);
+        Assert.Contains("install-webgpu.sh", hint);
+        Assert.Contains("Vulkan", hint);
+        Assert.DoesNotContain("install-gpu.sh", hint);
+        Assert.DoesNotContain("install-openvino.sh", hint);
+        Assert.DoesNotContain("no AMD GPU pack", hint);
+    }
+
+    [Fact]
+    public void Every_installer_a_hint_names_is_one_a_pack_declares()
+    {
+        // The hint reads the pack table; it cannot name an installer nothing ships.
+        string hint = GpuPacks.InstallHint(
+            [GpuPacks.PciIntel, GpuPacks.PciNvidia, GpuPacks.PciAmd], null)!;
+        foreach (string word in hint.Split(' ', ';', ',').Where(w => w.EndsWith(".sh")))
+            Assert.Contains(GpuPacks.All, p => p.Installer == word);
+        Assert.Contains("install-webgpu.sh", hint);
+    }
+
+    [Fact]
+    public void Intel_and_NVIDIA_hints_do_not_change_when_a_vulkan_pack_exists()
+    {
+        Assert.DoesNotContain("install-webgpu.sh", GpuPacks.InstallHint([GpuPacks.PciIntel], null));
+        Assert.DoesNotContain("install-webgpu.sh", GpuPacks.InstallHint([GpuPacks.PciNvidia], null));
     }
 
     [Fact]

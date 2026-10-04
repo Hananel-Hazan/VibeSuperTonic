@@ -220,6 +220,12 @@ chmod 755 "$staging/install-gpu.sh"
 cp "$root/build/install-openvino.sh" "$staging/install-openvino.sh"
 chmod 755 "$staging/install-openvino.sh"
 
+# And the vendor-neutral one: WebGPU over Vulkan (AMD, and any other Vulkan GPU),
+# ~32 MB from PyPI by hash. Same rule - only the installer ships.
+# build/check-webgpu-pack.sh (assertion 4c) asserts both halves.
+cp "$root/build/install-webgpu.sh" "$staging/install-webgpu.sh"
+chmod 755 "$staging/install-webgpu.sh"
+
 # The two provider-choice helpers. Neither is required for the product to work —
 # the daemon falls back on its own when a GPU fails mid-render — and both exist
 # because "works" and "is right" are different:
@@ -719,6 +725,16 @@ bash "$root/build/check-openvino-pack.sh" "$staging" \
     || die "the OpenVINO pack's installer or its absence from the archive failed its checks"
 info "no OpenVINO pack in the archive; install-openvino.sh pinned by SHA-256 and ORT-minor-checked"
 
+# 4c. The WebGPU pack: not in the archive, installer pinned by SHA-256, its
+# runtime not older than the managed binding and the pairing re-validated when
+# the binding moves, its wheel within the glibc floor, and - behaviourally - the
+# installer refuses without libvulkan.so.1 before fetching and refuses a wrong
+# download. Sabotaged in a second by build/webgpu-pack-sabotage.sh.
+bash "$root/build/check-webgpu-pack.sh" "$staging" \
+    "$root/src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj" \
+    || die "the WebGPU pack's installer or its absence from the archive failed its checks"
+info "no WebGPU pack in the archive; install-webgpu.sh pinned by SHA-256, glibc-tagged within the floor, refuses without libvulkan"
+
 # --- 5. the glibc floor has not risen ----------------------------------------
 #
 # WHAT THIS IS ABOUT. A shipped binary runs on any glibc at least as new as the
@@ -1039,8 +1055,21 @@ This has not been measured on Intel hardware by the people who wrote it. Run
 `./vst-ctl benchmark` afterwards: the GPU is measured as another row and chosen
 only if it actually wins. `./install-openvino.sh --remove` undoes it.
 
-There is NO AMD pack yet. On a machine with an AMD GPU `vst-ctl config` says so,
-and everything runs on the CPU, which is fast enough on its own.
+Optional: use an AMD GPU (or any Vulkan GPU)
+--------------------------------------------
+    ./install-webgpu.sh
+
+For AMD, which has no pack of its own, and for any other GPU with a Vulkan
+driver. Downloads about 25 MB (32 MB unpacked) from PyPI, checked against a
+pinned SHA-256: ONNX Runtime with the WebGPU provider (Dawn, over Vulkan). It
+REFUSES to install without the Vulkan loader, before downloading anything:
+Debian/Ubuntu: `sudo apt install libvulkan1 mesa-vulkan-drivers`. With the loader
+but no usable GPU the daemon says no adapter was found and keeps using the CPU.
+
+This has not been measured on AMD hardware by the people who wrote it. Run
+`./vst-ctl benchmark` afterwards: the GPU is measured as another row and chosen
+only if it actually wins. If the CUDA or OpenVINO pack is installed too, it is
+used instead and this one sits idle. `./install-webgpu.sh --remove` undoes it.
 
 
 Optional: keep the provider choice honest

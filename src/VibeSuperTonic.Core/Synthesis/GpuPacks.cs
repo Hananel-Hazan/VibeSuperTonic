@@ -14,7 +14,10 @@ namespace VibeSuperTonic.Core.Synthesis;
 /// <param name="Provider">The <see cref="ExecutionProviders"/> name the pack enables.</param>
 /// <param name="DirectoryName">Subdirectory of <c>runtime/</c> the installer fills.</param>
 /// <param name="Vendor">Whose hardware it is for, as a person would say it.</param>
-/// <param name="PciVendorId">The PCI vendor id <c>/sys/class/drm</c> reports for that hardware.</param>
+/// <param name="PciVendorId">
+/// The PCI vendor id <c>/sys/class/drm</c> reports for that hardware, or
+/// <see cref="GpuPacks.AnyVendor"/> (0) for a pack that is not tied to one vendor.
+/// </param>
 /// <param name="Installer">The script in the archive that fetches it.</param>
 /// <param name="ReplacesRuntime">
 /// True when the pack carries its own <c>libonnxruntime.so</c> that must be loaded
@@ -49,15 +52,21 @@ public static class GpuPacks
     public const int PciAmd = 0x1002;
     public const int PciIntel = 0x8086;
 
+    /// <summary>The <see cref="GpuPack.PciVendorId"/> of a vendor-neutral pack (WebGPU over Vulkan).</summary>
+    public const int AnyVendor = 0;
+
     /// <summary>
     /// In precedence order: when more than one pack directory exists the first
     /// wins, because a process loads one <c>libonnxruntime.so</c> and the CUDA
-    /// pack is the one that plugs into the library that ships.
+    /// pack is the one that plugs into the library that ships. The vendor-neutral
+    /// WebGPU pack is last: a vendor's own pack is built for that hardware, and
+    /// WebGPU is the answer for what has none (AMD) or what the others lack.
     /// </summary>
     public static IReadOnlyList<GpuPack> All { get; } =
     [
         new(ExecutionProviders.Cuda, "cuda", "NVIDIA", PciNvidia, "install-gpu.sh", ReplacesRuntime: false),
         new(ExecutionProviders.OpenVino, "openvino", "Intel", PciIntel, "install-openvino.sh", ReplacesRuntime: true),
+        new(ExecutionProviders.WebGpu, "webgpu", "WebGPU/Vulkan", AnyVendor, "install-webgpu.sh", ReplacesRuntime: true),
     ];
 
     /// <summary>The pack for a provider name, or null for the CPU and for anything unknown.</summary>
@@ -129,9 +138,9 @@ public static class GpuPacks
     /// a pack is already installed (the probe's own message says what is wrong
     /// then) or when no recognised vendor is present.
     ///
-    /// <para>AMD is named and answered honestly: there is no AMD pack, and
-    /// saying "run the installer" for a pack that does not exist would be worse
-    /// than saying nothing.</para>
+    /// <para>AMD has no pack of its own; it is pointed at the vendor-neutral
+    /// WebGPU one, which reaches it through Vulkan. Only an installer that
+    /// exists is ever named — the hint reads the pack table, not a string.</para>
     /// </summary>
     public static string? InstallHint(IReadOnlyCollection<int> vendorIds, GpuPack? installed)
     {
@@ -141,12 +150,12 @@ public static class GpuPacks
         var parts = new List<string>();
         foreach (var pack in All)
         {
-            if (vendorIds.Contains(pack.PciVendorId))
+            if (pack.PciVendorId != AnyVendor && vendorIds.Contains(pack.PciVendorId))
                 parts.Add($"{pack.Vendor} graphics detected — {pack.Installer} adds GPU support");
         }
 
-        if (vendorIds.Contains(PciAmd))
-            parts.Add("AMD graphics detected — there is no AMD GPU pack yet, so this runs on the CPU");
+        if (vendorIds.Contains(PciAmd) && For(ExecutionProviders.WebGpu) is { } vulkan)
+            parts.Add($"AMD graphics detected — {vulkan.Installer} adds GPU support through Vulkan");
 
         return parts.Count == 0 ? null : string.Join("; ", parts);
     }

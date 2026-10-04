@@ -174,6 +174,7 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   ./VibeSuperTonic.AppImage speechd-install register with Speech Dispatcher
 #   ./VibeSuperTonic.AppImage gpu-install     fetch the optional CUDA pack (~3.1 GB)
 #   ./VibeSuperTonic.AppImage openvino-install  fetch the optional Intel pack (~64 MB)
+#   ./VibeSuperTonic.AppImage webgpu-install    fetch the optional Vulkan/AMD pack (~25 MB)
 #   ./VibeSuperTonic.AppImage store           print where models and data live
 #
 #   Keep this file and its store together. Models and settings live beside the
@@ -265,6 +266,12 @@ case "${1-}" in
         store="$(vst_store)"
         mkdir -p "$store/data"
         exec bash "$APP/install-openvino.sh" --dir "$store" "$@" ;;
+    webgpu-install)
+        # The vendor-neutral Vulkan pack (AMD and others); same shape again.
+        shift
+        store="$(vst_store)"
+        mkdir -p "$store/data"
+        exec bash "$APP/install-webgpu.sh" --dir "$store" "$@" ;;
     --version) exec "$APP/vibesupertonicd" --version ;;
     -h|--help)
         sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'

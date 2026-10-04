@@ -36,15 +36,24 @@ public static class ExecutionProviders
     /// </summary>
     public const string OpenVino = "openvino";
 
+    /// <summary>
+    /// WebGPU over Vulkan (Dawn, inside the ONNX Runtime the optional WebGPU pack
+    /// brings): the vendor-neutral GPU provider, and the one that serves AMD,
+    /// which has no pack of its own. Present only when that pack is installed —
+    /// about 32 MB from the <c>onnxruntime-webgpu</c> wheel — and it needs the
+    /// system's <c>libvulkan.so.1</c> and a Vulkan driver.
+    /// </summary>
+    public const string WebGpu = "webgpu";
+
     public static bool IsKnown(string provider) =>
-        provider is Cpu or Cuda or OpenVino;
+        provider is Cpu or Cuda or OpenVino or WebGpu;
 
     /// <summary>
     /// True for every provider that is "the GPU" as the user means it — the one
     /// the <c>gpu</c> preference selects, subject to which pack is installed.
     /// Everything that used to ask <c>== Cuda</c> asks this.
     /// </summary>
-    public static bool IsGpu(string provider) => provider is Cuda or OpenVino or DirectMl;
+    public static bool IsGpu(string provider) => provider is Cuda or OpenVino or WebGpu or DirectMl;
 
     /// <summary>How a provider name reads in a sentence written for a person.</summary>
     public static string Display(string provider) => provider switch
@@ -53,6 +62,7 @@ public static class ExecutionProviders
         Cuda => "CUDA",
         DirectMl => "DirectML",
         OpenVino => "OpenVINO",
+        WebGpu => "WebGPU",
         _ => provider,
     };
 }
