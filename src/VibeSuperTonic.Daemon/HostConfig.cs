@@ -370,7 +370,7 @@ public sealed class HostConfig
                 MinChunkChars: Settings.MinChunkChars,
                 StretchFactor: stretch,
                 VolumeScale: SpeechRate.VolumeScale(Settings.VolumeTrimDb),
-                InterChunkSilenceMs: Math.Max(0, Settings.InterChunkSilenceMs));
+                InterChunkSilenceMs: ClampSilence(Settings.InterChunkSilenceMs));
 
             Notes = notes;
             _settingsMtime = s;
@@ -481,6 +481,17 @@ public sealed class HostConfig
     }
 
     /// <summary>
+    /// Ceiling on <c>InterChunkSilenceMs</c>. The Windows control stops at 500;
+    /// ten seconds is far past any pause anyone means, and a typo of 50000 is
+    /// otherwise a 50-second silence between every pair of sentences — which
+    /// reads as the daemon hanging. The session computes the gap in long so a
+    /// larger value is no longer an overflow, but it is still never a request.
+    /// </summary>
+    public const int MaxInterChunkSilenceMs = 10_000;
+
+    private static int ClampSilence(int ms) => Math.Clamp(ms, 0, MaxInterChunkSilenceMs);
+
+    /// <summary>
     /// The session options for one voice — chunking, volume and gaps — resolved
     /// through the same scope rules, with that voice's own stretch factor.
     /// </summary>
@@ -496,7 +507,7 @@ public sealed class HostConfig
             MinChunkChars = s.MinChunkChars,
             StretchFactor = stretch,
             VolumeScale = SpeechRate.VolumeScale(s.VolumeTrimDb),
-            InterChunkSilenceMs = Math.Max(0, s.InterChunkSilenceMs),
+            InterChunkSilenceMs = ClampSilence(s.InterChunkSilenceMs),
         };
     }
 

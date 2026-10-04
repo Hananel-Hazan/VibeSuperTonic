@@ -89,6 +89,24 @@ public sealed class SpeechSession : IDisposable
     private readonly IAudioSink _sink;
     private readonly object _gate = new();
 
+    // Two more locks, each closing a window between a state check under _gate
+    // and an action taken after it. Both were reported, both were driven in
+    // SpeechSessionStressTests, and both failed there every run before these.
+    //
+    // _emitGate orders STATE EVENTS. Emits happen outside _gate on purpose (see
+    // SetStateLocked), which left Stop() announcing Stopping on its own thread
+    // while the worker announced Idle on another — so subscribers could be told
+    // "stopping" about an utterance that had already ended, and the toggle gate
+    // acts on what it is told. Every state change now sets the state and
+    // announces it under this lock, so announcements arrive in the order the
+    // states were set. _gate itself is still never held across a subscriber.
+    // Lock order: _emitGate, then _gate; never the reverse.
+    //
+    // _flushGate makes a stop's flush request belong to the utterance it
+    // stopped. See Stop() for the race, and Run() for the other half.
+    private readonly object _emitGate = new();
+    private readonly object _flushGate = new();
+
     // Swappable, because config can change under a running daemon: Phase 4b's
     // `reload` re-reads settings.json and pronunciations.json and has to reach
     // the session without restarting it. Reference assignment, so a reader
@@ -218,30 +236,51 @@ public sealed class SpeechSession : IDisposable
             throw new ArgumentOutOfRangeException(nameof(startOffset));
 
         CancellationTokenSource cts;
-        lock (_gate)
+        lock (_emitGate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_state != SpeechState.Idle) return false;
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_state != SpeechState.Idle) return false;
 
-            _cts = cts = new CancellationTokenSource();
-            _state = SpeechState.Preparing;
+                _cts = cts = new CancellationTokenSource();
+                _state = SpeechState.Preparing;
+
+                // Under the same lock Pause() checks the state in. Outside it, a
+                // Pause that had found the PREVIOUS utterance speaking could
+                // reset the event after this set it, and the new utterance sat
+                // paused before making a sound, with nothing anywhere saying why.
+                _unpaused.Set();
+            }
+
+            // Set BEFORE the event, not after. A subscriber's natural reaction to
+            // Preparing is to ask what is being spoken, and with the assignment
+            // after the emit that question was answered with the PREVIOUS
+            // utterance's text — or null on the first one. The event now carries the
+            // text itself, which is the real fix, but the snapshot has to agree with
+            // it or a client that uses both sees two different answers for one
+            // utterance.
+            CurrentText = text;
+            LastText = text;
+            LastBoundary = null;
+
+            // Under _emitGate, so a Stop() racing this cannot announce Stopping
+            // before the Preparing it is stopping.
+            Emit(SessionEvent.Preparing(text, startOffset, notice));
         }
 
-        // Set BEFORE the event, not after. A subscriber's natural reaction to
-        // Preparing is to ask what is being spoken, and with the assignment
-        // after the emit that question was answered with the PREVIOUS
-        // utterance's text — or null on the first one. The event now carries the
-        // text itself, which is the real fix, but the snapshot has to agree with
-        // it or a client that uses both sees two different answers for one
-        // utterance.
-        CurrentText = text;
-        LastText = text;
-        LastBoundary = null;
-
-        Emit(SessionEvent.Preparing(text, startOffset, notice));
-
-        _unpaused.Set();
-        _worker = Task.Run(() => Run(text, startOffset, synthesisOptions, cts));
+        // A DEDICATED THREAD, not the pool. This task blocks for the whole
+        // utterance — paced by the device, seconds at a time — and so does the
+        // renderer it starts, which is the textbook case for LongRunning. On the
+        // pool, the renderer was queued from this worker onto its thread's LOCAL
+        // queue, and the worker then blocked waiting for it: unless another pool
+        // thread happened to be idle to steal it, the first word waited for the
+        // pool's starvation injection, about a second. CI measured 971 ms for one
+        // short sentence against a no-op sink; a busy daemon pays the same second
+        // between a keypress and speech. One thread start per utterance costs
+        // tens of microseconds. See SpeechSessionStressTests, pool starvation.
+        _worker = Task.Factory.StartNew(() => Run(text, startOffset, synthesisOptions, cts),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         return true;
     }
 
@@ -253,28 +292,70 @@ public sealed class SpeechSession : IDisposable
     public void Stop()
     {
         CancellationTokenSource? cts;
-        lock (_gate)
+        lock (_emitGate)
         {
-            if (_state is SpeechState.Idle or SpeechState.Stopping) return;
-            cts = _cts;
-            _state = SpeechState.Stopping;
+            lock (_gate)
+            {
+                if (_state is SpeechState.Idle or SpeechState.Stopping) return;
+                cts = _cts;
+                _state = SpeechState.Stopping;
+            }
+            // The worker cannot announce Idle until this has been delivered, so
+            // no subscriber hears Stopping after the end of the utterance.
+            Emit(SessionEvent.Of(SpeechState.Stopping));
         }
-        Emit(SessionEvent.Of(SpeechState.Stopping));
 
-        // Order matters. Cancel first so the renderer stops producing work that
-        // is about to be thrown away, then release the writer — which may be
-        // blocked inside the sink and will only notice between blocks.
-        try { cts?.Cancel(); } catch (ObjectDisposedException) { /* raced with completion */ }
-        _unpaused.Set();                 // a paused writer must wake to see the flush
-        try { _sink.RequestFlush(); } catch { /* the worker's teardown covers it */ }
+        // THE FLUSH MUST BELONG TO THE UTTERANCE THAT WAS STOPPED. Everything
+        // below used to run unconditionally, after the lock and after a
+        // subscriber callback of arbitrary length — long enough for the
+        // utterance to finish on its own (nothing had cancelled it yet), the
+        // session to go Idle, and the next one to start and do the initial
+        // Flush in Run(). The stale request then landed on the new utterance,
+        // its first write threw, and it died silently with "should not be
+        // reachable" in the log: the stale-flush defect, by a third route.
+        //
+        // So: only if _cts is still the one this call captured — checked and
+        // acted on under _flushGate, which Run() also holds for its initial
+        // Flush. If the check passes the next utterance has not started, and its
+        // Flush will wait for this request and clear it; if it fails, there is
+        // nothing of ours left to stop. Not under _gate: RequestFlush is a call
+        // into the sink, and holding the state lock across it would let a slow
+        // sink block every State read and the worker's own teardown.
+        lock (_flushGate)
+        {
+            lock (_gate) { if (cts is null || !ReferenceEquals(_cts, cts)) return; }
+
+            // Order matters. Cancel first so the renderer stops producing work that
+            // is about to be thrown away, then release the writer — which may be
+            // blocked inside the sink and will only notice between blocks.
+            try { cts.Cancel(); } catch (ObjectDisposedException) { /* raced with completion */ }
+            _unpaused.Set();                 // a paused writer must wake to see the flush
+            try { _sink.RequestFlush(); } catch { /* the worker's teardown covers it */ }
+        }
     }
 
     /// <summary>Stop feeding the device. Buffered audio plays out, then silence.</summary>
     public void Pause()
     {
-        lock (_gate) { if (_state != SpeechState.Speaking) return; }
-        _unpaused.Reset();
+        // Check and reset under one lock. Reset after releasing it was a pause
+        // that found utterance A speaking and then — if it lost the CPU while A
+        // was stopped and B started — reset the event B's Speak had just set.
+        lock (_gate)
+        {
+            if (_state != SpeechState.Speaking) return;
+            AfterPauseCheck?.Invoke();
+            _unpaused.Reset();
+        }
     }
+
+    /// <summary>
+    /// Test seam: runs inside <see cref="Pause"/> between its state check and
+    /// the reset, which is where a preempted pause used to let the next
+    /// utterance through. Public because Core grants no InternalsVisibleTo (see
+    /// its csproj). Never set outside tests.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public Action? AfterPauseCheck { get; set; }
 
     public void Resume() => _unpaused.Set();
 
@@ -378,7 +459,15 @@ public sealed class SpeechSession : IDisposable
         // how any two threads happened to interleave. Flush is the right verb
         // rather than a new one: dropping whatever the device still holds from a
         // previous utterance is also correct, and after a stop it is required.
-        try { _sink.Flush(); } catch { /* not open yet, or going away; either way there is nothing held */ }
+        //
+        // Under _flushGate, which is what lets Stop() make the same promise from
+        // its side: a stop checks it still owns an utterance and requests its
+        // flush atomically with respect to this, so a request either lands
+        // before this Flush (and is cleared by it) or is never made.
+        lock (_flushGate)
+        {
+            try { _sink.Flush(); } catch { /* not open yet, or going away; either way there is nothing held */ }
+        }
 
         // Bounded at one so the renderer stays exactly one chunk ahead. Deeper
         // buys nothing — the device is the bottleneck, and every extra rendered
@@ -419,7 +508,9 @@ public sealed class SpeechSession : IDisposable
             // report a clean Finished for an utterance nobody heard.
             Exception? renderError = null;
 
-            renderTask = Task.Run(() =>
+            // LongRunning for the reason given where the worker is started: it
+            // blocks in Synthesize and in Add for the life of the utterance.
+            renderTask = Task.Factory.StartNew(() =>
             {
                 try
                 {
@@ -463,19 +554,30 @@ public sealed class SpeechSession : IDisposable
                 }
                 catch (Exception ex) { renderError = ex; }
                 finally { rendered.CompleteAdding(); }
-            }, token);
+            }, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             long streamFrame = 0;
-            int blockFrames = Math.Max(1, _sink.SampleRate * options.WriteBlockMs / 1000);
+            // In long: SampleRate * ms in int wraps past ~48 s at 44.1 kHz, and
+            // the Math.Max(1, ...) that followed turned the negative result into
+            // a ONE-SAMPLE gap — a long pause setting that produced no pause.
+            int blockFrames = (int)Math.Clamp((long)_sink.SampleRate * options.WriteBlockMs / 1000, 1, 1 << 20);
             var planned = new List<BoundaryEvent>();
 
-            // Allocated once and never written to. Reused for every gap: it is
-            // read-only to the sink, and a fresh array per chunk boundary would
-            // be ~18 KB of garbage per sentence at the shipped 200 ms for no
-            // reason at all.
-            short[]? gap = options.InterChunkSilenceMs > 0
-                ? new short[Math.Max(1, _sink.SampleRate * options.InterChunkSilenceMs / 1000)]
-                : null;
+            long gapFrames = options.InterChunkSilenceMs > 0
+                ? Math.Max(1, (long)_sink.SampleRate * options.InterChunkSilenceMs / 1000)
+                : 0;
+
+            // One block of zeros, allocated once and never written to, written
+            // as many times as the gap needs. Read-only to the sink; and sized
+            // by the block rather than the gap, so no setting can make the gap
+            // an allocation — 50 s was 4 MB, and int.MaxValue ms would not fit.
+            short[]? silence = gapFrames > 0 ? new short[(int)Math.Min(blockFrames, gapFrames)] : null;
+
+            void WriteSilence(long frames)
+            {
+                for (long left = frames; left > 0; left -= silence!.Length)
+                    WriteFrames(left >= silence.Length ? silence : silence[..(int)left]);
+            }
 
             // Chunk audio and inter-chunk silence both go through here, which is
             // the point: the gap is then paced by the device, interrupted by a
@@ -500,9 +602,16 @@ public sealed class SpeechSession : IDisposable
                         // heard" — that is the clock's business — but it is the
                         // moment the session stops being able to fail silently,
                         // and the moment the tray should stop blinking.
+                        //
+                        // Only FROM Preparing. A stop that landed during
+                        // Preparing has set Stopping and not yet cancelled, and
+                        // this write used to overwrite it with Speaking — so the
+                        // cancel then arrived at an utterance whose state said
+                        // nobody had asked, and an ordinary stop was logged as
+                        // the "should not be reachable" error below.
                         started = true;
-                        SetStateLocked(SpeechState.Speaking);
-                        Emit(SessionEvent.Of(SessionEventKind.Started));
+                        if (PromoteToSpeaking())
+                            Emit(SessionEvent.Of(SessionEventKind.Started));
                     }
 
                     if (clock.Update(_sink.LatencyUsec))
@@ -553,10 +662,10 @@ public sealed class SpeechSession : IDisposable
                 // Not after the last chunk: that is trailing silence before the
                 // drain, which delays Finished to no end. Windows guards the same
                 // way — it writes the gap only when another chunk follows.
-                if (gap is not null && index + 1 < chunks.Count)
+                if (gapFrames > 0 && index + 1 < chunks.Count)
                 {
-                    streamFrame += gap.Length;
-                    WriteFrames(gap);
+                    streamFrame += gapFrames;
+                    WriteSilence(gapFrames);
                 }
             }
 
@@ -674,12 +783,32 @@ public sealed class SpeechSession : IDisposable
     /// </summary>
     private void SetStateLocked(SpeechState state)
     {
-        lock (_gate)
+        // _emitGate (not _gate) is held across the emit: it orders this
+        // announcement against Stop's and Speak's without blocking State readers.
+        lock (_emitGate)
         {
-            if (_state == state) return;
-            _state = state;
+            lock (_gate)
+            {
+                if (_state == state) return;
+                _state = state;
+            }
+            Emit(SessionEvent.Of(state));
         }
-        Emit(SessionEvent.Of(state));
+    }
+
+    /// <summary>Preparing to Speaking, and nothing else to Speaking — see the write loop.</summary>
+    private bool PromoteToSpeaking()
+    {
+        lock (_emitGate)
+        {
+            lock (_gate)
+            {
+                if (_state != SpeechState.Preparing) return false;
+                _state = SpeechState.Speaking;
+            }
+            Emit(SessionEvent.Of(SpeechState.Speaking));
+            return true;
+        }
     }
 
     private void Emit(SessionEvent e)
