@@ -47,6 +47,15 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
     private ISynthesizer _current;
     private ExecutionDecision _decision;
 
+    /// <summary>
+    /// The inter-op thread count the CURRENT session was built with. Held so a
+    /// change to <c>OnnxInterOpThreads</c> in settings.json rebuilds the session
+    /// between utterances, the same way a new provider or thread decision does —
+    /// ORT fixes it at construction, and a setting that silently waited for a
+    /// daemon restart would look broken.
+    /// </summary>
+    private int _builtInterOp;
+
     private BenchmarkProfile? _profile;
     private long _profileMtime = long.MinValue;
 
@@ -107,6 +116,7 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         _config = config;
         _decision = initial;
         _current = first;
+        _builtInterOp = WantedInterOp;
         _build = build;
         _gpuUnavailable = gpuUnavailable;
         _sessionIdle = sessionIdle;
@@ -120,6 +130,28 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
     {
         get { lock (_gate) return _decision; }
     }
+
+    /// <summary>The inter-op thread count the current session runs with, for <c>diagnostics</c>.</summary>
+    public int InterOpThreads
+    {
+        get { lock (_gate) return _builtInterOp; }
+    }
+
+    /// <summary>What settings.json asks for now, as ORT should be given it.</summary>
+    private int WantedInterOp => CpuBudget.InterOpThreads(_config.Settings.OnnxInterOpThreads);
+
+    /// <summary>
+    /// Whether the session in force differs from the one now wanted in any way
+    /// that needs it rebuilt. The provider and the intra-op thread count were the
+    /// whole answer until inter-op became a setting; it is a function so that
+    /// "one more reason to rebuild" is a line in a test rather than a condition
+    /// copied into three places.
+    /// </summary>
+    internal static bool NeedsRebuild(
+        ExecutionDecision current, ExecutionDecision next, int builtInterOp, int wantedInterOp) =>
+        next.Provider != current.Provider
+        || next.Threads != current.Threads
+        || wantedInterOp != builtInterOp;
 
     /// <summary>
     /// The providers a sweep should include beyond the CPU. Empty on the ordinary
@@ -144,7 +176,8 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         lock (_gate)
         {
             var next = Decide();
-            if (next.Provider == _decision.Provider && next.Threads == _decision.Threads)
+            int interOp = WantedInterOp;
+            if (!NeedsRebuild(_decision, next, _builtInterOp, interOp))
             {
                 // The reason can move while the answer does not — "on battery"
                 // becoming "on battery, benchmark 2026-08-24" after a sweep. Keep
@@ -168,7 +201,7 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
                 // Ask again with the GPU now known-unavailable, so the decision
                 // and the sentence it carries agree with what actually happened.
                 var fallback = Decide();
-                if (fallback.Provider == _decision.Provider && fallback.Threads == _decision.Threads)
+                if (!NeedsRebuild(_decision, fallback, _builtInterOp, interOp))
                 {
                     _decision = fallback;
                     return false;
@@ -199,6 +232,7 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
             var old = _current;
             _current = built;
             _decision = next;
+            _builtInterOp = interOp;
 
             // After the swap: the old session has no callers left — the session is
             // idle and every render goes through _current — and disposing it is
@@ -593,6 +627,7 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
             var old = _current;
             _current = built;
             _decision = next;
+            _builtInterOp = WantedInterOp;
 
             // Off the gate: tearing down a session on a wedged GPU can block, and
             // this one is by definition on a GPU that has just failed.

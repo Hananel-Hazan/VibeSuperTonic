@@ -7,6 +7,7 @@ using System.Text;
 using VibeSuperTonic.Core.Export;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Core.Telemetry;
 
 // vst-ctl — the stateless client. Connect, write one line, exit.
 //
@@ -19,6 +20,7 @@ using VibeSuperTonic.Core.Synthesis;
 //   vst-ctl subscribe           stream events until interrupted
 //   vst-ctl reload              re-read settings.json and pronunciations.json
 //   vst-ctl config              where config was read from, and what it made of it
+//   vst-ctl diagnostics         RTF, latency, underruns, memory, last error (--json for one line)
 //   vst-ctl benchmark           measure this machine and record its thread count
 //   vst-ctl render "text"       synthesise to a WAV on stdout, playing nothing
 //   vst-ctl render "text" --out f.mp3   export a file (wav; mp3, aac, flac via ffmpeg)
@@ -87,6 +89,13 @@ if (args.Contains("--version"))
 }
 
 bool noStart = args.Contains("--no-start");
+
+// `diagnostics` only. --json prints the snapshot as one line for jq (the default
+// is a table for a person); --text asks the daemon to include a truncated snippet
+// of the words being read, which is OFF otherwise because this output is what
+// people paste into bug reports.
+bool asJson = args.Contains("--json");
+bool withText = args.Contains("--text");
 bool force = args.Contains("--force");
 
 // Trap 7: the voices are a SECOND licence axis, separate from the engine's, and
@@ -273,6 +282,9 @@ var request = new Request
     Verb = verb,
     Text = verb == RequestVerb.Seek
         ? null
+        // The only meaning diagnostics gives its text field; see Protocol.DiagnosticsSnippet.
+        : verb == RequestVerb.Diagnostics
+            ? (withText ? Protocol.DiagnosticsSnippet : null)
         : positional.Length > 1 ? string.Join(' ', positional.Skip(1)) : null,
 
     Offset = seekOffset,
@@ -334,6 +346,15 @@ string path = Protocol.SocketPath();
 Socket? socket = Connect(path);
 if (socket is null)
 {
+    // Asking a daemon how it is doing is not a reason to start one: the model
+    // load would be the first thing it reported, and "nothing is running" is the
+    // useful answer. Exit 1 so a script can tell.
+    if (verb == RequestVerb.Diagnostics)
+    {
+        Console.Error.WriteLine($"no daemon listening on {path}");
+        return 1;
+    }
+
     // Starting a daemon in order to stop it is absurd, and "there is no daemon"
     // is the state the caller asked for — so this is a success, not an error.
     // Reporting it as a failure would make `benchmark && shutdown` fail on the
@@ -435,6 +456,19 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
         return 0;
     }
 
+    if (verb == RequestVerb.Diagnostics)
+    {
+        if (response.Diagnostics is not { } diagnostics)
+        {
+            Console.Error.WriteLine("the daemon answered without diagnostics — is it an older build?");
+            return 1;
+        }
+
+        if (asJson) Console.WriteLine(Protocol.Encode(diagnostics));
+        else Console.Write(DiagnosticsFormat.Text(diagnostics, DateTime.UtcNow));
+        return 0;
+    }
+
     if (verb == RequestVerb.Reload)
     {
         Console.Error.WriteLine("reloaded");
@@ -522,6 +556,8 @@ static void PrintUsage() =>
           subscribe    print the event stream until interrupted
           reload       re-read settings.json and pronunciations.json
           config       print the effective configuration and its paths
+          diagnostics  what the daemon has measured: RTF, pipeline latency,
+                       underruns, memory, last error. A table; --json for one line
           benchmark    measure this machine's best thread count and record it
           voices       list installed voices and what the catalog offers
           voice install ID   download a catalog voice and calibrate it
@@ -543,6 +579,9 @@ static void PrintUsage() =>
           --format F   `render --out` only: wav, mp3, aac or flac. Defaults to the
                        file's extension, then WAV. mp3/aac/flac are encoded by the
                        system's ffmpeg; without one the command says how to get it.
+          --json       `diagnostics` as one JSON line instead of a table
+          --text       `diagnostics` includes a truncated snippet of the text being
+                       read. Off by default: this is what gets pasted into reports
           --no-start   fail instead of starting a daemon that is not running
           --force      benchmark even on a busy machine (the result is worth less);
                        also removes a voice that is the configured default

@@ -177,6 +177,16 @@ public sealed class SpeechSession : IDisposable
     /// </summary>
     public BoundaryEvent? LastBoundary { get; private set; }
 
+    private int _underruns;
+
+    /// <summary>
+    /// Times the renderer failed to keep ahead of the device since this session
+    /// was built — see <see cref="UnderrunPolicy"/> for what is counted. Reported
+    /// by the daemon's <c>diagnostics</c> verb; a non-zero number that keeps
+    /// growing means inference is slower than real time on this machine.
+    /// </summary>
+    public int UnderrunCount => Volatile.Read(ref _underruns);
+
     /// <summary>
     /// Start speaking <paramref name="text"/>, optionally from part way in.
     /// </summary>
@@ -500,8 +510,25 @@ public sealed class SpeechSession : IDisposable
                 }
             }
 
-            foreach (var (index, pcm) in rendered.GetConsumingEnumerable(token))
+            int taken = 0;
+            while (true)
             {
+                // WHAT AN UNDERRUN IS HERE: the device ran out of audio while this
+                // loop waited for the renderer. Measured around the one blocking
+                // call, against what the device still held when the wait began —
+                // see UnderrunPolicy. The first chunk is exempt: waiting for it
+                // is the pipeline's start-up latency, not a gap in anything heard.
+                // (Equivalent to the foreach over GetConsumingEnumerable this
+                // replaced: TryTake with an infinite timeout returns false only
+                // when adding is complete and the queue is empty.)
+                double bufferedMs = taken > 0 ? _sink.LatencyUsec / 1000.0 : 0;
+                long waitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (!rendered.TryTake(out var item, Timeout.Infinite, token)) break;
+                if (taken++ > 0 && UnderrunPolicy.IsUnderrun(
+                        System.Diagnostics.Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds, bufferedMs))
+                    Interlocked.Increment(ref _underruns);
+
+                var (index, pcm) = item;
                 planned.Clear();
                 BoundaryPlanner.PlanChunk(
                     planned, chunks[index].Text,

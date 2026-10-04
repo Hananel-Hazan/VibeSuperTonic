@@ -5,6 +5,7 @@ using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Core.Telemetry;
 using VibeSuperTonic.Daemon.Interop;
 
 namespace VibeSuperTonic.Daemon;
@@ -58,6 +59,16 @@ public sealed partial class DaemonServer : IDisposable
     /// answer "nothing moved" no matter what.</para>
     /// </summary>
     private readonly VibeSuperTonic.Core.Install.InstallCheck? _installCheck;
+
+    /// <summary>
+    /// What this daemon has measured about its own speech, for
+    /// <see cref="RequestVerb.Diagnostics"/>. Fed from the session's events here
+    /// and from the render path by <see cref="DiagnosticSynthesizer"/>; never null,
+    /// so a test that builds a server without one still gets an honest, empty
+    /// answer rather than a NullReferenceException.
+    /// </summary>
+    private readonly DiagnosticsTracker _diagnostics;
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
 
     /// <summary>
     /// What is in force right now — asked of the switch rather than remembered,
@@ -122,8 +133,10 @@ public sealed partial class DaemonServer : IDisposable
         Func<int, string, ISynthesizer>? synthesizerFor = null,
         ProviderSwitchingSynthesizer? providerSwitch = null,
         EngineRoutingSynthesizer? engines = null,
-        VibeSuperTonic.Core.Install.InstallCheck? installCheck = null)
+        VibeSuperTonic.Core.Install.InstallCheck? installCheck = null,
+        DiagnosticsTracker? diagnostics = null)
     {
+        _diagnostics = diagnostics ?? new DiagnosticsTracker();
         _options = options;
         _config = config;
         _synth = synth;
@@ -672,6 +685,14 @@ public sealed partial class DaemonServer : IDisposable
                 RefreshConfig(force: false);
                 return new Response { Ok = true, Config = ConfigSnapshot() };
 
+            case RequestVerb.Diagnostics:
+                return new Response
+                {
+                    Ok = true,
+                    Diagnostics = DiagnosticsSnapshot(
+                        includeSnippet: request.Text == Protocol.DiagnosticsSnippet),
+                };
+
             case RequestVerb.Voices:
                 return Voices();
 
@@ -1132,6 +1153,73 @@ public sealed partial class DaemonServer : IDisposable
     private static string Describe(int threads) =>
         threads == CpuBudget.Auto ? "auto threads" : $"{threads} threads";
 
+    private long _lastCpuTicks;
+    private long _lastCpuWallMs;
+    private readonly object _cpuGate = new();
+
+    /// <summary>
+    /// The Windows engine's session snapshot, answered live: the tracker's half
+    /// (renders, latency, errors, text) with the process's half (memory, CPU,
+    /// provider, threads, underruns) added at the moment somebody asks.
+    ///
+    /// <para>Nothing here loads a model or touches the audio device — it is read
+    /// on a timer by an open window, and a probe that woke the GPU every second
+    /// would be the thing it was meant to diagnose.</para>
+    /// </summary>
+    private SessionSnapshot DiagnosticsSnapshot(bool includeSnippet)
+    {
+        var snap = _diagnostics.Snapshot(includeSnippet);
+        var decision = Execution;
+
+        snap.SchemaVersion = 1;
+        snap.Pid = Environment.ProcessId;
+        snap.ProcessName = "vibesupertonicd";
+        snap.VoiceId = EffectiveVoice;
+        snap.UnderrunCount = _session.UnderrunCount;
+        snap.UptimeSec = Math.Round((DateTime.UtcNow - _startedUtc).TotalSeconds, 1);
+        snap.Provider = _switch is null ? "" : decision.Provider;
+        snap.OnnxThreads = _switch is null ? 0 : decision.Threads;
+        snap.OnnxInterOpThreads = _switch?.InterOpThreads ?? 0;
+        snap.ProfileApplied = decision.FromProfile;
+
+        // The settings the NEXT utterance will speak with, resolved through the
+        // voice's own scope so a per-voice step count is what is reported.
+        var plan = _config.Utterance(null, null);
+        if (plan.Synthesis is SupertonicOptions st)
+        {
+            snap.TotalStep = st.TotalStep;
+            snap.EngineSpeed = st.Speed;
+        }
+        snap.DspRate = (float)plan.StretchFactor;
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            snap.EngineRssMb = Math.Round(process.WorkingSet64 / (1024.0 * 1024.0), 1);
+
+            // CPU share since the previous call, as the Windows writer does per
+            // tick. The first call after start has no previous sample and reports
+            // 0, which the window renders as "not yet" rather than as idle.
+            long nowMs = Environment.TickCount64;
+            long cpuTicks = process.TotalProcessorTime.Ticks;
+            lock (_cpuGate)
+            {
+                long wall = nowMs - _lastCpuWallMs;
+                if (_lastCpuWallMs != 0 && wall > 0)
+                    snap.EngineCpuPct = Math.Round(
+                        TimeSpan.FromTicks(cpuTicks - _lastCpuTicks).TotalMilliseconds / wall * 100.0, 1);
+                _lastCpuTicks = cpuTicks;
+                _lastCpuWallMs = nowMs;
+            }
+        }
+        catch
+        {
+            // A /proc that cannot be read is a blank row, not a failed verb.
+        }
+
+        return snap;
+    }
+
     private StatusPayload Snapshot()
     {
         var at = _session.LastBoundary;
@@ -1407,6 +1495,7 @@ public sealed partial class DaemonServer : IDisposable
     {
         lock (_gateLock) _gate.NoteState(_session.State);
         Log($"refused: {message}");
+        _diagnostics.RecordError($"refused: {message}");
         return Response.Fail(message);
     }
 
@@ -1463,7 +1552,25 @@ public sealed partial class DaemonServer : IDisposable
         // an empty room. The dead-stream defect survived exactly that long
         // because of this.
         if (e.Kind == SessionEventKind.Error)
+        {
             Log($"utterance failed: {e.Message}");
+            _diagnostics.RecordError(e.Message);
+        }
+
+        // The diagnostics tracker follows the same events a window does. Cheap and
+        // lock-light: this runs on the audio thread (see the note on Emitted).
+        switch (e.Kind)
+        {
+            case SessionEventKind.StateChanged when e.State == SpeechState.Preparing:
+                _diagnostics.UtteranceStarting(e.Text);
+                break;
+            case SessionEventKind.Started:
+                _diagnostics.FirstAudio();
+                break;
+            case SessionEventKind.Finished or SessionEventKind.Stopped:
+                _diagnostics.UtteranceEnded();
+                break;
+        }
 
         if (_subscribers.IsEmpty) return;
 

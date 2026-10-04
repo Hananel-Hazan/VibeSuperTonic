@@ -38,7 +38,8 @@ internal static class Ui
 /// <summary>
 /// What this daemon is, where it read its configuration, and what it made of it.
 /// Monitor folded into here: there is one daemon, and "which host is speaking"
-/// stopped being a question when the N SAPI hosts went away.
+/// stopped being a question when the N SAPI hosts went away. Its live numbers are
+/// the <see cref="DiagnosticsPanel"/> at the bottom.
 /// </summary>
 public sealed class StatusTab : UserControl
 {
@@ -54,7 +55,7 @@ public sealed class StatusTab : UserControl
         var refresh = new Button { Content = "Refresh", HorizontalAlignment = HorizontalAlignment.Left };
         refresh.Click += async (_, _) => await RefreshAsync();
 
-        Content = new ScrollViewer { Content = Ui.Page(refresh, _body) };
+        Content = new ScrollViewer { Content = Ui.Page(refresh, _body, new Separator(), new DiagnosticsPanel(client)) };
 
         AttachedToVisualTree += async (_, _) => await RefreshAsync();
     }

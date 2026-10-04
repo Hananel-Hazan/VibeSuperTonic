@@ -84,4 +84,24 @@ public static class CpuBudget
         // wins, because a thread count above the core count helps no one.
         return Math.Clamp(threads, Math.Min(2, processorCount), processorCount);
     }
+
+    /// <summary>What ORT is given when nothing is set, and what the Windows engine has always used.</summary>
+    public const int DefaultInterOp = 1;
+
+    /// <summary>The ceiling the Windows Advanced tab allows. Past it is scheduler overhead and nothing else.</summary>
+    public const int MaxInterOp = 16;
+
+    /// <summary>
+    /// The inter-op thread count to build a session with, from the
+    /// <c>OnnxInterOpThreads</c> setting.
+    ///
+    /// <para>Inter-op is how many ORT <em>operators</em> may run at once; the
+    /// pipeline runs one model at a time, so 1 is right for nearly everyone and
+    /// the setting exists for parity with the Windows Advanced tab. A missing,
+    /// zero or negative value is "never edited" and means the default — never
+    /// "no threads" — and a hand-edited 400 is held to the ceiling, because
+    /// ORT would create that many threads without complaint.</para>
+    /// </summary>
+    public static int InterOpThreads(int setting) =>
+        setting < 1 ? DefaultInterOp : Math.Min(setting, MaxInterOp);
 }

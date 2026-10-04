@@ -109,6 +109,18 @@ public sealed class TuneTab : UserControl
     private readonly Button _clearScope = new() { Content = "Clear these overrides" };
     private readonly TextBlock _scopeNote = Ui.Label("");
 
+    /// <summary>
+    /// Reset to defaults, for the scope on screen — never "everything". Asks first,
+    /// inline, because this window has no modal dialog and a second window for a
+    /// yes/no is more machinery than the question deserves; the confirmation says
+    /// exactly what will go, which comes from <see cref="SettingsReset.Describe"/>.
+    /// </summary>
+    private readonly Button _reset = new() { Content = "Reset to defaults…" };
+    private readonly TextBlock _resetQuestion = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 640 };
+    private readonly Button _resetYes = new() { Content = "Yes, reset" };
+    private readonly Button _resetNo = new() { Content = "Cancel" };
+    private readonly StackPanel _resetConfirm = new() { Spacing = 8, IsVisible = false };
+
     private readonly Button _test = new() { Content = "Save & test" };
     private readonly Button _stop = new() { Content = "Stop" };
 
@@ -129,11 +141,24 @@ public sealed class TuneTab : UserControl
         ("TotalStep", "Model steps", "8 by default. Fewer is faster and rougher."),
         ("EngineSpeed", "Engine speed", "1.05 by default. The model's own rate."),
         ("DspRate", "Playback rate", "1.0 by default. Time-stretch after synthesis, up to 2.0."),
+        ("RateClampCeiling", "Rate clamp ceiling",
+            "1.3 by default, 1.10 to 1.50. The fastest the Supertonic model itself is asked to speak; "
+            + "the rest of a fast rate is done by time-stretch instead. Above about 1.34 the model starts "
+            + "dropping syllables. Piper voices do not use it."),
         ("VolumeTrimDb", "Volume trim (dB)", "0 by default."),
         ("MaxChunkChars", "Chunk maximum (characters)", "200 by default."),
         ("MinChunkChars", "Chunk minimum (characters)", "100 by default."),
         ("InterChunkSilenceMs", "Silence between chunks (ms)", "200 by default. Moves sentence boundary timing."),
+        ("SynthesisSilenceSec", "Silence inside a chunk (s)",
+            "0.3 by default, 0 to 1. Silence the engine puts between the pieces it splits one chunk into "
+            + "(for Piper, between sentences) — not the gap between chunks, which is the setting above."),
         ("MaxCpuPercent", "CPU share (%)", "20 by default. Applies on the next start, not this one — and a benchmark beats it."),
+        ("OnnxInterOpThreads", "ONNX inter-op threads",
+            "1 by default, 1 to 16, for this machine whichever scope is showing. Threads ORT uses across "
+            + "operators; one model runs at a time, so 1 is right for almost everyone and raising it only "
+            + "adds scheduler overhead. Not the CPU share above, which sizes the threads inside an operator. "
+            + "Supertonic rebuilds its session (about a second) before the next utterance; a Piper voice "
+            + "that is already loaded keeps its own until the daemon restarts."),
     ];
 
     public TuneTab(DaemonClient client)
@@ -226,6 +251,25 @@ public sealed class TuneTab : UserControl
         grid.Children.Add(_clipboardFallback);
         grid.Children.Add(_gpuOnBattery);
 
+        _resetConfirm.Children.Add(_resetQuestion);
+        _resetConfirm.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { _resetYes, _resetNo },
+        });
+        _reset.Click += (_, _) =>
+        {
+            var (engine, voiceKey) = ScopeNames();
+            _resetQuestion.Text = SettingsReset.Describe(
+                ScopeKind(),
+                engine == "piper" ? "Piper" : "Supertonic",
+                ShortVoiceName(voiceKey));
+            _resetConfirm.IsVisible = true;
+        };
+        _resetNo.Click += (_, _) => _resetConfirm.IsVisible = false;
+        _resetYes.Click += async (_, _) => await ResetAsync();
+
         var save = new Button { Content = "Save", HorizontalAlignment = HorizontalAlignment.Left };
         save.Click += async (_, _) => await SaveAsync();
 
@@ -256,8 +300,9 @@ public sealed class TuneTab : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 8,
-                    Children = { save, revert },
+                    Children = { save, revert, _reset },
                 },
+                _resetConfirm,
                 _status,
                 new Separator(),
                 _inForce,
@@ -340,6 +385,12 @@ public sealed class TuneTab : UserControl
         _fields["MaxChunkChars"].Watermark = c.MaxChunkChars.ToString(CultureInfo.InvariantCulture);
         _fields["MinChunkChars"].Watermark = c.MinChunkChars.ToString(CultureInfo.InvariantCulture);
         _fields["InterChunkSilenceMs"].Watermark = c.InterChunkSilenceMs.ToString(CultureInfo.InvariantCulture);
+
+        // Not in `config`, so these show the built-in defaults — the same ones
+        // LinuxSettings holds. Blank still means "not set in the file".
+        _fields["RateClampCeiling"].Watermark = "1.3";
+        _fields["SynthesisSilenceSec"].Watermark = "0.3";
+        _fields["OnnxInterOpThreads"].Watermark = "1";
 
         _clipboardFallback.IsChecked = root.Bool("ClipboardFallback") ?? false;
         _gpuOnBattery.IsChecked = root.Bool("GpuOnBattery") ?? false;
@@ -516,6 +567,10 @@ public sealed class TuneTab : UserControl
     {
         if (_file is null) return;
 
+        // A pending "reset?" names the scope it was asked in; a different scope
+        // must ask again rather than inherit a yes meant for another.
+        _resetConfirm.IsVisible = false;
+
         var (engine, voiceKey) = ScopeNames();
         var kind = ScopeKind();
 
@@ -592,6 +647,40 @@ public sealed class TuneTab : UserControl
         await RefreshAsync();
     }
 
+    /// <summary>
+    /// Carry out the reset the confirmation described. Re-reads the file first, for
+    /// the same reason Save does, and discards unsaved edits afterwards: the boxes
+    /// must show what is now on disk, and "reset" with a typed-but-unsaved value
+    /// surviving it would be the worst of both.
+    /// </summary>
+    private async Task ResetAsync()
+    {
+        _resetConfirm.IsVisible = false;
+        if (_settingsPath is null) { _status.Text = "nothing to reset."; return; }
+
+        var (engine, voiceKey) = ScopeNames();
+        var kind = ScopeKind();
+
+        JsonObject root;
+        try { root = SettingsFile.Read(_settingsPath); }
+        catch (Exception ex) { _status.Text = $"could not re-read the file: {ex.Message}"; return; }
+
+        var removed = SettingsReset.Apply(root, kind, engine, voiceKey);
+        if (removed.Count == 0)
+        {
+            _status.Text = "nothing was set in this scope, so there was nothing to reset.";
+            return;
+        }
+
+        try { SettingsFile.Write(_settingsPath, root); }
+        catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
+
+        _state.Discard();
+        await _client.SendAsync(new Request { Verb = RequestVerb.Reload });
+        await RefreshAsync();
+        _status.Text = $"reset to defaults: {string.Join(", ", removed)}.";
+    }
+
     private void RebuildSpeakers()
     {
         var rows = VoicePicker.Speakers(_installedVoices, Selected(_voice) ?? "");
@@ -649,6 +738,7 @@ public sealed class TuneTab : UserControl
 
         _fields["Language"].IsEnabled = !piper;
         _fields["TotalStep"].IsEnabled = !piper;
+        _fields["RateClampCeiling"].IsEnabled = !piper;
 
         var entry = _installedVoices.FirstOrDefault(v =>
             selected is not null
@@ -656,8 +746,9 @@ public sealed class TuneTab : UserControl
                == VibeSuperTonic.Core.Synthesis.VoiceId.Parse(selected).WithSpeaker(null).ToString());
 
         _engineNote.Text = piper
-            ? "Language and Model steps do not apply to a Piper voice: it is trained for one "
-              + "language, which is baked into its own config, and it has no diffusion steps."
+            ? "Language, Model steps and Rate clamp ceiling do not apply to a Piper voice: it is "
+              + "trained for one language, which is baked into its own config, it has no diffusion "
+              + "steps, and it takes its whole rate through length_scale rather than a clamped model speed."
               + (entry?.Calibrated == false
                   ? "  This voice has not been calibrated yet, so a requested rate is approximate "
                     + "until the daemon finishes measuring it."
@@ -723,6 +814,15 @@ public sealed class TuneTab : UserControl
             if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
             {
                 _status.Text = $"{label}: \"{raw}\" is not a number. Nothing was saved.";
+                return;
+            }
+
+            // The ranges the Windows Advanced tab's up-downs enforce. A text box
+            // cannot clamp, and a RateClampCeiling of 13 for 1.3 would save
+            // without complaint and then garble every utterance.
+            if (KnobRanges.Check(key, value) is { } problem)
+            {
+                _status.Text = $"{label}: {raw} {problem}. Nothing was saved.";
                 return;
             }
 
