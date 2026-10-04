@@ -32,10 +32,29 @@ public sealed class TextOffsetMap
     private readonly int[]? _origin;
     private readonly int _sourceLength;
 
-    private TextOffsetMap(int[]? origin, int sourceLength)
+    /// <summary>
+    /// What one-past-the-last rewritten index resolves to. The source length for
+    /// a map over a whole text; for a map over one CHUNK of a text, the end of
+    /// that chunk.
+    ///
+    /// <para>The distinction is not cosmetic. A span's length is measured as
+    /// <c>ToSource(end) − ToSource(start)</c>, and for a span ending at the
+    /// chunk's last character <c>end</c> is one past the end of the map. When
+    /// that clamped to the source length, the last word of every chunk but the
+    /// last, and every chunk's sentence boundary, selected everything from there
+    /// to the end of the utterance: measured, the last word of chunk 1 of an
+    /// 80-word run plus one short sentence reported 377 characters instead of
+    /// 6. "end + 1 of the last character" would fix that and break the other
+    /// case that matters — "kilograms" ending a chunk all resolves to the "k" of
+    /// "kg", so it would measure one character where the user typed two.</para>
+    /// </summary>
+    private readonly int _end;
+
+    private TextOffsetMap(int[]? origin, int sourceLength, int? end = null)
     {
         _origin = origin;
         _sourceLength = sourceLength < 0 ? 0 : sourceLength;
+        _end = end is { } e ? Math.Clamp(e, 0, _sourceLength) : _sourceLength;
     }
 
     /// <summary>Nothing was rewritten: index <c>i</c> came from index <c>i</c>.</summary>
@@ -47,6 +66,15 @@ public sealed class TextOffsetMap
     /// </summary>
     public static TextOffsetMap FromOrigins(int[] origins, int sourceLength) =>
         new(origins ?? throw new ArgumentNullException(nameof(origins)), sourceLength);
+
+    /// <summary>
+    /// Build a map over one span of a longer source text — a chunk.
+    /// <paramref name="end"/> is the source index one past the span's last
+    /// character, which is what an index one past the end of
+    /// <paramref name="origins"/> resolves to. See <see cref="_end"/>.
+    /// </summary>
+    public static TextOffsetMap FromOrigins(int[] origins, int sourceLength, int end) =>
+        new(origins ?? throw new ArgumentNullException(nameof(origins)), sourceLength, end);
 
     public bool IsIdentity => _origin is null;
 
@@ -62,7 +90,8 @@ public sealed class TextOffsetMap
     /// boundary landing anywhere inside "kilograms" highlights the "kg" the user
     /// actually wrote, which is the only answer that makes sense on screen.
     /// Out-of-range indices clamp, so a caller asking about one-past-the-end
-    /// (the normal way to measure a span) gets the source length rather than an
+    /// (the normal way to measure a span) gets the end of what this map covers —
+    /// the source length, or the chunk's end for a chunk map — rather than an
     /// exception.
     /// </summary>
     public int ToSource(int rewrittenIndex)
@@ -74,7 +103,7 @@ public sealed class TextOffsetMap
         // the one index every caller asks about first.
         if (rewrittenIndex < 0) rewrittenIndex = 0;
         if (_origin is null) return rewrittenIndex < _sourceLength ? rewrittenIndex : _sourceLength;
-        return rewrittenIndex < _origin.Length ? _origin[rewrittenIndex] : _sourceLength;
+        return rewrittenIndex < _origin.Length ? _origin[rewrittenIndex] : _end;
     }
 
     /// <summary>
@@ -108,6 +137,11 @@ public sealed class TextOffsetMap
         int n = first.RewrittenLength;
         var origins = new int[n];
         for (int i = 0; i < n; i++) origins[i] = second.ToSource(first.ToSource(i));
-        return new TextOffsetMap(origins, second._sourceLength);
+
+        // The end goes through both passes like every other index. Taking the
+        // second map's source length instead is the same bug one layer up: the
+        // engine composes chunk map with pipeline map, and the composed map is
+        // the one every boundary is measured against.
+        return new TextOffsetMap(origins, second._sourceLength, second.ToSource(first.ToSource(n)));
     }
 }

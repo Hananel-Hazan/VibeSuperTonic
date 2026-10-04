@@ -254,6 +254,26 @@ public class RenderWavTests
     }
 
     /// <summary>
+    /// A chunk of an odd number of bytes is half a sample. Written through, it
+    /// shifts every later sample by one byte, and 16-bit PCM read one byte out
+    /// of step is full-scale noise for the rest of the utterance — with exit 0.
+    /// </summary>
+    [Fact]
+    public void An_odd_length_chunk_fails_rather_than_misaligning_the_rest()
+    {
+        string odd = Protocol.Encode(new Response
+        {
+            Ok = true,
+            Audio = new AudioChunk(Rate, 1, Convert.ToBase64String(new byte[] { 1, 2, 3 }), false),
+        });
+        var run = Read(Format(), Chunk(new short[] { 10, 20 }), odd, Chunk(new short[] { 30 }), Final());
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("unreadable audio", run.Error);
+        Assert.Equal(RenderWav.HeaderBytes + 4, run.Output.Length);   // nothing of the odd chunk
+    }
+
+    /// <summary>
     /// AudioChunk carries the rate on every chunk so that this is detectable at
     /// all. The header is already out and cannot be rewritten, so an engine that
     /// changed mid-stream would otherwise play back at the wrong speed with

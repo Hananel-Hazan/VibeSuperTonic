@@ -63,10 +63,11 @@ public static class Ssml
         if (string.IsNullOrEmpty(text) || !IsDocument(text)) return text ?? "";
 
         var sb = new System.Text.StringBuilder(text.Length);
+        var tags = new TagScanner(text);
 
         for (int i = 0; i < text.Length;)
         {
-            if (text[i] == '<' && TagEnd(text, i) is { } end)
+            if (text[i] == '<' && tags.TagEnd(i) is { } end)
             {
                 sb.Append(' ');
                 i = end + 1;
@@ -81,35 +82,67 @@ public static class Ssml
     }
 
     /// <summary>
-    /// The index of the <c>&gt;</c> closing the tag that starts at
-    /// <paramref name="start"/>, or null when this <c>&lt;</c> is not a tag.
+    /// Finds the <c>&gt;</c> closing the tag that starts at a given <c>&lt;</c>,
+    /// for every <c>&lt;</c> of one text, in linear time overall.
     ///
     /// <para>Attribute values are honoured, so <c>&lt;mark name="a&gt;b"/&gt;</c>
     /// ends at the right bracket. An unterminated tag is not a tag: better to
     /// speak a stray angle bracket than to silently drop the rest of the
     /// utterance.</para>
+    ///
+    /// <para><b>A table, because the obvious scan is quadratic.</b> It was a
+    /// forward scan per <c>&lt;</c>, and an unterminated tag scans to the end of
+    /// the string — which is every <c>&lt;</c> of a document that has no
+    /// <c>&gt;</c> after it. <see cref="Strip"/> calls this per <c>&lt;</c> and the
+    /// parser calls it per <c>&lt;</c> twice, so <c>"&lt;speak&gt;" + "&lt;a" ×
+    /// 40000</c> took 1.4 s in Strip alone and about eight in all, on text any
+    /// speechd client can send. "Remember that no <c>&gt;</c> is left" is not
+    /// enough on its own: one <c>&gt;</c> at the very end, behind an odd number of
+    /// quotes, defeats it. So the scan is run once, backwards, for all three
+    /// states it can be in (outside quotes, inside <c>"</c>, inside <c>'</c>):
+    /// the answer for a scan starting unquoted at <c>i</c> depends only on
+    /// <c>text[i]</c> and the answers at <c>i + 1</c>.</para>
     /// </summary>
-    internal static int? TagEnd(string text, int start)
+    internal sealed class TagScanner
     {
-        if (start + 1 >= text.Length) return null;
+        /// <summary>The <c>&gt;</c> an unquoted scan starting at i reaches, or -1.</summary>
+        private readonly int[] _closeFrom;
+        private readonly string _text;
 
-        char c = text[start + 1];
-        bool opensTag = char.IsLetter(c) || c is '/' or '!' or '?';
-        if (!opensTag) return null;
-
-        char quote = '\0';
-        for (int i = start + 1; i < text.Length; i++)
+        internal TagScanner(string text)
         {
-            char ch = text[i];
-            if (quote != '\0')
+            _text = text;
+            _closeFrom = new int[text.Length];
+
+            int unquoted = -1, inDouble = -1, inSingle = -1;   // answers at i + 1
+            for (int i = text.Length - 1; i >= 0; i--)
             {
-                if (ch == quote) quote = '\0';
+                char ch = text[i];
+                int u = ch switch { '"' => inDouble, '\'' => inSingle, '>' => i, _ => unquoted };
+                int d = ch == '"' ? unquoted : inDouble;
+                int q = ch == '\'' ? unquoted : inSingle;
+                unquoted = u; inDouble = d; inSingle = q;
+                _closeFrom[i] = u;
             }
-            else if (ch is '"' or '\'') quote = ch;
-            else if (ch == '>') return i;
         }
 
-        return null;
+        /// <summary>
+        /// The index of the <c>&gt;</c> closing the tag that starts at
+        /// <paramref name="start"/>, or null when this <c>&lt;</c> is not a tag.
+        /// </summary>
+        internal int? TagEnd(int start)
+        {
+            if (start + 1 >= _text.Length) return null;
+
+            char c = _text[start + 1];
+            bool opensTag = char.IsLetter(c) || c is '/' or '!' or '?';
+            if (!opensTag) return null;
+
+            // text[start + 1] is a letter or / ! ?, never a quote or '>', so the
+            // scan from there begins unquoted — exactly what the table holds.
+            int end = _closeFrom[start + 1];
+            return end < 0 ? null : end;
+        }
     }
 
     internal static string CollapseWhitespace(string text)
@@ -137,6 +170,12 @@ public static class Ssml
     /// </summary>
     internal static class Entities
     {
+        /// <summary>
+        /// The furthest a ';' may sit after its '&amp;': ten characters on, so a
+        /// name of up to nine — "&amp;#x10FFFF;" is the longest real one.
+        /// </summary>
+        private const int MaxReferenceLength = 10;
+
         internal static string Decode(string text)
         {
             if (text.IndexOf('&') < 0) return text;
@@ -147,11 +186,13 @@ public static class Ssml
             {
                 if (text[i] != '&') { sb.Append(text[i++]); continue; }
 
-                int semi = text.IndexOf(';', i + 1);
-
                 // An unterminated & is an ampersand. So is a "reference" long
-                // enough to be prose that happens to contain a semicolon.
-                if (semi < 0 || semi - i > 10) { sb.Append(text[i++]); continue; }
+                // enough to be prose that happens to contain a semicolon. The
+                // search is bounded to that length, not just the result: an
+                // unbounded IndexOf per '&' scans to the end of the text for
+                // every ampersand with no ';' after it, which is quadratic.
+                int semi = text.IndexOf(';', i + 1, Math.Min(MaxReferenceLength, text.Length - i - 1));
+                if (semi < 0) { sb.Append(text[i++]); continue; }
 
                 string name = text[(i + 1)..semi];
                 string? value = name switch

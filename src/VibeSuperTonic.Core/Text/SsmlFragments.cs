@@ -253,7 +253,13 @@ public static class SsmlDocument
         private bool _gap;                 // a tag boundary since the last text
         private bool _rootClosed;
 
-        internal Parser(string s) => _s = s;
+        private readonly Ssml.TagScanner _tags;
+
+        internal Parser(string s)
+        {
+            _s = s;
+            _tags = new Ssml.TagScanner(s);
+        }
 
         private Frame Top => _stack.Count > 0 ? _stack[^1] : _root;
         private static readonly Frame _root = new() { Name = "" };
@@ -283,7 +289,7 @@ public static class SsmlDocument
                         continue;
                     }
 
-                    if (Ssml.TagEnd(_s, i) is { } end)
+                    if (_tags.TagEnd(i) is { } end)
                     {
                         if (!Tag(_s.AsSpan(i + 1, end - i - 1).ToString())) return null;
                         i = end + 1;
@@ -307,7 +313,7 @@ public static class SsmlDocument
         private bool OpensTag(int at) =>
             string.CompareOrdinal(_s, at, "<!--", 0, 4) == 0
             || string.CompareOrdinal(_s, at, "<![CDATA[", 0, 9) == 0
-            || Ssml.TagEnd(_s, at) is not null;
+            || _tags.TagEnd(at) is not null;
 
         private bool Append(string raw, bool decode)
         {
