@@ -21,6 +21,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// evidence: it asserts the invariants hold under arbitrary interleavings, and
 /// it is the thing that would notice a new window opening somewhere else.</para>
 /// </summary>
+[Collection(StressCollection.Name)]
 public class SpeechSessionStressTests
 {
     private static readonly SupertonicOptions Voice = new("M1", "en");
