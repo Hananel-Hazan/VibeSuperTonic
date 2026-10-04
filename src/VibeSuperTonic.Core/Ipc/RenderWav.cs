@@ -155,6 +155,17 @@ public static class RenderWav
                     return 1;
                 }
 
+                // HALF A SAMPLE IS UNREADABLE AUDIO TOO. Written through, an odd
+                // byte count shifts every later sample by one byte, and 16-bit
+                // PCM read one byte out of step is full-scale noise for the rest
+                // of the utterance — played, with exit 0. The daemon never
+                // sends one; if it ever does, refusing beats that.
+                if (pcm.Length % sizeof(short) != 0)
+                {
+                    error.WriteLine($"a render reply carried unreadable audio ({pcm.Length} bytes is not whole samples)");
+                    return 1;
+                }
+
                 try
                 {
                     output.Write(pcm, 0, pcm.Length);

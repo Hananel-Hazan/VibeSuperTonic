@@ -248,7 +248,7 @@ public static class SentenceChunker
                 if (start < 0) { start = cursor; end = cursor; }
                 cursor = end;
                 return new TextChunk(chunk, start, end - start,
-                    TextOffsetMap.FromOrigins(origins, text.Length));
+                    TextOffsetMap.FromOrigins(origins, text.Length, end));
             }
 
             if (start < 0) start = p;
@@ -258,8 +258,12 @@ public static class SentenceChunker
 
         if (start < 0) { start = cursor; end = cursor; }  // all-whitespace chunk
         cursor = end;
+        // The map's end is the chunk's end, not the text's: a span that ends at
+        // the chunk's last character is measured to one past it, and resolving
+        // that to text.Length made the last word of every chunk run on to the
+        // end of the utterance. See TextOffsetMap._end.
         return new TextChunk(chunk, start, end - start,
-            TextOffsetMap.FromOrigins(origins, text.Length));
+            TextOffsetMap.FromOrigins(origins, text.Length, end));
     }
 
     /// <summary>
