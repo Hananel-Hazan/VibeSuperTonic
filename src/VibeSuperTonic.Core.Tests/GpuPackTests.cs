@@ -32,7 +32,10 @@ public class GpuPackTests
         Assert.True(ExecutionProviders.IsGpu(ExecutionProviders.OpenVino));
         Assert.True(ExecutionProviders.IsGpu(ExecutionProviders.Cuda));
         Assert.False(ExecutionProviders.IsGpu(ExecutionProviders.Cpu));
-        Assert.False(ExecutionProviders.IsGpu("directml"));
+        // DirectML is the Windows engine's GPU: it counts for Decide, but the Linux
+        // backend's gate must keep refusing the name.
+        Assert.True(ExecutionProviders.IsGpu(ExecutionProviders.DirectMl));
+        Assert.False(ExecutionProviders.IsKnown(ExecutionProviders.DirectMl));
         Assert.Equal("OpenVINO", ExecutionProviders.Display(ExecutionProviders.OpenVino));
     }
 
