@@ -363,8 +363,10 @@ assertion runs there too. The tree it installs is the one the tarball holds.
   while Flathub's `dotnet10//25.08` restores 10.0.8 and brings its own apphost:
   33 packages. Run 3 (2026-09-27) was the first full pass of the build,
   `--test-install` included, and `467913a` re-pinned the list from that run.
-  The Flathub build therefore ships .NET runtime 10.0.8, while the other
-  artifacts ship 10.0.12.
+  The move to `dotnet10//26.08` (`9c80722`) brought the extension to 10.0.12,
+  and the list was re-pinned from CI run 12 (2026-10-04): same 33 packages,
+  eight runtime packs from 10.0.8 to 10.0.12. The Flathub build and the other
+  artifacts now ship the same .NET runtime, 10.0.12.
 
 Submission, once CI is green and v0.2.17 is tagged and pushed:
 
