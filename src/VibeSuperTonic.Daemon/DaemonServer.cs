@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
@@ -153,7 +154,27 @@ public sealed partial class DaemonServer : IDisposable
 
     private sealed class Subscriber
     {
+        /// <summary>
+        /// How many lines a subscriber may fall behind before it is dropped. At
+        /// three or four word boundaries a second that is minutes of slack, far
+        /// more than a GC pause or a busy window needs, and small enough that a
+        /// subscriber which has stopped reading costs a few hundred KB at most.
+        /// </summary>
+        public const int QueueLines = 1024;
+
         public required StreamWriter Writer { get; init; }
+
+        /// <summary>
+        /// Lines waiting for <see cref="PumpAsync"/>. Events are raised on the
+        /// audio thread, so they are queued here and never written to the socket
+        /// from there: a subscriber that stops reading fills its socket buffer,
+        /// and a blocking write would freeze speech mid-word.
+        /// </summary>
+        public Channel<string> Queue { get; } = Channel.CreateBounded<string>(
+            new BoundedChannelOptions(QueueLines) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+
+        /// <summary>Ends this connection: the pump, and the read that parks it.</summary>
+        public required CancellationTokenSource Abort { get; init; }
 
         /// <summary>What connected, from the subscribe request's hello. Null for
         /// an anonymous subscriber, which is what `vst-ctl subscribe` is.</summary>
@@ -443,11 +464,13 @@ public sealed partial class DaemonServer : IDisposable
                     // the next boundary arrived. Holding the lock makes any
                     // concurrent event queue behind the snapshot instead, so the
                     // stream is both ordered and gapless.
+                    using var abort = CancellationTokenSource.CreateLinkedTokenSource(token);
                     var subscriber = new Subscriber
                     {
                         Writer = writer,
                         Kind = request.ClientKind,
                         Pid = request.ClientPid,
+                        Abort = abort,
                     };
 
                     // Only identified clients are logged. An anonymous subscriber
@@ -460,17 +483,29 @@ public sealed partial class DaemonServer : IDisposable
                         if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
                     }
 
+                    // The snapshot goes through the queue like every event after
+                    // it, so the ordering argument above still holds: anything
+                    // raised concurrently queues behind it.
                     lock (subscriber.Lock)
                     {
                         _subscribers[id] = subscriber;
-                        writer.WriteLine(Protocol.Encode(
+                        subscriber.Queue.Writer.TryWrite(Protocol.Encode(
                             new Response { Ok = true, Status = Snapshot() }));
                     }
 
                     // The connection now belongs to the event stream. Park here
-                    // until the client goes away; anything it sends afterwards
-                    // is ignored, because a subscription is not a session.
-                    await reader.ReadToEndAsync(token);
+                    // until the client goes away, or until it is dropped for
+                    // falling behind; anything it sends afterwards is ignored,
+                    // because a subscription is not a session.
+                    var pump = PumpAsync(subscriber);
+                    try { await reader.ReadToEndAsync(abort.Token); }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                    finally
+                    {
+                        _subscribers.TryRemove(new KeyValuePair<Guid, Subscriber>(id, subscriber));
+                        abort.Cancel();
+                        await pump;
+                    }
                     break;
                 }
 
@@ -1577,20 +1612,45 @@ public sealed partial class DaemonServer : IDisposable
         string line = Protocol.Encode(e);
         foreach (var (id, sub) in _subscribers)
         {
-            try
+            // Queued, never written here: this is the audio thread, and a
+            // subscriber that has stopped reading would block it in the write.
+            // The lock orders this against the subscribe snapshot.
+            bool queued;
+            lock (sub.Lock) queued = sub.Queue.Writer.TryWrite(line);
+            if (queued) continue;
+
+            // A whole queue behind, or already gone. Either way it is let go
+            // rather than waited for: one stalled client must not stop the
+            // speech everyone else is listening to.
+            if (_subscribers.TryRemove(new KeyValuePair<Guid, Subscriber>(id, sub)))
             {
-                // Per-subscriber lock: this is called from the audio thread and
-                // two events must not interleave halfway through a line.
-                lock (sub.Lock) sub.Writer.WriteLine(line);
+                if (sub.Kind is { } kind) Log($"{kind} dropped: {Subscriber.QueueLines} events behind");
+                try { sub.Abort.Cancel(); } catch (ObjectDisposedException) { }
             }
-            catch
-            {
-                // A client that closed its end mid-utterance is routine, not an
-                // error. Dropping it here rather than letting the exception
-                // reach the session is what keeps one dead subscriber from
-                // stopping the speech everyone else is listening to.
-                _subscribers.TryRemove(id, out _);
-            }
+        }
+    }
+
+    /// <summary>
+    /// Write one subscriber's queued lines to its socket, in order, until the
+    /// connection ends. Never throws: a client that hangs up mid-line is routine.
+    /// </summary>
+    private static async Task PumpAsync(Subscriber sub)
+    {
+        var token = sub.Abort.Token;
+        try
+        {
+            await foreach (var line in sub.Queue.Reader.ReadAllAsync(token))
+                await sub.Writer.WriteLineAsync(line.AsMemory(), token);
+        }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            sub.Queue.Writer.TryComplete();
+            // A failed write means the client is gone; end the read that parks
+            // the connection too, rather than leave it to notice on its own.
+            try { sub.Abort.Cancel(); } catch (ObjectDisposedException) { }
         }
     }
 
