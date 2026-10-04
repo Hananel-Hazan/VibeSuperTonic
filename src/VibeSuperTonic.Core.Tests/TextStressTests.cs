@@ -24,6 +24,7 @@ namespace VibeSuperTonic.Core.Tests;
 /// the end of the string for every <c>&lt;</c> with no <c>&gt;</c> after it, so
 /// <c>"&lt;speak&gt;" + "&lt;a" × 40000</c> took about eight seconds.</para>
 /// </summary>
+[Collection(StressCollection.Name)]
 public class TextStressTests
 {
     // ================================================================ chunker
@@ -288,14 +289,24 @@ public class TextStressTests
             {
                 case 0:
                     // Random BYTES, decoded the way DaemonServer's StreamReader
-                    // decodes them. Not random chars: a lone surrogate makes
-                    // System.Text.Json throw ArgumentException rather than
-                    // JsonException (seen here, 2026-10-04), but UTF-8 decoding
-                    // replaces invalid sequences with U+FFFD, so no socket can
-                    // deliver one.
-                    var bytes = new byte[r.Next(0, 300)];
-                    r.NextBytes(bytes);
-                    line = Encoding.UTF8.GetString(bytes);
+                    // decodes them, and on odd turns random UTF-16 units, lone
+                    // surrogates included. Those made System.Text.Json throw
+                    // ArgumentException rather than JsonException (seen here,
+                    // 2026-10-04). No socket delivers one today, because UTF-8
+                    // decoding substitutes U+FFFD, but TryDecode's contract is
+                    // "never throws", not "never throws for today's callers".
+                    if (iter % 8 == 0)
+                    {
+                        var bytes = new byte[r.Next(0, 300)];
+                        r.NextBytes(bytes);
+                        line = Encoding.UTF8.GetString(bytes);
+                    }
+                    else
+                    {
+                        var units = new char[r.Next(1, 120)];
+                        for (int i = 0; i < units.Length; i++) units[i] = (char)r.Next(0, 0x10000);
+                        line = "{\"verb\":\"Speak\",\"text\":\"" + new string(units) + "\"}";
+                    }
                     break;
                 case 1:
                     var sb = new StringBuilder();

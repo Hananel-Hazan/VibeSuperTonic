@@ -867,6 +867,7 @@ public static class Protocol
         try { return JsonSerializer.Deserialize(line, typeof(T), ProtocolJson.Default) as T; }
         catch (JsonException) { return null; }
         catch (NotSupportedException) { return null; }   // a shape the context cannot map
+        catch (ArgumentException) { return null; }       // a lone UTF-16 surrogate: not JSON text at all
     }
 }
 
