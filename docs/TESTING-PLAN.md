@@ -20,10 +20,10 @@ defended very well, one is defended by accident, and two are not defended at all
 
 **The gap this document opened with — *CI runs none of the packer's nine
 assertions, never builds espeak-ng, and never runs the parity spike* — is
-two-thirds closed as of 2026-08-27.** `pack` builds espeak-ng against a
-pin-keyed cache and runs the packer; `smoke` extracts the tarball it produced
-into a bare `ubuntu:22.04` container and starts the daemon there. The parity
-spike in CI is [item 8](#the-order-to-do-it-in) and still open.
+closed.** Since 2026-08-27 `pack` builds espeak-ng against a pin-keyed cache
+and runs the packer, and `smoke` extracts the tarball it produced into a bare
+`ubuntu:22.04` container and starts the daemon there. The parity spike joined
+CI on 2026-08-30 as [item 8](#the-order-to-do-it-in).
 
 [What that cost, and what it caught on its first run](#what-2-found).
 

@@ -479,7 +479,7 @@ collides with nothing. What it does mean: **`dist/` may still hold a
 `0.2.13` tarball from before the renumber, and it is not a release.** Delete it
 rather than reasoning about it.
 
-`0.2.12` is the number being built. **Everything after it is a decision to ask
+`0.2.17` is the number being built. **Everything after it is a decision to ask
 about** — propose a bump from what changed, and use
 `AskUserQuestion`.
 
