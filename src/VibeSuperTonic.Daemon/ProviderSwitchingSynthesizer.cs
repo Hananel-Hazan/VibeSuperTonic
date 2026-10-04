@@ -77,6 +77,13 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
     /// </summary>
     private string? _gpuUnavailable;
 
+    /// <summary>
+    /// Which GPU provider the installed pack offers: what the <c>gpu</c>
+    /// preference means here and what a sweep measures. Fixed for the life of the
+    /// process, like the pack itself.
+    /// </summary>
+    private readonly string _gpuProvider;
+
     /// <param name="config">Settings and paths; re-read on its own mtime rules.</param>
     /// <param name="initial">The decision <c>Program</c> already made and built the first session from.</param>
     /// <param name="first">That session.</param>
@@ -93,8 +100,10 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         Func<SpeechStateProbe> sessionIdle,
         Action<string> log,
         string? voiceOverride = null,
-        string? languageOverride = null)
+        string? languageOverride = null,
+        string gpuProvider = ExecutionProviders.Cuda)
     {
+        _gpuProvider = ExecutionProviders.IsGpu(gpuProvider) ? gpuProvider : ExecutionProviders.Cuda;
         _config = config;
         _decision = initial;
         _current = first;
@@ -120,7 +129,7 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
     /// </summary>
     public IReadOnlyList<string> SweepableGpuProviders
     {
-        get { lock (_gate) return _gpuUnavailable is null ? [ExecutionProviders.Cuda] : []; }
+        get { lock (_gate) return _gpuUnavailable is null ? [_gpuProvider] : []; }
     }
 
     /// <summary>
@@ -237,7 +246,8 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
             preference,
             _gpuUnavailable,
             machine.PowerState,
-            settings.GpuOnBattery);
+            settings.GpuOnBattery,
+            _gpuProvider);
     }
 
     /// <summary>

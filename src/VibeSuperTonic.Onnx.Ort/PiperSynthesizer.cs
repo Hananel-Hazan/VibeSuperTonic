@@ -76,7 +76,7 @@ public sealed class PiperSynthesizer : ISynthesizer
         if (!ExecutionProviders.IsKnown(provider))
             throw new ArgumentException(
                 $"unknown execution provider '{provider}'; expected " +
-                $"'{ExecutionProviders.Cpu}' or '{ExecutionProviders.Cuda}'", nameof(provider));
+                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}' or '{ExecutionProviders.OpenVino}'", nameof(provider));
 
         if (!File.Exists(modelPath))
             throw new FileNotFoundException($"Piper voice model not found: {modelPath}", modelPath);
@@ -244,8 +244,8 @@ public sealed class PiperSynthesizer : ISynthesizer
 
         try
         {
-            if (_provider == ExecutionProviders.Cuda)
-                sessionOptions.AppendExecutionProvider_CUDA(0);
+            if (ExecutionProviders.IsGpu(_provider))
+                OrtProviders.Append(sessionOptions, _provider, 0);
 
             _session = new InferenceSession(_modelPath, sessionOptions);
         }

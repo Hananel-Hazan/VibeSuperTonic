@@ -214,6 +214,12 @@ chmod 755 "$staging/speechd-install.sh"
 cp "$root/build/install-gpu.sh" "$staging/install-gpu.sh"
 chmod 755 "$staging/install-gpu.sh"
 
+# And the second vendor's: Intel OpenVINO, ~160 MB, fetched from PyPI by hash.
+# Same rule — the pack never ships, only its installer. build/check-openvino-pack.sh
+# (called beside assertion 4) asserts both halves.
+cp "$root/build/install-openvino.sh" "$staging/install-openvino.sh"
+chmod 755 "$staging/install-openvino.sh"
+
 # The two provider-choice helpers. Neither is required for the product to work —
 # the daemon falls back on its own when a GPU fails mid-render — and both exist
 # because "works" and "is right" are different:
@@ -704,6 +710,15 @@ ort_pin_for=$(awk -F'"' '/^ORT_SHA512_FOR=/ { print $2; exit }' "$staging/instal
 
 info "no GPU provider in the archive; install-gpu.sh fetches ORT $ort_in_script to match, pinned by SHA-512"
 
+# 4b. The OpenVINO pack is not in the archive either, and its installer is
+# honest: same ORT minor as the managed side, wheel pinned by SHA-256 for the
+# version it fetches. A separate script so it can be sabotaged in a second
+# (build/openvino-pack-sabotage.sh) rather than inside a four-minute pack.
+bash "$root/build/check-openvino-pack.sh" "$staging" \
+    "$root/src/VibeSuperTonic.Onnx.Ort/VibeSuperTonic.Onnx.Ort.csproj" \
+    || die "the OpenVINO pack's installer or its absence from the archive failed its checks"
+info "no OpenVINO pack in the archive; install-openvino.sh pinned by SHA-256 and ORT-minor-checked"
+
 # --- 5. the glibc floor has not risen ----------------------------------------
 #
 # WHAT THIS IS ABOUT. A shipped binary runs on any glibc at least as new as the
@@ -1008,6 +1023,24 @@ GpuOnBattery in data/settings.json (or the Tune tab) if you are permanently on a
 dock. `./vst-ctl status` says which is in force and why.
 
     ./install-gpu.sh --remove   puts the machine back on the CPU
+
+
+Optional: use an Intel GPU (or another vendor's)
+------------------------------------------------
+    ./install-openvino.sh
+
+For Intel integrated graphics and Arc. Downloads about 64 MB (160 MB unpacked)
+from PyPI, checked against a pinned SHA-256: ONNX Runtime with the OpenVINO
+provider, OpenVINO and TBB. It also needs the distribution's OpenCL compute
+runtime (Debian/Ubuntu: `sudo apt install intel-opencl-icd`); without that the
+daemon says no Intel GPU was found and keeps using the CPU.
+
+This has not been measured on Intel hardware by the people who wrote it. Run
+`./vst-ctl benchmark` afterwards: the GPU is measured as another row and chosen
+only if it actually wins. `./install-openvino.sh --remove` undoes it.
+
+There is NO AMD pack yet. On a machine with an AMD GPU `vst-ctl config` says so,
+and everything runs on the CPU, which is fast enough on its own.
 
 
 Optional: keep the provider choice honest

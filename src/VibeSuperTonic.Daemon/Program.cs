@@ -156,6 +156,13 @@ DaemonLog.Initialize(dataDir);
 // ordinary install.
 GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.StoreRoot, DaemonLog.Write);
 
+// Which vendor's pack is installed, if any — that is what "gpu" means on this
+// machine. A pack that brings its own libonnxruntime.so (OpenVINO) is wired in
+// here, still before any ONNX Runtime call. Never throws; every failure leaves
+// the shipped runtime and the CPU.
+GpuPack? gpuPack = GpuProviderPack.Activate(LinuxDataPaths.StoreRoot, DaemonLog.Write);
+string gpuProvider = gpuPack?.Provider ?? ExecutionProviders.Cuda;
+
 // Load whatever the last usage left in the folder, before anything can speak.
 // This is the "first run picks up where it left off" half of being portable:
 // with no config read, a portable install spoke with built-in defaults and
@@ -234,10 +241,22 @@ Func<SpeechStateProbe>? sessionState = null;
 // and reports one sentence when it cannot — the default install has no provider
 // pack, so "cannot" is the ordinary answer rather than an error, and the daemon
 // logs which it got because "why is my GPU idle" needs somewhere to look.
-string? gpuUnavailable = OrtSynthesizer.ProbeCuda();
+string? gpuUnavailable = OrtSynthesizer.ProbeGpu(gpuProvider);
+string gpuName = ExecutionProviders.Display(gpuProvider);
 DaemonLog.Write(gpuUnavailable is null
-    ? "gpu: CUDA provider available"
-    : $"gpu: CUDA unavailable — {gpuUnavailable}");
+    ? $"gpu: {gpuName} provider available"
+    : $"gpu: {gpuName} unavailable — {gpuUnavailable}");
+
+// With no pack the answer above is the ordinary one, and on its own it tells a
+// person nothing about what to do. The detected hardware turns it into the
+// installer to run. A HINT, never a gate: it only extends the sentence, and the
+// CPU path does not depend on it.
+if (gpuPack is null && gpuUnavailable is not null
+    && GpuPacks.InstallHint(GpuPacks.DetectVendorIds(), installed: null) is { } gpuHint)
+{
+    gpuUnavailable = $"{gpuUnavailable} — {gpuHint}";
+    DaemonLog.Write($"gpu: {gpuHint}");
+}
 
 var storedProfile = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(dataDir));
 // The Supertonic voice the sweep measures, and the steps IT runs at — see
@@ -257,7 +276,8 @@ var startupDecision = ExecutionDecision.Decide(
     config.Settings.Provider,
     gpuUnavailable,
     machineNow.PowerState,
-    config.Settings.GpuOnBattery);
+    config.Settings.GpuOnBattery,
+    gpuProvider);
 
 DaemonLog.Write($"version {version}, inference {startupDecision.Describe()} " +
                 $"of {Environment.ProcessorCount} logical processors, power {machineNow.PowerState}");
@@ -295,7 +315,8 @@ using ISynthesizer synth = switcher = new ProviderSwitchingSynthesizer(
     () => sessionState?.Invoke() ?? SpeechStateProbe.Idle,
     DaemonLog.Write,
     voice,
-    language);
+    language,
+    gpuProvider);
 
 // ------------------------------------------------------------------ Piper
 //

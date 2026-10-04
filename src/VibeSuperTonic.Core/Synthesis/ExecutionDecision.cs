@@ -28,8 +28,23 @@ public static class ExecutionProviders
     /// </summary>
     public const string DirectMl = "directml";
 
+    /// <summary>
+    /// Intel OpenVINO, targeting an Intel GPU (integrated or Arc). Present only
+    /// when the optional OpenVINO pack is installed — about 110 MB unpacked, from
+    /// the <c>onnxruntime-openvino</c> wheel — and it needs the distribution's
+    /// OpenCL/Level Zero compute runtime for the GPU to be visible.
+    /// </summary>
+    public const string OpenVino = "openvino";
+
     public static bool IsKnown(string provider) =>
-        provider is Cpu or Cuda;
+        provider is Cpu or Cuda or OpenVino;
+
+    /// <summary>
+    /// True for every provider that is "the GPU" as the user means it — the one
+    /// the <c>gpu</c> preference selects, subject to which pack is installed.
+    /// Everything that used to ask <c>== Cuda</c> asks this.
+    /// </summary>
+    public static bool IsGpu(string provider) => provider is Cuda or OpenVino or DirectMl;
 
     /// <summary>How a provider name reads in a sentence written for a person.</summary>
     public static string Display(string provider) => provider switch
@@ -37,6 +52,7 @@ public static class ExecutionProviders
         Cpu => "CPU",
         Cuda => "CUDA",
         DirectMl => "DirectML",
+        OpenVino => "OpenVINO",
         _ => provider,
     };
 }
@@ -138,9 +154,11 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
     /// <param name="powerState"><see cref="PowerStates"/>, read per decision.</param>
     /// <param name="gpuOnBattery">The setting that turns the battery rule off.</param>
     /// <param name="gpuProvider">
-    /// The GPU provider this host speaks and <c>gpu</c> maps to: CUDA by default
-    /// (Linux), <see cref="ExecutionProviders.DirectMl"/> for the Windows engine.
-    /// Every veto below applies to whichever one it is.
+    /// Which GPU provider the installed pack offers, and so what the <c>gpu</c>
+    /// preference means on this machine. Defaults to CUDA, which is what it meant
+    /// before there was a second one (the Windows engine passes DirectML). A stored profile that measured a DIFFERENT
+    /// GPU provider than this is not applied to the GPU: its numbers describe a
+    /// pack that is no longer the one installed.
     /// </param>
     public static ExecutionDecision Decide(
         BenchmarkProfile? stored,
@@ -154,6 +172,9 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
         string gpuProvider = ExecutionProviders.Cuda)
     {
         ArgumentNullException.ThrowIfNull(now);
+
+        // A caller that names no GPU provider gets the original meaning of "gpu".
+        if (!ExecutionProviders.IsGpu(gpuProvider)) gpuProvider = ExecutionProviders.Cuda;
 
         bool profileApplies = stored is not null && stored.StalenessAgainst(now).Count == 0;
         string measured = profileApplies && stored is not null
@@ -174,13 +195,22 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
         //     blaming the battery for a choice it never had.
         string? cpuBecause = null;
 
-        if (wanted != ExecutionProviders.Cpu && gpuUnavailable is not null)
+        if (ExecutionProviders.IsGpu(wanted) && gpuUnavailable is not null)
         {
             cpuBecause = preference == ProviderPreference.Gpu
                 ? $"GPU requested but unavailable — {gpuUnavailable}"
                 : $"no GPU available — {gpuUnavailable}";
         }
-        else if (wanted != ExecutionProviders.Cpu
+        else if (ExecutionProviders.IsGpu(wanted) && wanted != gpuProvider)
+        {
+            // The benchmark was taken on another vendor's pack (CUDA removed,
+            // OpenVINO installed, or the reverse). Its GPU rows describe a
+            // provider this daemon cannot run, so the CPU rows are what applies
+            // until the next benchmark.
+            cpuBecause = $"benchmark measured {ExecutionProviders.Display(wanted)} but " +
+                         $"this machine has the {ExecutionProviders.Display(gpuProvider)} pack — benchmark again";
+        }
+        else if (ExecutionProviders.IsGpu(wanted)
                  && powerState == PowerStates.Battery && !gpuOnBattery)
         {
             // Requested explicitly, and the right default: a discrete GPU on a

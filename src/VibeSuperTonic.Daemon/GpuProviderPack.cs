@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Daemon;
 
@@ -47,6 +48,38 @@ internal static class GpuProviderPack
 
     /// <summary>Where install-gpu.sh puts the CUDA and cuDNN libraries.</summary>
     public static string DirectoryIn(string baseDir) => Path.Combine(baseDir, "runtime", "cuda");
+
+    /// <summary>Where a pack's installer put it: <c>&lt;store&gt;/runtime/&lt;name&gt;</c>.</summary>
+    public static string DirectoryFor(string baseDir, GpuPack pack) =>
+        Path.Combine(baseDir, "runtime", pack.DirectoryName);
+
+    /// <summary>
+    /// The pack that is installed under <paramref name="baseDir"/>, if any. This
+    /// is what "gpu" means on this machine: <c>gpu</c> is not a vendor, it is
+    /// whichever pack has been put there. CUDA wins when more than one is
+    /// present — see <see cref="GpuPacks.All"/>.
+    /// </summary>
+    public static GpuPack? Installed(string baseDir) =>
+        GpuPacks.Select(name => Directory.Exists(Path.Combine(baseDir, "runtime", name)));
+
+    /// <summary>
+    /// Do what the installed pack needs before ONNX Runtime is first touched, and
+    /// return it. CUDA's libraries are made visible by the re-exec in
+    /// <see cref="ReexecIfNeeded"/>, which the caller has already run; a pack that
+    /// brings its own <c>libonnxruntime.so</c> is wired in here. Never throws:
+    /// every failure leaves the daemon on the shipped runtime and the CPU.
+    /// </summary>
+    public static GpuPack? Activate(string baseDir, Action<string> log)
+    {
+        GpuPack? pack = Installed(baseDir);
+        if (pack is null || !pack.ReplacesRuntime) return pack;
+
+        string? problem = Onnx.Ort.OrtProviders.UseRuntimeFrom(DirectoryFor(baseDir, pack));
+        log(problem is null
+            ? $"gpu: {pack.Vendor} pack found — using its ONNX Runtime from {DirectoryFor(baseDir, pack)}"
+            : $"gpu: {pack.Vendor} pack found but its ONNX Runtime is not usable ({problem}); continuing on the CPU.");
+        return pack;
+    }
 
     /// <summary>
     /// Re-exec this process with the pack on <c>LD_LIBRARY_PATH</c> if there is a

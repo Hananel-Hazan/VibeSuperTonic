@@ -134,7 +134,8 @@ public class GpuFallbackTests : IDisposable
             // Busy: this is the mid-utterance path, and it must work without the
             // idle-only ReevaluateWhenIdle door being open.
             sessionIdle: () => SpeechStateProbe.Busy,
-            log: log.Add);
+            log: log.Add,
+            gpuProvider: ExecutionProviders.IsGpu(provider) ? provider : ExecutionProviders.Cuda);
     }
 
     [Fact]
@@ -437,5 +438,102 @@ public class GpuFallbackTests : IDisposable
         Assert.NotEmpty(switcher.Synthesize("hello", Options));
         Assert.Equal(ExecutionProviders.Cpu, switcher.Decision.Provider);
         Assert.Contains(log, l => l.Contains("failed in use"));
+    }
+
+    // ---------------------------------------------- a second vendor, same safety
+
+    [Fact]
+    public void An_OpenVino_session_that_dies_mid_render_falls_back_to_the_CPU_like_CUDA_does()
+    {
+        var log = new List<string>();
+        var gpu = Fake.Rendering(() => throw new InvalidOperationException(
+            "[ErrorCode:Fail] OpenVINO device lost"));
+        var requested = new List<string>();
+
+        var switcher = Build(gpu, (_, provider) =>
+        {
+            requested.Add(provider);
+            return Fake.Rendering(() => [5, 6]);
+        }, log, ExecutionProviders.OpenVino);
+
+        Assert.Equal([5, 6], switcher.Synthesize("hello", Options));
+        Assert.Equal(ExecutionProviders.Cpu, switcher.Decision.Provider);
+        Assert.Equal([ExecutionProviders.Cpu], requested);
+        Assert.Contains(log, l => l.Contains("OpenVINO failed in use"));
+        Assert.Empty(switcher.SweepableGpuProviders);
+    }
+
+    [Fact]
+    public void A_sweep_is_offered_the_installed_vendors_provider_and_only_that()
+    {
+        var onOpenVino = Build(Fake.Rendering(() => [1]), (_, _) => Fake.Rendering(() => [1]),
+            [], ExecutionProviders.OpenVino);
+        var onCuda = Build(Fake.Rendering(() => [1]), (_, _) => Fake.Rendering(() => [1]), []);
+
+        Assert.Equal([ExecutionProviders.OpenVino], onOpenVino.SweepableGpuProviders);
+        Assert.Equal([ExecutionProviders.Cuda], onCuda.SweepableGpuProviders);
+    }
+
+    // ------------------------------------------------------ the pack on disk
+
+    [Fact]
+    public void The_installed_pack_is_the_one_whose_directory_exists_under_the_store()
+    {
+        Assert.Null(GpuProviderPack.Installed(_root));
+
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "openvino"));
+        Assert.Equal(ExecutionProviders.OpenVino, GpuProviderPack.Installed(_root)!.Provider);
+
+        // Both present: CUDA, which plugs into the library that ships.
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "cuda"));
+        Assert.Equal(ExecutionProviders.Cuda, GpuProviderPack.Installed(_root)!.Provider);
+    }
+
+    [Fact]
+    public void An_OpenVino_pack_without_its_runtime_is_reported_and_leaves_the_CPU_in_charge()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "openvino"));
+        var log = new List<string>();
+
+        var pack = GpuProviderPack.Activate(_root, log.Add);
+
+        Assert.Equal(ExecutionProviders.OpenVino, pack!.Provider);
+        Assert.Contains(log, l => l.Contains("not usable") && l.Contains("continuing on the CPU"));
+    }
+
+    [Fact]
+    public void Activating_with_no_pack_or_the_CUDA_pack_changes_nothing()
+    {
+        var log = new List<string>();
+        Assert.Null(GpuProviderPack.Activate(_root, log.Add));
+
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "cuda"));
+        Assert.Equal(ExecutionProviders.Cuda, GpuProviderPack.Activate(_root, log.Add)!.Provider);
+        Assert.Empty(log);        // CUDA's wiring is the re-exec, which is not Activate's business
+    }
+
+    // ----------------------------------------- the real runtime, which has no OpenVINO
+
+    [Fact]
+    public void The_shipped_runtime_refuses_OpenVino_with_a_sentence_instead_of_crashing()
+    {
+        // Measured: the Gpu.Linux libonnxruntime.so reports "OpenVINO execution
+        // provider is not supported in this build" even with the provider library
+        // beside it. That is the state of every machine without the pack, so it
+        // must come back as a reason the daemon can show, not an exception that
+        // escapes startup.
+        string? reason = Onnx.Ort.OrtProviders.Probe(ExecutionProviders.OpenVino);
+
+        Assert.NotNull(reason);
+        Assert.Contains("OpenVINO", reason);
+        Assert.Null(Onnx.Ort.OrtProviders.Probe(ExecutionProviders.Cpu));
+    }
+
+    [Fact]
+    public void Appending_an_unknown_or_cpu_provider_is_safe_and_honest()
+    {
+        using var options = new Microsoft.ML.OnnxRuntime.SessionOptions();
+        Onnx.Ort.OrtProviders.Append(options, ExecutionProviders.Cpu);
+        Assert.Throws<ArgumentException>(() => Onnx.Ort.OrtProviders.Append(options, "directml"));
     }
 }
