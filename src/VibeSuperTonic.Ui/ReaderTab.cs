@@ -68,6 +68,9 @@ public sealed class ReaderTab : UserControl
     private readonly TextBlock _state = new() { FontWeight = FontWeight.SemiBold };
     private readonly ListBox _history = new() { Height = 120 };
 
+    /// <summary>The text of the last utterance, for the Export tab to offer.</summary>
+    public string Document => _document;
+
     /// <summary>The whole utterance, in the coordinates every event uses.</summary>
     private string _document = "";
     private int _sliceStart;

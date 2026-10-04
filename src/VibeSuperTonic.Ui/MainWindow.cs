@@ -135,6 +135,7 @@ public sealed class MainWindow : Window
                 new TabItem { Header = "Voices", Content = new VoicesTab(client) },
                 new TabItem { Header = "Tune", Content = _tune },
                 new TabItem { Header = "Pronunciations", Content = new PronunciationsTab(client) },
+                new TabItem { Header = "Export", Content = new ExportTab(client, _reader) },
                 new TabItem { Header = "Status", Content = _status },
                 new TabItem { Header = "About", Content = new AboutTab() },
             },
