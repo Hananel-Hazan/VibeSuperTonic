@@ -173,6 +173,7 @@ cat > "$appdir/AppRun" <<'APPRUN'
 #   ./VibeSuperTonic.AppImage bind            bind the hotkeys (and install vst-ctl)
 #   ./VibeSuperTonic.AppImage speechd-install register with Speech Dispatcher
 #   ./VibeSuperTonic.AppImage gpu-install     fetch the optional CUDA pack (~3.1 GB)
+#   ./VibeSuperTonic.AppImage openvino-install  fetch the optional Intel pack (~64 MB)
 #   ./VibeSuperTonic.AppImage store           print where models and data live
 #
 #   Keep this file and its store together. Models and settings live beside the
@@ -256,6 +257,14 @@ case "${1-}" in
         # the command you just ran.
         mkdir -p "$store/data"
         exec bash "$APP/install-gpu.sh" --dir "$store" "$@" ;;
+    openvino-install)
+        # The Intel pack, same shape as gpu-install: the store is the daemon's
+        # decision, and data/ is created so a pack can be fetched before the
+        # product has ever run.
+        shift
+        store="$(vst_store)"
+        mkdir -p "$store/data"
+        exec bash "$APP/install-openvino.sh" --dir "$store" "$@" ;;
     --version) exec "$APP/vibesupertonicd" --version ;;
     -h|--help)
         sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'

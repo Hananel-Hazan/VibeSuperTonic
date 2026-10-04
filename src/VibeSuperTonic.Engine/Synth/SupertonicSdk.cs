@@ -761,7 +761,7 @@ namespace Supertonic
         /// is the one outcome that makes the GPU question look answered when it
         /// was never asked.</para>
         /// </param>
-        public static TextToSpeech LoadTextToSpeech(string onnxDir, out bool gpuActive, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0)
+        public static TextToSpeech LoadTextToSpeech(string onnxDir, out bool gpuActive, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0, Action<SessionOptions, int>? appendGpuProvider = null)
         {
             gpuActive = false;
             // When useGpu is true, append the DirectML execution provider for the device.
@@ -832,8 +832,15 @@ namespace Supertonic
                 // GPU path that dies quietly is worse than no GPU path: the symptom is a
                 // hotkey that stopped working, which is the exact shape of the
                 // audio-device loss that hid for five hours.
-                opts.AppendExecutionProvider_CUDA(directMLDevice);
-                Console.WriteLine($"CUDA provider appended (device {directMLDevice})");
+                //
+                // appendGpuProvider is how the daemon says WHICH vendor's provider: a
+                // delegate rather than a name, because this file is also compiled by
+                // the spikes, which reference none of the daemon's types. Null keeps
+                // the original behaviour, CUDA. The Windows build never reaches this
+                // branch and ignores the parameter.
+                if (appendGpuProvider is not null) appendGpuProvider(opts, directMLDevice);
+                else opts.AppendExecutionProvider_CUDA(directMLDevice);
+                Console.WriteLine($"GPU provider appended (device {directMLDevice})");
 #endif
             }
             else if (!cacheHit)

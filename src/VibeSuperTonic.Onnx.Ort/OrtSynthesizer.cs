@@ -79,7 +79,7 @@ public sealed class OrtSynthesizer : ISynthesizer
         if (!ExecutionProviders.IsKnown(provider))
             throw new ArgumentException(
                 $"unknown execution provider '{provider}'; expected " +
-                $"'{ExecutionProviders.Cpu}' or '{ExecutionProviders.Cuda}'", nameof(provider));
+                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}' or '{ExecutionProviders.OpenVino}'", nameof(provider));
 
         _onnxDir = Path.Combine(modelsRoot, "onnx");
         _voiceStylesDir = Path.Combine(modelsRoot, "voice_styles");
@@ -109,23 +109,12 @@ public sealed class OrtSynthesizer : ISynthesizer
     /// with the session. Call it once at startup and remember the answer: a GPU
     /// does not appear halfway through a login session.</para>
     /// </summary>
-    public static string? ProbeCuda()
-    {
-        try
-        {
-            using var probe = new SessionOptions();
-            probe.AppendExecutionProvider_CUDA(0);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            // EntryPointNotFoundException when the runtime was built without CUDA
-            // at all, OnnxRuntimeException when the provider library or its
-            // dependencies cannot be loaded. Both are measured cases — see the
-            // csproj — and both are reported the same way: one sentence.
-            return $"{ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}";
-        }
-    }
+    public static string? ProbeCuda() => OrtProviders.Probe(ExecutionProviders.Cuda);
+
+    /// <summary>
+    /// The same question for any GPU provider — see <see cref="OrtProviders.Probe"/>.
+    /// </summary>
+    public static string? ProbeGpu(string provider) => OrtProviders.Probe(provider);
 
     public int SampleRate => EnsureLoaded().SampleRate;
 
@@ -239,8 +228,9 @@ public sealed class OrtSynthesizer : ISynthesizer
         // daemon catches it, rebuilds on the CPU provider and logs the reason,
         // because only the daemon has somewhere to say it.
         _tts = Helper.LoadTextToSpeech(
-            _onnxDir, out _, useGpu: _provider == ExecutionProviders.Cuda,
-            intraOpThreads: _intraOpThreads, interOpThreads: _interOpThreads);
+            _onnxDir, out _, useGpu: ExecutionProviders.IsGpu(_provider),
+            intraOpThreads: _intraOpThreads, interOpThreads: _interOpThreads,
+            appendGpuProvider: (options, device) => OrtProviders.Append(options, _provider, device));
         return _tts;
     }
 

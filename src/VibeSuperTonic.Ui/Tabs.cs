@@ -192,7 +192,10 @@ public sealed class AboutTab : UserControl
                     An NVIDIA GPU can do the work instead, and on the machine this was
                     developed on it takes the wait before the first word from 802 ms to
                     77 ms. It is not in the download: run ./install-gpu.sh once, which
-                    fetches about 3.1 GB, then benchmark again. ON BATTERY THE ENGINE STAYS
+                    fetches about 3.1 GB, then benchmark again. An Intel GPU can too, through
+                    ./install-openvino.sh (about 64 MB; not yet measured on Intel hardware).
+                    There is no AMD pack, and the Status tab says so on a machine with
+                    an AMD GPU. ON BATTERY THE ENGINE STAYS
                     ON THE CPU — a discrete GPU is the difference between a laptop that
                     lasts an afternoon and one that does not — unless you set GpuOnBattery.
                     The Status tab says which is in force and why.
