@@ -110,6 +110,31 @@ public static class SupertonicLanguages
         return null;
     }
 
+    /// <summary>
+    /// Map a BCP-47 tag — SSML's <c>xml:lang</c>, e.g. <c>de-DE</c> — to a
+    /// Supertonic code, or null when we don't speak it or it is blank.
+    ///
+    /// <para>The same answer <see cref="FromLcid"/> gives on Windows for the same
+    /// markup, reached without an LCID: SAPI resolves the tag to an LCID and the
+    /// engine masks that to the primary language, so the region subtag never
+    /// mattered. Null falls back to the configured language rather than failing
+    /// the utterance.</para>
+    /// </summary>
+    public static string? FromTag(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag)) return null;
+
+        string t = tag.Trim();
+        int cut = t.IndexOfAny(new[] { '-', '_' });
+        string primary = (cut >= 0 ? t[..cut] : t).ToLowerInvariant();
+
+        foreach (var l in All)
+        {
+            if (string.Equals(l.Code, primary, StringComparison.Ordinal)) return l.Code;
+        }
+        return null;
+    }
+
     /// <summary>Low 10 bits of an LCID: the language, without the region.</summary>
     private const int PrimaryLanguageMask = 0x3FF;
 

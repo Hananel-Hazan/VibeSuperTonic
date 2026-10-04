@@ -89,7 +89,7 @@ public static class Ssml
     /// speak a stray angle bracket than to silently drop the rest of the
     /// utterance.</para>
     /// </summary>
-    private static int? TagEnd(string text, int start)
+    internal static int? TagEnd(string text, int start)
     {
         if (start + 1 >= text.Length) return null;
 
@@ -112,7 +112,7 @@ public static class Ssml
         return null;
     }
 
-    private static string CollapseWhitespace(string text)
+    internal static string CollapseWhitespace(string text)
     {
         var sb = new System.Text.StringBuilder(text.Length);
         bool pendingSpace = false;
@@ -135,7 +135,7 @@ public static class Ssml
     /// decoding first would turn it into markup and then delete it — the one
     /// ordering bug this function can have.</para>
     /// </summary>
-    private static class Entities
+    internal static class Entities
     {
         internal static string Decode(string text)
         {

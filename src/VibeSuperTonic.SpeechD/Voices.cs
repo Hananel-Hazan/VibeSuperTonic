@@ -90,10 +90,20 @@ internal sealed class Voices
     /// number rather than a factor because the daemon owns what a rate means and
     /// the range is documented and bounded.</para>
     /// </param>
-    internal Process StartNeural(string text, string? voice, string? language = null, int rate = 0)
+    /// <param name="volume">
+    /// speech-dispatcher's −100..100, applied by the daemon as a gain. Zero sends
+    /// nothing, for the compatibility reason the rate documents.
+    /// </param>
+    /// <param name="marks">
+    /// True when the text is an SSML document with <c>&lt;mark&gt;</c>s in it: the
+    /// renderer then reports each one on stderr (<see cref="MarkLine"/>).
+    /// </param>
+    internal Process StartNeural(
+        string text, string? voice, string? language = null, int rate = 0,
+        int volume = 0, bool marks = false)
     {
         var psi = Base(CtlPath);
-        foreach (string argument in NeuralArguments(text, voice, language, rate))
+        foreach (string argument in NeuralArguments(text, voice, language, rate, volume, marks))
             psi.ArgumentList.Add(argument);
         return Start(psi);
     }
@@ -104,7 +114,8 @@ internal sealed class Voices
     /// reaching <c>vst-ctl</c> is testable at all.
     /// </summary>
     internal static IReadOnlyList<string> NeuralArguments(
-        string text, string? voice, string? language, int rate)
+        string text, string? voice, string? language, int rate,
+        int volume = 0, bool marks = false)
     {
         var arguments = new List<string> { "render", "--out", "-" };
 
@@ -117,6 +128,14 @@ internal sealed class Voices
             arguments.Add("--rate");
             arguments.Add(rate.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
+
+        if (volume != 0)
+        {
+            arguments.Add("--volume");
+            arguments.Add(volume.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (marks) arguments.Add("--marks");
 
         if (!string.IsNullOrWhiteSpace(voice))
         {
@@ -145,27 +164,53 @@ internal sealed class Voices
     /// speech-dispatcher's -100..100. espeak-ng takes words per minute, and 175
     /// is its own default; the mapping is the linear one its own module uses.
     /// </param>
-    internal Process StartEspeak(string text, string? language, int rate)
+    /// <param name="volume">speech-dispatcher's −100..100, as espeak's amplitude.</param>
+    /// <param name="rateAdj">An SSML fragment's own rate adjustment, −10..10.</param>
+    internal Process StartEspeak(string text, string? language, int rate, int volume = 0, int rateAdj = 0)
     {
         var psi = Base(EspeakPath);
-        psi.ArgumentList.Add("--path=" + EspeakDataPath);
-        psi.ArgumentList.Add("--stdout");
-        psi.ArgumentList.Add("-s");
-        psi.ArgumentList.Add(EspeakWordsPerMinute(rate).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        foreach (string argument in EspeakArguments(text, language, rate, volume, rateAdj))
+            psi.ArgumentList.Add(argument);
+        return Start(psi);
+    }
+
+    /// <summary>
+    /// The command line <see cref="StartEspeak"/> runs, separated out for the same
+    /// reason <see cref="NeuralArguments"/> is.
+    /// </summary>
+    internal IReadOnlyList<string> EspeakArguments(
+        string text, string? language, int rate, int volume = 0, int rateAdj = 0)
+    {
+        var args = new List<string>
+        {
+            "--path=" + EspeakDataPath,
+            "--stdout",
+            "-s",
+            EspeakWordsPerMinute(rate, rateAdj).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        // Sent only when it says something: espeak's own default is 100, which is
+        // what a volume of 0 means, and a command line that never changed for a
+        // client that never touched the volume is one nothing can regress.
+        if (volume != 0)
+        {
+            args.Add("-a");
+            args.Add(EspeakAmplitude(volume).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
 
         if (!string.IsNullOrWhiteSpace(language))
         {
-            psi.ArgumentList.Add("-v");
-            psi.ArgumentList.Add(language);
+            args.Add("-v");
+            args.Add(language);
         }
 
         // `--` so a message beginning with a dash is text and not a flag. The
         // text arrives from whatever window has focus, so it is not ours to
         // trust: this is the same reasoning as quoting $DATA on route A, and the
         // reason route B never builds a shell command at all.
-        psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add(text);
-        return Start(psi);
+        args.Add("--");
+        args.Add(text);
+        return args;
     }
 
     /// <summary>
@@ -181,6 +226,29 @@ internal sealed class Voices
     /// rot silently the first time one of them was edited.</para>
     /// </summary>
     internal static int EspeakWordsPerMinute(int rate) => SpeechRate.SpeechdWordsPerMinute(rate);
+
+    /// <summary>
+    /// The same, with an SSML fragment's own adjustment on top: the engine's
+    /// <c>1.5^(n/10)</c> applied to the words per minute, held inside the range
+    /// the speechd map itself spans so a stack of nested rates cannot ask espeak
+    /// for a speed it garbles.
+    /// </summary>
+    internal static int EspeakWordsPerMinute(int rate, int rateAdj)
+    {
+        int wpm = SpeechRate.SpeechdWordsPerMinute(rate);
+        if (rateAdj == 0) return wpm;
+        return Math.Clamp(
+            (int)Math.Round(wpm * SpeechRate.RateAdjScale(rateAdj)),
+            SpeechRate.SpeechdMinWpm, SpeechRate.SpeechdMaxWpm);
+    }
+
+    /// <summary>
+    /// speech-dispatcher's volume as espeak-ng's amplitude (0..200, 100 default):
+    /// the same gain the neural voice gets, so a fallback does not change the
+    /// loudness along with the timbre.
+    /// </summary>
+    internal static int EspeakAmplitude(int volume) =>
+        Math.Clamp((int)Math.Round(100 * SpeechRate.SpeechdVolumeScale(volume)), 0, 200);
 
     private static ProcessStartInfo Base(string file) => new()
     {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using VibeSuperTonic.Core.SpeechD;
+using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.SpeechD;
 
@@ -32,9 +33,45 @@ internal sealed class SpeechdModule
     /// <summary>Set by a STOP that arrives while audio is being written.</summary>
     private bool _stopRequested;
 
+    /// <summary>
+    /// Set by a PAUSE that arrives while audio is being written. Like a stop it
+    /// ends the audio loop, but the utterance is reported as paused and not as
+    /// ended or stopped — see <see cref="HandleSpeak"/>.
+    /// </summary>
+    private bool _pauseRequested;
+
+    /// <summary>Either interruption: the audio loop's one question.</summary>
+    private bool Interrupted => _stopRequested || _pauseRequested;
+
     // speech-dispatcher's SET parameters that this module acts on. Everything
     // else is accepted and ignored — see HandleSet.
     private int _rate;
+
+    /// <summary>
+    /// speechd's −100..100, applied as a gain by the daemon and as amplitude by
+    /// the espeak fallback. Pitch has no counterpart here — see HandleSet.
+    /// </summary>
+    private int _volume;
+
+    // ---- one utterance's bookkeeping, reset by HandleSpeak ----
+
+    /// <summary>Samples handed to the server so far, silence included.</summary>
+    private long _samplesSent;
+
+    /// <summary>Sample rate of the audio last sent, for writing silence at it.</summary>
+    private int _streamRate = FallbackRate;
+
+    /// <summary>Marks the renderer reported that the audio has not yet reached.</summary>
+    private readonly List<VibeSuperTonic.Core.Ipc.RenderMark> _dueMarks = new();
+
+    /// <summary>espeak-ng's own output rate, for silence written before any audio exists.</summary>
+    private const int FallbackRate = 22050;
+
+    /// <summary>
+    /// The longest silence one utterance may carry, summed over its breaks. The
+    /// daemon bounds the neural path's the same way; this is the fallback's.
+    /// </summary>
+    private const int MaxSilenceMs = 60_000;
     private string? _language;
     private string? _synthesisVoice;
 
@@ -151,6 +188,7 @@ internal sealed class SpeechdModule
             switch (key)
             {
                 case "rate": _rate = ParseInt(value, 0); break;
+                case "volume": _volume = Math.Clamp(ParseInt(value, 0), -100, 100); break;
                 case "language": _language = Normalise(value); break;
                 case "synthesis_voice": _synthesisVoice = Normalise(value); break;
                 case "voice": _symbolicVoice = Normalise(value); break;
@@ -158,10 +196,21 @@ internal sealed class SpeechdModule
                 // ACCEPTED AND IGNORED, WHICH IS A DECISION AND NOT AN OMISSION.
                 // punctuation_mode, spelling_mode and cap_let_recogn all mean
                 // "say something extra out loud", and this product has no concept
-                // of it; pitch and volume have no lever on either voice. Answering
-                // 303 to a parameter every client sends would make the module look
-                // broken to a user who is not using the feature at all.
-                // docs/SPEECHD-PLAN.md, trap 11.
+                // of it. Answering 303 to a parameter every client sends would
+                // make the module look broken to a user who is not using the
+                // feature at all. docs/SPEECHD-PLAN.md, trap 11.
+                //
+                // PITCH AND PITCH_RANGE ARE IGNORED FOR A DIFFERENT REASON, and it
+                // is measured rather than assumed: Supertonic has no pitch input
+                // (its style vector is the only voice control), and the one lever
+                // there is — resampling — moves pitch and speed together, which is
+                // trap 5's "do not fake it". The espeak fallback does have -p, but
+                // applying pitch to the voice a user is NOT listening to would make
+                // a fallback change the timbre by more than it should.
+                //
+                // ssml_mode is not read either, because SSML is detected from the
+                // text: trap 11 measured a plain `spd-say "hello"` arriving as
+                // <speak>hello</speak> with the mode off.
                 default: break;
             }
         }
@@ -217,15 +266,35 @@ internal sealed class SpeechdModule
         string text = ReadMessage();
 
         _stopRequested = false;
+        _pauseRequested = false;
+        _samplesSent = 0;
+        _streamRate = FallbackRate;
+        _dueMarks.Clear();
 
-        if (string.IsNullOrWhiteSpace(text))
+        // SSML, PARSED ONCE HERE FOR THE TWO THINGS ONLY THIS PROCESS CAN DO: tell
+        // an utterance with nothing to say from one with something, and drive the
+        // espeak fallback fragment by fragment. The neural voice is handed the
+        // text as it came and the daemon parses it again — one parser (Core's),
+        // two callers, so they cannot disagree about what a document means. A
+        // document that does not parse is null here and is STRIPPED, which is
+        // what this module did for every document before 2026-10-03.
+        IReadOnlyList<SsmlFragment>? fragments =
+            SsmlDocument.TryParse(text, out var parsed) ? parsed : null;
+        string plain = fragments is null ? Ssml.Strip(text) : SsmlDocument.SpokenText(fragments);
+
+        if (string.IsNullOrWhiteSpace(plain))
         {
             // An empty label is a real thing that happens dozens of times a
             // session. It is an utterance that produces no audio, not an error —
             // but the begin/end pair still has to arrive or the server waits for
-            // an utterance that never ends.
+            // an utterance that never ends. Any bookmarks it carried still fire:
+            // a client waiting on `<speak><mark name="done"/></speak>` is waiting
+            // for exactly that event.
             Reply("200 OK SPEAKING");
             Reply("701 BEGIN");
+            if (fragments is not null)
+                foreach (var f in fragments)
+                    if (f.Kind == SsmlFragmentKind.Mark) ReportMark(f.Mark!);
             Reply("702 END");
             return;
         }
@@ -242,6 +311,8 @@ internal sealed class SpeechdModule
             _synthesisVoice, EchoVoiceName, StringComparison.OrdinalIgnoreCase);
 
         var chose = echoChosen ? RenderVoice.Espeak : ModuleRouting.For(type);
+
+        bool wantsMarks = fragments?.Any(f => f.Kind == SsmlFragmentKind.Mark) == true;
 
         bool spoke = false;
         if (chose == RenderVoice.Neural)
@@ -264,7 +335,8 @@ internal sealed class SpeechdModule
             }
 
             spoke = SpeakWith(
-                () => _voices.StartNeural(text, pick?.RenderVoice, pick?.RenderLanguage, _rate),
+                () => _voices.StartNeural(
+                    text, pick?.RenderVoice, pick?.RenderLanguage, _rate, _volume, wantsMarks),
                 "neural");
         }
 
@@ -274,10 +346,16 @@ internal sealed class SpeechdModule
         // user hears a flat voice rather than nothing, and "my screen reader
         // sounds different" is a different kind of day from "my screen reader
         // stopped".
-        if (!spoke && !_stopRequested)
-            spoke = SpeakWith(() => _voices.StartEspeak(text, _language, _rate), "espeak");
+        if (!spoke && !Interrupted)
+            spoke = SpeakEspeak(fragments, plain);
 
         if (_stopRequested) Reply("703 STOP");
+
+        // A PAUSE ENDS THE UTTERANCE WITHOUT AN END. speechd resumes by sending
+        // the remainder as a new SPEAK, starting from the last index mark it saw
+        // — which is why the marks above matter for more than highlighting — and
+        // an END here would tell it the whole message had been spoken.
+        else if (_pauseRequested) Reply("704 PAUSE");
         else if (spoke) Reply("702 END");
         else
         {
@@ -287,6 +365,82 @@ internal sealed class SpeechdModule
             _log("both voices failed; the utterance produced no audio");
             Reply("702 END");
         }
+    }
+
+    /// <summary>
+    /// The fast voice for a whole utterance. A plain message is one espeak run; an
+    /// SSML document is one run per text fragment, so that each fragment gets its
+    /// own language and pace, a <c>&lt;break&gt;</c> becomes silence and a
+    /// <c>&lt;mark&gt;</c> is reported where the audio before it ends.
+    /// </summary>
+    private bool SpeakEspeak(IReadOnlyList<SsmlFragment>? fragments, string plain)
+    {
+        // Not a document, or one that did not parse: the stripped text, in one
+        // run. espeak-ng would otherwise be handed "<speak>" and read it.
+        if (fragments is null)
+        {
+            return SpeakWith(
+                () => _voices.StartEspeak(plain, _language, _rate, _volume), "espeak");
+        }
+
+        bool any = false;
+        int silenceLeft = MaxSilenceMs;
+
+        foreach (var fragment in fragments)
+        {
+            if (Interrupted) break;
+
+            switch (fragment.Kind)
+            {
+                case SsmlFragmentKind.Mark:
+                    ReportMark(fragment.Mark!);
+                    break;
+
+                case SsmlFragmentKind.Silence:
+                    int ms = Math.Min(fragment.SilenceMs, silenceLeft);
+                    silenceLeft -= ms;
+                    if (ms > 0) any |= SendSilence(ms);
+                    break;
+
+                default:
+                    string said = fragment.Text;
+                    string? lang = fragment.Lang ?? _language;
+                    int adj = fragment.RateAdj;
+                    any |= SpeakWith(
+                        () => _voices.StartEspeak(said, lang, _rate, _volume, adj), "espeak");
+                    break;
+            }
+        }
+
+        return any;
+    }
+
+    /// <summary>
+    /// Write <paramref name="ms"/> of silence as audio blocks. Returns false if
+    /// there was nothing to send, and stops at once on a STOP or PAUSE like the
+    /// audio loop does.
+    /// </summary>
+    private bool SendSilence(int ms)
+    {
+        long remaining = (long)_streamRate * ms / 1000 * 2;       // 16-bit mono
+        remaining -= remaining % 2;
+        if (remaining <= 0) return false;
+
+        var block = new byte[AudioBlock.MaxChunkBytes];
+        bool sent = false;
+
+        while (remaining > 0)
+        {
+            if (DrainCommandsAndCheckInterrupt()) return sent;
+
+            int n = (int)Math.Min(remaining, block.Length);
+            AudioBlock.Write(_out, block.AsSpan(0, n), _streamRate, 1, 16);
+            _samplesSent += n / 2;
+            remaining -= n;
+            sent = true;
+        }
+
+        return sent;
     }
 
     /// <summary>
@@ -306,6 +460,11 @@ internal sealed class SpeechdModule
             return false;
         }
 
+        // The neural renderer reports bookmarks on stderr, so something has to be
+        // reading it. espeak-ng has nothing to say there until it fails, and its
+        // stderr is read once, after the fact, as it always was.
+        StderrPump? pump = what == "neural" ? new StderrPump(process.StandardError) : null;
+
         try
         {
             var stdout = process.StandardOutput.BaseStream;
@@ -315,19 +474,30 @@ internal sealed class SpeechdModule
                 // Not a WAV. Either the renderer refused — vst-ctl exits non-zero
                 // with a reason on stderr, which is exactly what "never exit 0
                 // with no audio" bought us — or it is not the program we think.
-                _log($"{what}: no audio ({Drain(process)})");
+                if (pump is not null) { pump.WaitForEnd(); _log($"{what}: no audio ({pump.Message})"); }
+                else _log($"{what}: no audio ({Drain(process)})");
                 return false;
             }
 
-            long sent = SendAudio(stdout, wav);
+            _streamRate = wav.SampleRate;
+            long sent = SendAudio(stdout, wav, pump);
 
             // NEVER REPORT SUCCESS HAVING PRODUCED NO AUDIO. A renderer can emit
             // a header and then nothing at all, and that is the failure this
             // whole feature keeps finding.
-            if (sent == 0 && !_stopRequested)
+            if (sent == 0 && !Interrupted)
             {
-                _log($"{what}: a header and no samples ({Drain(process)})");
+                _log($"{what}: a header and no samples ({(pump is not null ? pump.Message : Drain(process))})");
                 return false;
+            }
+
+            // The audio is all handed over, so every bookmark the renderer
+            // printed is now due, in order — before the END that follows.
+            if (!Interrupted && pump is not null)
+            {
+                pump.WaitForEnd();
+                CollectMarks(pump);
+                ReportMarks(before: long.MaxValue);
             }
 
             return true;
@@ -347,7 +517,7 @@ internal sealed class SpeechdModule
     /// The audio loop, and its shape is the reason a stop works: one block, then
     /// a look at stdin, then the next block.
     /// </summary>
-    private long SendAudio(Stream pcmSource, WavHeader wav)
+    private long SendAudio(Stream pcmSource, WavHeader wav, StderrPump? pump)
     {
         var buffer = new byte[AudioBlock.MaxChunkBytes];
         long total = 0;
@@ -355,7 +525,7 @@ internal sealed class SpeechdModule
 
         while (true)
         {
-            if (DrainCommandsAndCheckStop()) return total;
+            if (DrainCommandsAndCheckInterrupt()) return total;
 
             int n = pcmSource.Read(buffer, held, buffer.Length - held);
             if (n <= 0) break;
@@ -368,8 +538,24 @@ internal sealed class SpeechdModule
             int whole = held - held % wav.FrameBytes;
             if (whole == 0) continue;
 
+            // INDEX MARKS, announced just before the block that contains them.
+            // speechd with server-side audio does not synchronise a module's
+            // events to its own playback — upstream's espeak module reports them
+            // at synthesis time too — so "as the audio holding it is handed over"
+            // is the honest position: at most one block (about 0.1 s) early, and
+            // a mark at the very start precedes the first sample, when the
+            // renderer's line has arrived by then. A line that arrives late is
+            // reported with the next block, or at the end at the latest.
+            long blockEnd = _samplesSent + whole / wav.FrameBytes;
+            if (pump is not null)
+            {
+                CollectMarks(pump);
+                ReportMarks(before: blockEnd);
+            }
+
             AudioBlock.Write(_out, buffer.AsSpan(0, whole), wav.SampleRate, wav.Channels, wav.Bits);
             total += whole;
+            _samplesSent = blockEnd;
 
             held -= whole;
             if (held > 0) Array.Copy(buffer, whole, buffer, 0, held);
@@ -380,21 +566,65 @@ internal sealed class SpeechdModule
             int whole = held - held % wav.FrameBytes;
             AudioBlock.Write(_out, buffer.AsSpan(0, whole), wav.SampleRate, wav.Channels, wav.Bits);
             total += whole;
+            _samplesSent += whole / wav.FrameBytes;
         }
 
         return total;
     }
 
+    // ------------------------------------------------------------------ marks
+
+    /// <summary>Move whatever the renderer has reported so far into the due list.</summary>
+    private void CollectMarks(StderrPump pump)
+    {
+        while (pump.TryTake(out var mark)) _dueMarks.Add(mark);
+    }
+
+    /// <summary>
+    /// Report the marks that fall before sample <paramref name="before"/> —
+    /// <see cref="long.MaxValue"/> for all of them. In order, each exactly once.
+    /// </summary>
+    private void ReportMarks(long before)
+    {
+        int reported = 0;
+        foreach (var mark in _dueMarks)
+        {
+            if (mark.Sample >= before) break;
+            ReportMark(mark.Name);
+            reported++;
+        }
+
+        _dueMarks.RemoveRange(0, reported);
+    }
+
+    /// <summary>
+    /// <c>700-&lt;name&gt;</c> then <c>700 INDEX MARK</c>: speech-dispatcher's
+    /// index-mark event, which is what lets a client highlight the word being
+    /// read and lets the server resume a paused message from the right place. The
+    /// name goes on one line, so control characters in it are neutralised — it
+    /// came from a client.
+    /// </summary>
+    private void ReportMark(string name)
+    {
+        Reply("700-" + MarkLine.ForProtocolLine(name));
+        Reply("700 INDEX MARK");
+    }
+
     /// <summary>
     /// Read anything speech-dispatcher has sent without waiting for it, and
-    /// report whether it told us to stop.
+    /// report whether it told us to stop or to pause.
     ///
-    /// <para>A command that is not a stop is put back: the server does not send
+    /// <para>A command that is neither is put back: the server does not send
     /// a second SPEAK while one is in flight, so anything else here is a SET or a
-    /// LIST for after this utterance, and losing it would be worse than
+    /// LIST for after this utterance, and losing it would be worth more than
     /// deferring it.</para>
+    ///
+    /// <para><b>A PAUSE is an interruption, not a note for later.</b> It used to
+    /// be put back with the others, so the audio carried on and the 704 arrived
+    /// after the utterance had finished — a pause key that did nothing until it
+    /// no longer mattered.</para>
     /// </summary>
-    private bool DrainCommandsAndCheckStop()
+    private bool DrainCommandsAndCheckInterrupt()
     {
         while (_in.ReadLine(block: false) is { } line)
         {
@@ -402,6 +632,10 @@ internal sealed class SpeechdModule
             {
                 case "STOP":
                     _stopRequested = true;
+                    return true;
+
+                case "PAUSE":
+                    _pauseRequested = true;
                     return true;
 
                 case "QUIT":
