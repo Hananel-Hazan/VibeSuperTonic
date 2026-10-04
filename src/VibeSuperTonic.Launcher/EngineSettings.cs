@@ -37,6 +37,12 @@ internal sealed class EngineSettings
     public int OnnxThreads { get; set; } = 0;
     public int OnnxInterOpThreads { get; set; } = 1;
     public bool UseDirectML { get; set; } = true;
+    /// <summary>
+    /// Keep DirectML on battery (default off). Global only: per-voice entries
+    /// ignore it, and <see cref="EngineSettingsRegistry.IsEffectivelyGlobal"/>
+    /// deliberately does not compare it. Same key as the Linux daemon's.
+    /// </summary>
+    public bool GpuOnBattery { get; set; } = false;
     public int DirectMLDeviceId { get; set; } = 0;
 
     /// <summary>
@@ -395,6 +401,7 @@ internal static class EngineSettingsRegistry
                 case "onnxthreads":         s.OnnxThreads = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "onnxinteropthreads":  s.OnnxInterOpThreads = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "usedirectml":         s.UseDirectML = bool.Parse(value); break;
+                case "gpuonbattery":        s.GpuOnBattery = bool.Parse(value); break;
                 case "directmldeviceid":    s.DirectMLDeviceId = int.Parse(value, CultureInfo.InvariantCulture); break;
                 default:               error = $"Unknown key: {key}"; return false;
             }

@@ -136,7 +136,6 @@ internal sealed class InferenceReport
         else if (profileApplies)
         {
             threads = stored!.Threads;
-            useDml = stored.Provider == "directml";
             reason = $"benchmark {ShortDate(stored.MeasuredUtc)}";
         }
         else
@@ -145,6 +144,20 @@ internal sealed class InferenceReport
                 ? "ONNX Runtime's own pick — this machine has never been measured"
                 : "ONNX Runtime's own pick — the stored benchmark does not apply here";
         }
+
+        // The engine's own rule, not a copy of it: the checkbox vetoes, an
+        // applicable profile picks among what is left, the battery rule can still
+        // knock DirectML out. Power is read now, which is what a session started
+        // from here would see. A profile only counts when the thread count is not
+        // set by hand, the same condition the engine applies it under.
+        var decision = DirectMlPolicy.Decide(
+            !byHand && profileApplies ? stored : null,
+            settings.UseDirectML,
+            MachineFacts.PowerState(),
+            settings.GpuOnBattery);
+        useDml = decision.Provider == ExecutionProviders.DirectMl;
+        if (!byHand && profileApplies && decision.FromProfile)
+            threads = decision.Threads;
 
         string providerText = useDml ? "DirectML (GPU)" : "CPU";
 
@@ -159,7 +172,12 @@ internal sealed class InferenceReport
                 ? "auto — inference runs on the GPU, so the CPU thread count is not the lever"
                 : "auto — ONNX Runtime decides";
 
-        configured.Add(new("Provider", $"{providerText} ({(byHand || !profileApplies ? "from settings" : reason)})"));
+        string providerWhy = decision.SkippedForBattery
+            ? "on battery — DirectML skipped; tick \"Keep GPU on battery\" on the Advanced tab to use it"
+            : !settings.UseDirectML && stored?.Provider == ExecutionProviders.DirectMl && profileApplies && !byHand
+                ? "DirectML is switched off on the Advanced tab, which wins over the benchmark"
+                : byHand || !profileApplies ? "from settings" : reason;
+        configured.Add(new("Provider", $"{providerText} ({providerWhy})"));
         configured.Add(new("Threads", $"{threadsText} ({reason})"));
         configured.Add(new("Inter-op threads", settings.OnnxInterOpThreads.ToString()));
         configured.Add(new("Quality", $"TotalStep {settings.TotalStep} ({settings.Preset})"));
@@ -238,11 +256,12 @@ internal sealed class InferenceReport
             string dml = s.DmlLatchedOff
                 ? ", DirectML LATCHED OFF after repeated device loss"
                 : "";
+            string battery = s.GpuSkippedForBattery ? ", DirectML skipped: on battery" : "";
             string loss = s.DeviceLossCount > 0 ? $", {s.DeviceLossCount} device loss(es)" : "";
 
             rows.Add(new(
                 $"{s.ProcessName} (pid {s.Pid})",
-                $"{threads} {why}{dml}{loss}"));
+                $"{threads} {why}{battery}{dml}{loss}"));
         }
         return rows;
     }

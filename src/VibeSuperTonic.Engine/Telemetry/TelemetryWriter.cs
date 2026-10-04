@@ -160,6 +160,7 @@ internal static class TelemetryWriter
                 // for a field only the benchmark reads.
                 Unpaced = SapiEngine.UnpacedActive,
                 ProfileApplied = SupertonicAdapter.ProfileApplied,
+                GpuSkippedForBattery = SupertonicAdapter.GpuSkippedForBattery,
                 SampleTimeUtc = DateTime.UtcNow,
             };
 

@@ -70,6 +70,12 @@ public sealed class SessionSnapshot
     /// </summary>
     public bool ProfileApplied { get; set; }
 
+    /// <summary>
+    /// DirectML was wanted and the battery rule kept the session on the CPU.
+    /// False on any build or host that does not know the rule.
+    /// </summary>
+    public bool GpuSkippedForBattery { get; set; }
+
     public DateTime SampleTimeUtc { get; set; }
 
     /// <summary>

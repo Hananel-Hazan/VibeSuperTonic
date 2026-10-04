@@ -9,6 +9,7 @@ internal sealed class AdvancedTab : UserControl
     private readonly NumericUpDown _maxChunk, _minChunk, _interChunkSilence, _onnxThreads, _onnxInterOpThreads;
     private readonly NumericUpDown _synthSilence, _rateClamp;
     private readonly CheckBox _useDirectML;
+    private readonly CheckBox _gpuOnBattery;
     private readonly Button _save, _reset;
     private readonly TextBox _dataDirOverride;
     private readonly Label _dataDirResolved;
@@ -75,6 +76,16 @@ internal sealed class AdvancedTab : UserControl
             ForeColor = Color.DimGray,
         });
         grid.Controls.Add(gpuPanel, 1, row);
+        row++;
+
+        grid.Controls.Add(new Label { Text = "Keep GPU on battery", AutoSize = true, Margin = new Padding(0, 8, 12, 0) }, 0, row);
+        _gpuOnBattery = new CheckBox { Text = "On", AutoSize = true, Margin = new Padding(0, 4, 8, 0) };
+        dmlTip.SetToolTip(_gpuOnBattery, "Off (the default): when the laptop is unplugged, the engine runs on the CPU instead of DirectML.\n" +
+            "The CPU path is several times faster than real time, and a GPU on battery costs far more charge.\n\n" +
+            "Checked: keep using DirectML on battery.\n\n" +
+            "Read when a speech session starts, not continuously: unplugging during a session takes effect\n" +
+            "the next time a program starts speaking. If Windows cannot tell, nothing changes.");
+        grid.Controls.Add(_gpuOnBattery, 1, row);
         row++;
 
         var info = new Label
@@ -348,6 +359,7 @@ internal sealed class AdvancedTab : UserControl
         _onnxThreads.Value       = Clamp(s.OnnxThreads, _onnxThreads);
         _onnxInterOpThreads.Value = Clamp(s.OnnxInterOpThreads, _onnxInterOpThreads);
         _useDirectML.Checked     = s.UseDirectML;
+        _gpuOnBattery.Checked    = s.GpuOnBattery;
         _dataDirOverride.Text    = DataPaths.RawDataDirOverride ?? "";
         UpdateResolvedLabel();
     }
@@ -365,6 +377,7 @@ internal sealed class AdvancedTab : UserControl
         s.OnnxThreads         = (int)_onnxThreads.Value;
         s.OnnxInterOpThreads  = (int)_onnxInterOpThreads.Value;
         s.UseDirectML         = _useDirectML.Checked;
+        s.GpuOnBattery        = _gpuOnBattery.Checked;
         // DirectMLDeviceId left as-is in registry; user controls GPU selection
         // via Windows Settings → Graphics now (the in-app picker was unreliable).
         EngineSettingsRegistry.Save(s);

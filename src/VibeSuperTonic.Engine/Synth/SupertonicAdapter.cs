@@ -179,13 +179,14 @@ internal sealed class SupertonicAdapter
         // Control Panel surfaces all of these on the Advanced tab so users can
         // experiment with their CPU/GPU.
         int intraOp = 0, interOp = 1, dmlDevice = 0;
-        bool useDml = false;
+        bool useDml = false, gpuOnBattery = false;
         try
         {
             var es = EngineSettingsCache.Resolve();
             intraOp = es.OnnxThreads;
             interOp = es.OnnxInterOpThreads;
             useDml = es.UseDirectML;
+            gpuOnBattery = es.GpuOnBattery;
             dmlDevice = es.DirectMLDeviceId;
         }
         catch { /* defaults */ }
@@ -216,20 +217,32 @@ internal sealed class SupertonicAdapter
         // Cleared per session build, not once per process: a session rebuilt after
         // a reset must not keep reporting the previous one's provenance.
         ProfileApplied = false;
+        GpuSkippedForBattery = false;
 
-        if (intraOp == CpuBudget.Auto && !noProfile)
+        // One decision, shared with the Control Panel's prediction of it
+        // (DirectMlPolicy). Three things can change the provider, in a fixed
+        // order: the checkbox is a veto (unticked means CPU whatever a profile
+        // says), a stored profile may then pick between what is left, and the
+        // battery rule can still knock DirectML out. Nothing can put it back.
+        // Power is read here, once per session build — never polled.
+        var applied = intraOp == CpuBudget.Auto && !noProfile
+            ? BenchmarkProfileCache.Applicable(baseDir, onnxDir)
+            : null;
+        // A process that is MEASURING the engine asked for a specific provider and
+        // must get it: a sweep's DirectML row run unplugged would otherwise be
+        // silently CPU, and a full table of numbers would all describe one
+        // configuration. So the battery rule is not consulted there.
+        var decision = DirectMlPolicy.Decide(
+            applied, useDml, noProfile ? PowerStates.Unknown : PowerSource.Read(), gpuOnBattery);
+        useDml = decision.Provider == ExecutionProviders.DirectMl;
+        GpuSkippedForBattery = decision.SkippedForBattery;
+        if (decision.FromProfile)
         {
-            var applied = BenchmarkProfileCache.Applicable(baseDir, onnxDir);
-            if (applied is not null)
-            {
-                intraOp = applied.Threads;
-                // The provider is measured too, and it is the half a percentage
-                // could never have answered. It still loses to the latch below:
-                // a profile that liked DirectML cannot override a driver that has
-                // failed twice in this process.
-                useDml = applied.Provider == "directml";
-                ProfileApplied = true;
-            }
+            // Threads come from the rows that describe the provider in force, so
+            // a battery veto lands on a MEASURED CPU count when the sweep has one;
+            // when it has none the thread count stays ORT's own pick, as before.
+            intraOp = decision.Threads;
+            ProfileApplied = true;
         }
 
         // Honor the in-process latch: repeated GPU device-loss in this process
@@ -286,6 +299,13 @@ internal sealed class SupertonicAdapter
     /// this" from "the last sweep did".</para>
     /// </summary>
     internal static bool ProfileApplied { get; private set; }
+
+    /// <summary>
+    /// True when DirectML would have been used and the battery rule is the only
+    /// reason it was not. Published so the Status tab can say so instead of
+    /// leaving "why is my GPU idle" with three indistinguishable causes.
+    /// </summary>
+    internal static bool GpuSkippedForBattery { get; private set; }
 
     /// <summary>
     /// Is this ONNX Runtime's native DLL failing to load, in any of the shapes

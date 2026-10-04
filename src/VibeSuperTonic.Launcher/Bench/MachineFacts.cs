@@ -99,12 +99,8 @@ internal static class MachineFacts
         try
         {
             if (!GetSystemPowerStatus(out var status)) return "unknown";
-            return status.ACLineStatus switch
-            {
-                0 => "battery",
-                1 => "ac",
-                _ => "unknown",   // 255 = unknown, which is what a VM usually says
-            };
+            // 255 = unknown, which is what a VM usually says.
+            return PowerStates.FromAcLineStatus(status.ACLineStatus);
         }
         catch { return "unknown"; }
     }

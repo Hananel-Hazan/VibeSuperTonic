@@ -41,6 +41,13 @@ internal sealed class EngineSettings
     public int    OnnxThreads         { get; set; } = 0;
     public int    OnnxInterOpThreads  { get; set; } = 1;
     public bool   UseDirectML         { get; set; } = true;
+    /// <summary>
+    /// Keep DirectML on battery. Off by default: the CPU path runs several times
+    /// faster than real time, and a GPU on a laptop is the difference between an
+    /// afternoon and a lunch break. Global only — it is not a per-voice knob, so
+    /// <see cref="ResolveFor"/> does not carry it. Same key as the Linux daemon's.
+    /// </summary>
+    public bool   GpuOnBattery        { get; set; } = false;
     public int    DirectMLDeviceId    { get; set; } = 0;
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
 

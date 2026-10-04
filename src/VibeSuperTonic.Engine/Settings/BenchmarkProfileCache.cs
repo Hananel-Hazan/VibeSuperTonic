@@ -58,7 +58,7 @@ internal static class BenchmarkProfileCache
                 TotalStep: totalStep,
                 Voice: "",                     // provenance only
                 Language: "",                  // provenance only
-                PowerState: "unknown",
+                PowerState: PowerSource.Read(),   // provenance only, never compared
                 IdleCpuPercent: 0);
 
             return profile.StalenessAgainst(now).Count == 0 ? profile : null;

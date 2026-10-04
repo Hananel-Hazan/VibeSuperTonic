@@ -20,6 +20,14 @@ public static class ExecutionProviders
     /// </summary>
     public const string Cuda = "cuda";
 
+    /// <summary>
+    /// DirectML (Direct3D 12), the Windows engine's GPU provider. Deliberately NOT
+    /// in <see cref="IsKnown"/>: that gate guards the Linux ORT backend, which
+    /// has no DirectML and must keep refusing the name. The string is what the
+    /// Windows sweep already writes into <c>benchmark.json</c>.
+    /// </summary>
+    public const string DirectMl = "directml";
+
     public static bool IsKnown(string provider) =>
         provider is Cpu or Cuda;
 
@@ -28,6 +36,7 @@ public static class ExecutionProviders
     {
         Cpu => "CPU",
         Cuda => "CUDA",
+        DirectMl => "DirectML",
         _ => provider,
     };
 }
@@ -61,6 +70,18 @@ public static class PowerStates
 
     /// <summary>A desktop with no AC node, or a kernel that names it something unexpected.</summary>
     public const string Unknown = "unknown";
+
+    /// <summary>
+    /// Windows' <c>SYSTEM_POWER_STATUS.ACLineStatus</c>: 0 offline, 1 online,
+    /// 255 unknown. Anything else, including a VM's 255, is
+    /// <see cref="Unknown"/> and so never changes the provider.
+    /// </summary>
+    public static string FromAcLineStatus(byte acLineStatus) => acLineStatus switch
+    {
+        0 => Battery,
+        1 => Ac,
+        _ => Unknown,
+    };
 }
 
 /// <summary>
@@ -80,6 +101,14 @@ public static class PowerStates
 /// <param name="FromProfile">True when a stored measurement decided it.</param>
 public sealed record ExecutionDecision(int Threads, string Provider, string Reason, bool FromProfile)
 {
+    /// <summary>
+    /// True when a GPU provider was wanted and the battery rule is the only
+    /// reason it was not used. Carried as a flag rather than recovered from
+    /// <see cref="Reason"/>, because a status line must not depend on the wording
+    /// of a sentence.
+    /// </summary>
+    public bool SkippedForBattery { get; init; }
+
     /// <summary>
     /// Apply a stored profile if it still describes this machine, veto the GPU if
     /// the machine or the user says so, and fall back to <see cref="CpuBudget"/>'s
@@ -108,6 +137,11 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
     /// </param>
     /// <param name="powerState"><see cref="PowerStates"/>, read per decision.</param>
     /// <param name="gpuOnBattery">The setting that turns the battery rule off.</param>
+    /// <param name="gpuProvider">
+    /// The GPU provider this host speaks and <c>gpu</c> maps to: CUDA by default
+    /// (Linux), <see cref="ExecutionProviders.DirectMl"/> for the Windows engine.
+    /// Every veto below applies to whichever one it is.
+    /// </param>
     public static ExecutionDecision Decide(
         BenchmarkProfile? stored,
         BenchmarkMachine now,
@@ -116,7 +150,8 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
         string preference = ProviderPreference.Auto,
         string? gpuUnavailable = null,
         string powerState = PowerStates.Unknown,
-        bool gpuOnBattery = false)
+        bool gpuOnBattery = false,
+        string gpuProvider = ExecutionProviders.Cuda)
     {
         ArgumentNullException.ThrowIfNull(now);
 
@@ -130,7 +165,7 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
         string wanted = preference switch
         {
             ProviderPreference.Cpu => ExecutionProviders.Cpu,
-            ProviderPreference.Gpu => ExecutionProviders.Cuda,
+            ProviderPreference.Gpu => gpuProvider,
             _ => profileApplies && stored is not null ? stored.Provider : ExecutionProviders.Cpu,
         };
 
@@ -139,13 +174,13 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
         //     blaming the battery for a choice it never had.
         string? cpuBecause = null;
 
-        if (wanted == ExecutionProviders.Cuda && gpuUnavailable is not null)
+        if (wanted != ExecutionProviders.Cpu && gpuUnavailable is not null)
         {
             cpuBecause = preference == ProviderPreference.Gpu
                 ? $"GPU requested but unavailable — {gpuUnavailable}"
                 : $"no GPU available — {gpuUnavailable}";
         }
-        else if (wanted == ExecutionProviders.Cuda
+        else if (wanted != ExecutionProviders.Cpu
                  && powerState == PowerStates.Battery && !gpuOnBattery)
         {
             // Requested explicitly, and the right default: a discrete GPU on a
@@ -154,6 +189,8 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
             // real time. Set GpuOnBattery to keep the GPU on a dock.
             cpuBecause = "on battery";
         }
+
+        bool onBattery = cpuBecause == "on battery";
 
         string provider = cpuBecause is null ? wanted : ExecutionProviders.Cpu;
 
@@ -176,7 +213,10 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
                 if (preference is ProviderPreference.Cpu or ProviderPreference.Gpu && cpuBecause is null)
                     why = $"{preference} requested, benchmark {measured}";
 
-                return new ExecutionDecision(profileThreads, provider, why, FromProfile: true);
+                return new ExecutionDecision(profileThreads, provider, why, FromProfile: true)
+                {
+                    SkippedForBattery = onBattery,
+                };
             }
         }
 
@@ -190,7 +230,10 @@ public sealed record ExecutionDecision(int Threads, string Provider, string Reas
 
         if (cpuBecause is not null) fallback = $"{cpuBecause}, {fallback}";
 
-        return new ExecutionDecision(threads, provider, fallback, FromProfile: false);
+        return new ExecutionDecision(threads, provider, fallback, FromProfile: false)
+        {
+            SkippedForBattery = onBattery,
+        };
     }
 
     /// <summary>
