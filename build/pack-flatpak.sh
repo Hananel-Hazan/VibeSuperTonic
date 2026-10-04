@@ -134,7 +134,7 @@ info "espeak-ng $commit, build-espeak.sh's pin"
 # THE PACKAGE LIST. Only a restore inside the SDK can say it is complete (CI's
 # flathub job regenerates it and compares); what is checked here is that it
 # exists, and pins every package by hash.
-[[ -f "$nuget" ]] || die "no $nuget. Generate it: python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08"
+[[ -f "$nuget" ]] || die "no $nuget. Generate it: python3 build/flatpak/gen-nuget-sources.py --in-sdk 26.08"
 python3 - "$nuget" <<'PY' || die "nuget-sources.json is malformed"
 import json, re, sys
 src = json.load(open(sys.argv[1]))

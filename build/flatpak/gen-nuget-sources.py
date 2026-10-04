@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pin every NuGet package the Linux release restores, as Flatpak sources.
 
-    python3 build/flatpak/gen-nuget-sources.py [--in-sdk 25.08] [-o FILE]
+    python3 build/flatpak/gen-nuget-sources.py [--in-sdk 26.08] [-o FILE]
 
 Writes build/flatpak/nuget-sources.json: one `file` source per package, with
 nuget.org's URL and its SHA-512, landing in nuget-sources/ inside the build.

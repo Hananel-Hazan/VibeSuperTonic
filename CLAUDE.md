@@ -382,7 +382,7 @@ still the one packer and its assertions still run. `pack-flatpak.sh
 --from-source` builds it and `--flathub TAG` writes the submission. The package
 list must be the one **the SDK's own dotnet** restores (runtime packs follow the
 SDK's version, not ours): regenerate it with
-`python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08`, and CI's
+`python3 build/flatpak/gen-nuget-sources.py --in-sdk 26.08`, and CI's
 [flathub workflow](.github/workflows/flathub.yml) refuses a stale one. When a
 `PackageReference` changes, that file changes with it.
 

@@ -43,7 +43,7 @@ jobs:
   flathub:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
     steps:
       - uses: actions/checkout@v4
@@ -52,14 +52,14 @@ jobs:
         run: |
           flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak --user install -y --noninteractive flathub \
-            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 \
-            org.freedesktop.Sdk.Extension.dotnet10//25.08
-          flatpak --user info org.freedesktop.Sdk.Extension.dotnet10//25.08
+            org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 \
+            org.freedesktop.Sdk.Extension.dotnet10//26.08
+          flatpak --user info org.freedesktop.Sdk.Extension.dotnet10//26.08
 
       - name: Regenerate the NuGet sources inside the SDK
         id: nuget
         run: |
-          python3 build/flatpak/gen-nuget-sources.py --in-sdk 25.08 -o "$RUNNER_TEMP/nuget-sources.json"
+          python3 build/flatpak/gen-nuget-sources.py --in-sdk 26.08 -o "$RUNNER_TEMP/nuget-sources.json"
           if diff -u build/flatpak/nuget-sources.json "$RUNNER_TEMP/nuget-sources.json"; then
             echo "same=true" >> "$GITHUB_OUTPUT"
           else
