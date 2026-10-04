@@ -85,7 +85,9 @@ public static class SsmlDocument
 {
     /// <summary>
     /// The longest single <c>&lt;break&gt;</c>. Windows passes SAPI's value
-    /// through; this is a guard, not a policy — a client can name any number, and
+    /// through with no cap (<c>SapiEngine</c> writes <c>SilenceMSecs</c> as given;
+    /// the 10 s and 60 s limits are Linux-only guards, a known and deliberate
+    /// divergence); this is a guard, not a policy — a client can name any number, and
     /// the render verb would otherwise write that many seconds of zeros.
     /// </summary>
     public const int MaxBreakMs = 10_000;
@@ -94,9 +96,15 @@ public static class SsmlDocument
     public const int MaxRateAdj = 10;
 
     /// <summary>
-    /// <c>strength</c> without <c>time</c>, in milliseconds. SAPI's own table is
-    /// not published; these are the values chosen here, in the same order of
-    /// magnitude as a comma (weak) and a sentence end (strong).
+    /// <c>strength</c> without <c>time</c>, in milliseconds. <b>CHOSEN, NOT
+    /// VERIFIED:</b> SAPI converts strength to <c>SPVSTATE.SilenceMSecs</c> before
+    /// the engine sees it and the repo only ever sees the result
+    /// (<c>SapiEngine.BuildSpeakPlan</c> plays <c>SilenceMSecs</c> verbatim). The
+    /// Microsoft documentation could not be fetched when this was checked
+    /// (2026-10-03, egress blocked), so no source backs this table; the values
+    /// are in the order of magnitude of a comma (weak) and a sentence end
+    /// (strong). Verify on Windows by logging <c>SilenceMSecs</c> for each
+    /// strength (see docs/SPEECHD-PLAN.md, SSML provenance).
     /// </summary>
     private static int StrengthMs(string strength) => strength.Trim().ToLowerInvariant() switch
     {
@@ -150,10 +158,14 @@ public static class SsmlDocument
     /// <para>Keywords map straight onto the scale (x-slow −6 … x-fast +6). A
     /// relative change (<c>+20%</c>, <c>-30%</c>) or a multiplier (<c>150%</c>,
     /// <c>2</c>) is converted through the SAPI scale's own definition, a factor of
-    /// 3 across the full range: <c>adj = 10 · log₃(factor)</c>. <b>Unverified on
-    /// Windows:</b> SAPI's exact conversion is not documented and could not be run
-    /// here, so the keyword and percentage values are the least certain part of
-    /// this file.</para>
+    /// 3 across the full range: <c>adj = 10 · log₃(factor)</c>. <b>CHOSEN, NOT
+    /// VERIFIED:</b> SAPI converts the keyword or percentage to
+    /// <c>SPVSTATE.RateAdj</c> before the engine sees it; nothing in the repo
+    /// records that conversion (the harness's Step 6 only checks that x-fast and
+    /// x-slow do not fail) and the Microsoft docs were unreachable on 2026-10-03.
+    /// These are the least certain values in this file. What IS verified is the
+    /// consuming side: the engine clamps site rate + RateAdj to ±10 and applies
+    /// <c>1.5^(n/10)</c> (<c>SapiEngine.ComputeSpeed</c>).</para>
     /// </summary>
     public static int? RateAdjFrom(string? value)
     {

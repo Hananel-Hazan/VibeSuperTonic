@@ -1437,8 +1437,18 @@ Landed after the non-goals below were written; where they disagree, this wins.
   `prosody rate` as SAPI's -10..10 adjustment (applied as `1.5^(n/10)`, same as
   `SapiEngine`), `break` as silence (clamped at 10 s per break, 60 s per render),
   `mark` as a bookmark. Malformed input returns "not a document" and is stripped
-  exactly as before. **Unverified on Windows:** SAPI's own keyword and percentage
-  conversions are undocumented, so those values are assumptions.
+  exactly as before. **SSML provenance (checked 2026-10-03; Microsoft docs were
+  unreachable, egress blocked):** *Verified from the repo* - the Windows engine
+  consumes only `LangID`, `RateAdj` (clamped to +-10 with the site rate, `1.5^(n/10)`),
+  `SilenceMSecs` (played verbatim, uncapped) and bookmarks, and ignores `Volume`,
+  `PitchAdj`, `Emphasis` and `<prosody pitch>` (RELEASE_NOTES v0.2.0), so Linux
+  ignoring them matches; a test pins that. *Chosen, not verified* - the keyword to
+  `RateAdj` table (x-slow -6 ... x-fast +6), the percentage mapping
+  (`10*log3(factor)`) and the `strength` to milliseconds table (none 0, x-weak 100,
+  weak 200, medium 400, strong 700, x-strong 1000), because SAPI converts these
+  before the engine sees them. To verify: log `RateAdj` / `SilenceMSecs` in
+  `BuildSpeakPlan` while speaking each value through `SpeakSsml` on Windows.
+  The 10 s / 60 s break caps are Linux-only guards (Windows has none).
 - **Index marks:** `vst-ctl render --marks` prints `@vst-mark <sample> <name>` on
   stderr; the module turns each into `700-<name>` / `700 INDEX MARK` just before
   the audio block containing it. The espeak fallback speaks per fragment and

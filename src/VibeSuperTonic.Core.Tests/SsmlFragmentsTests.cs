@@ -226,6 +226,19 @@ public class SsmlFragmentsTests
         Assert.Equal([3, 9, 10], f.Select(x => x.RateAdj).ToArray());
     }
 
+    // Verified from SapiEngine.BuildSpeakPlan: the Windows engine reads only
+    // LangID, RateAdj, SilenceMSecs and bookmarks from a fragment, so volume,
+    // pitch and emphasis markup must change nothing here either.
+    [Theory]
+    [InlineData("<prosody pitch=\"+50%\">a</prosody>")]
+    [InlineData("<prosody volume=\"loud\">a</prosody>")]
+    [InlineData("<emphasis level=\"strong\">a</emphasis>")]
+    public void Pitch_volume_and_emphasis_change_nothing(string inner)
+    {
+        var f = Assert.Single(Parse(Doc(inner)));
+        Assert.Equal(SsmlFragment.Speak("a", null, 0), f);
+    }
+
     [Fact]
     public void An_unusable_rate_leaves_the_text_at_the_rate_around_it()
     {
