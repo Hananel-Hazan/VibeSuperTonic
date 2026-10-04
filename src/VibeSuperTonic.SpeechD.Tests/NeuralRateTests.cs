@@ -14,7 +14,7 @@ namespace VibeSuperTonic.SpeechD.Tests;
 public sealed class NeuralRateTests
 {
     private static IReadOnlyList<string> Args(int rate) =>
-        Voices.NeuralArguments("hello", "en_US-lessac-medium", null, rate);
+        Voices.NeuralArguments("en_US-lessac-medium", null, rate);
 
     [Fact]
     public void The_rate_is_on_the_command_line()
@@ -48,17 +48,18 @@ public sealed class NeuralRateTests
     public void Rate_zero_adds_no_flag_at_all()
     {
         Assert.DoesNotContain("--rate", Args(0));
-        Assert.Equal(["render", "--out", "-", "--voice", "en_US-lessac-medium", "hello"], Args(0));
+        Assert.Equal(["render", "--out", "-", "--voice", "en_US-lessac-medium", "--text-stdin"], Args(0));
     }
 
     /// <summary>
-    /// The text stays last and is never mistaken for an option, whatever else is
-    /// on the line. It comes from whatever window had focus.
+    /// The text is never on the command line, whatever else is: it goes on stdin,
+    /// so a message reading "--version" cannot be taken for an option and one over
+    /// 128 KiB cannot fail the exec. StressTests drives both through the module.
     /// </summary>
     [Fact]
-    public void The_text_is_last_however_many_options_precede_it()
+    public void The_text_is_read_from_stdin_however_many_options_precede_it()
     {
-        Assert.Equal("--dangerous", Voices.NeuralArguments("--dangerous", "v", "de", -20)[^1]);
+        Assert.Equal("--text-stdin", Voices.NeuralArguments("v", "de", -20, -30, marks: true)[^1]);
     }
 
     /// <summary>

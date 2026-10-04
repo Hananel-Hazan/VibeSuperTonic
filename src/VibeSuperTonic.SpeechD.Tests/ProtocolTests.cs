@@ -89,9 +89,8 @@ public class ProtocolTests
 
         File.WriteAllText(bin,
             "#!/bin/sh\n" +
-            "# The last argument is the text; everything before it is flags.\n" +
-            "for a in \"$@\"; do last=\"$a\"; done\n" +
-            $"printf '%s' \"$last\" > '{Path.Combine(root, "last-text.txt")}'\n" +
+            "# The text arrives on stdin (--stdin); the arguments are all flags.\n" +
+            $"cat > '{Path.Combine(root, "last-text.txt")}'\n" +
             $"cat '{wav}'\n");
         File.SetUnixFileMode(bin,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

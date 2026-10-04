@@ -11,6 +11,14 @@ namespace VibeSuperTonic.SpeechD;
 /// single audio path: <c>vst-ctl render --out -</c> and the bundled
 /// <c>espeak-ng --stdout</c> differ in latency and quality and in nothing this
 /// process has to care about.</para>
+///
+/// <para><b>Both read the text on stdin, never from the command line</b>
+/// (2026-10-04). Linux caps one argument at 128 KiB (MAX_ARG_STRLEN), and with
+/// the message as one argv string a long document made Process.Start fail with
+/// E2BIG for the neural voice and then for the fallback, which is silence: the
+/// one outcome trap 16 exists to rule out. It also settles what an argument
+/// beginning with a dash means. Text that is not on the command line can never
+/// be read as an option, by vst-ctl or by espeak-ng.</para>
 /// </summary>
 internal sealed class Voices
 {
@@ -103,9 +111,9 @@ internal sealed class Voices
         int volume = 0, bool marks = false)
     {
         var psi = Base(CtlPath);
-        foreach (string argument in NeuralArguments(text, voice, language, rate, volume, marks))
+        foreach (string argument in NeuralArguments(voice, language, rate, volume, marks))
             psi.ArgumentList.Add(argument);
-        return Start(psi);
+        return Start(psi, text);
     }
 
     /// <summary>
@@ -114,7 +122,7 @@ internal sealed class Voices
     /// reaching <c>vst-ctl</c> is testable at all.
     /// </summary>
     internal static IReadOnlyList<string> NeuralArguments(
-        string text, string? voice, string? language, int rate,
+        string? voice, string? language, int rate,
         int volume = 0, bool marks = false)
     {
         var arguments = new List<string> { "render", "--out", "-" };
@@ -149,10 +157,13 @@ internal sealed class Voices
             arguments.Add(language);
         }
 
-        // Last, and never a flag: the text arrives from whatever window has
-        // focus, so it is not ours to trust. ArgumentList means it is never
-        // parsed by a shell — the same reasoning as the `--` on the espeak line.
-        arguments.Add(text);
+        // The text comes on stdin (see the class remarks), so it is not here at
+        // all. It arrives from whatever window has focus and is not ours to
+        // trust, and until 2026-10-04 it was the last argument here: vst-ctl
+        // dropped anything beginning with "--" from its positionals and answered
+        // "--version" wherever it stood, so a line reading "--version" printed a
+        // version where a WAV belonged and fell through to espeak.
+        arguments.Add("--text-stdin");
         return arguments;
     }
 
@@ -169,9 +180,9 @@ internal sealed class Voices
     internal Process StartEspeak(string text, string? language, int rate, int volume = 0, int rateAdj = 0)
     {
         var psi = Base(EspeakPath);
-        foreach (string argument in EspeakArguments(text, language, rate, volume, rateAdj))
+        foreach (string argument in EspeakArguments(language, rate, volume, rateAdj))
             psi.ArgumentList.Add(argument);
-        return Start(psi);
+        return Start(psi, text);
     }
 
     /// <summary>
@@ -179,7 +190,7 @@ internal sealed class Voices
     /// reason <see cref="NeuralArguments"/> is.
     /// </summary>
     internal IReadOnlyList<string> EspeakArguments(
-        string text, string? language, int rate, int volume = 0, int rateAdj = 0)
+        string? language, int rate, int volume = 0, int rateAdj = 0)
     {
         var args = new List<string>
         {
@@ -204,12 +215,13 @@ internal sealed class Voices
             args.Add(language);
         }
 
-        // `--` so a message beginning with a dash is text and not a flag. The
-        // text arrives from whatever window has focus, so it is not ours to
-        // trust: this is the same reasoning as quoting $DATA on route A, and the
-        // reason route B never builds a shell command at all.
-        args.Add("--");
-        args.Add(text);
+        // The text on stdin, read WHOLE. Without --stdin espeak-ng also reads
+        // stdin when it has no text argument, but line by line through a
+        // 1000-byte buffer, one synthesis per line: a long line would be cut
+        // mid-word and every line break would become a sentence end. --stdin
+        // reads to end of input and synthesises once, as the argument did.
+        // (Checked against espeak-ng.c at build-espeak.sh's pin.)
+        args.Add("--stdin");
         return args;
     }
 
@@ -255,14 +267,40 @@ internal sealed class Voices
         FileName = file,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
-        RedirectStandardInput = false,
+        RedirectStandardInput = true,
+
+        // Explicit, because the default follows the console's encoding and the
+        // text is read as UTF-8 at the other end. No BOM: it would be spoken.
+        StandardInputEncoding = new System.Text.UTF8Encoding(false),
         UseShellExecute = false,
     };
 
-    private static Process Start(ProcessStartInfo psi)
+    /// <summary>
+    /// Start the renderer and hand it <paramref name="text"/> on stdin.
+    ///
+    /// <para><b>Written aside, not inline.</b> A message larger than the pipe's
+    /// 64 KB buffer blocks the writer until the renderer reads it, and a renderer
+    /// that writes before it has read everything, or never reads at all, would
+    /// then deadlock with this process, which is not yet reading its stdout. A
+    /// renderer that exits without reading breaks the pipe. That is its own
+    /// failure, reported by the missing WAV, so the write's error is not.</para>
+    /// </summary>
+    private static Process Start(ProcessStartInfo psi, string text)
     {
         var p = new Process { StartInfo = psi };
         p.Start();
+
+        StreamWriter stdin = p.StandardInput;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                stdin.Write(text);
+                stdin.Close();
+            }
+            catch (Exception) { /* the renderer went away; its stdout says so */ }
+        });
+
         return p;
     }
 }
