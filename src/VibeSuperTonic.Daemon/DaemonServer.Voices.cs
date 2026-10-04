@@ -301,8 +301,14 @@ public sealed partial class DaemonServer
             // Progress is written from the downloader's thread, and a StreamWriter
             // is not thread-safe. One writer, one lock, and the terminal reply
             // takes the same one.
+            //
+            // INLINE, NOT Progress<T>. Progress<T> posts each report to the thread
+            // pool (there is no SynchronizationContext here), so a report could run
+            // after the terminal reply, after the client read it and hung up, and
+            // after ServeAsync disposed the stream: ObjectDisposedException in a
+            // pool work item ends the daemon. Inline also keeps the lines in order.
             var writeLock = new object();
-            var log = new Progress<string>(line =>
+            var log = new InlineProgress<string>(line =>
             {
                 lock (writeLock)
                 {
@@ -315,10 +321,11 @@ public sealed partial class DaemonServer
                         }));
                     }
                     catch (IOException) { /* the client went away; the install continues */ }
+                    catch (ObjectDisposedException) { }
                 }
             });
 
-            var bytes = new Progress<DownloadProgress>(p =>
+            var bytes = new InlineProgress<DownloadProgress>(p =>
             {
                 lock (writeLock)
                 {
@@ -332,6 +339,7 @@ public sealed partial class DaemonServer
                         }));
                     }
                     catch (IOException) { }
+                    catch (ObjectDisposedException) { }
                 }
             });
 
@@ -474,4 +482,14 @@ public sealed partial class DaemonServer
             Voice = new VoiceActionPayload(wanted.Bare, false, result.Path, result.Message),
         };
     }
+}
+
+/// <summary>
+/// An <see cref="IProgress{T}"/> that runs the handler on the reporting thread,
+/// in order, before Report returns. See VoiceInstall for why Progress&lt;T&gt;
+/// cannot be used where the handler writes to a client socket.
+/// </summary>
+internal sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+{
+    public void Report(T value) => handler(value);
 }
