@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using VibeSuperTonic.Core.SpeechD;
 
 namespace VibeSuperTonic.SpeechD;
 
@@ -48,20 +49,78 @@ internal sealed class LineReader
     }
 
     /// <summary>
+    /// Is the stream positioned inside a command's block (a SET's parameters or
+    /// a SPEAK's text) rather than between commands? Tracked over every line
+    /// taken from the stream, whoever took it.
+    ///
+    /// <para><b>This is what makes reading ahead safe.</b> The audio loop looks
+    /// past a deferred command for a STOP, and in doing so reads other commands'
+    /// blocks. A line saying STOP inside a deferred message is text, and a reader
+    /// that could not tell would cancel an utterance because the next one
+    /// contained the word.</para>
+    /// </summary>
+    private bool _inBlock;
+
+    /// <summary>
     /// Put a line back so the main loop sees it next. Used when a command turns
     /// up during audio that is not a stop: the utterance keeps going and the
-    /// command is handled after it, rather than being thrown away.
+    /// command is handled after it, rather than being thrown away. Lines put back
+    /// come out in the order they went in, and before anything still unread.
     /// </summary>
     internal void PushBack(string line) => _pushedBack.Enqueue(line);
 
     /// <summary>
-    /// The next line, or null — at end of input when <paramref name="block"/> is
-    /// true, or when nothing is ready when it is false.
+    /// The next line, or null: at end of input when <paramref name="block"/> is
+    /// true, or when nothing is ready when it is false. Lines put back come first.
     /// </summary>
     internal string? ReadLine(bool block)
     {
         if (_pushedBack.Count > 0) return _pushedBack.Dequeue();
+        return ReadFromStream(block);
+    }
 
+    /// <summary>
+    /// The next line that has NOT been read before, without waiting and skipping
+    /// whatever was put back, plus whether it belongs to some command's block
+    /// (<paramref name="data"/>) rather than being a command.
+    ///
+    /// <para><b>Why the put-back lines are skipped.</b> This is the audio loop's
+    /// question, "has a STOP arrived?", and the answer is never in the put-back
+    /// queue: everything there was already looked at and was not one. Until
+    /// 2026-10-04 that loop read through <see cref="ReadLine"/>, which hands the
+    /// queue out first. So once a SET had been put back, every later look found
+    /// that same SET, put it back again and stopped looking. A STOP behind it was
+    /// not seen until the utterance had ended, and its 703 arrived after the 702
+    /// END.</para>
+    /// </summary>
+    internal string? ReadUnseen(out bool data)
+    {
+        data = _inBlock;
+        return ReadFromStream(block: false);
+    }
+
+    /// <summary>
+    /// SSIP's framing: these commands are followed by lines up to a lone dot.
+    /// Every other command is a single line.
+    /// </summary>
+    internal static bool OpensBlock(string line) =>
+        line is "SET" or "AUDIO" or "LOGLEVEL" || ModuleRouting.Parse(line) is not null;
+
+    private void Track(string line)
+    {
+        if (_inBlock) { if (line == ".") _inBlock = false; }
+        else if (OpensBlock(line)) _inBlock = true;
+    }
+
+    private string? ReadFromStream(bool block)
+    {
+        string? line = ReadRaw(block);
+        if (line is not null) Track(line);
+        return line;
+    }
+
+    private string? ReadRaw(bool block)
+    {
         while (true)
         {
             if (TakeLine() is { } line) return line;

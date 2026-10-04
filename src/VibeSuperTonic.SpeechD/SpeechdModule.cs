@@ -64,6 +64,13 @@ internal sealed class SpeechdModule
     /// <summary>Marks the renderer reported that the audio has not yet reached.</summary>
     private readonly List<VibeSuperTonic.Core.Ipc.RenderMark> _dueMarks = new();
 
+    /// <summary>
+    /// How often stdin is looked at while a renderer has not yet sent its header.
+    /// About a third of an audio block, so a STOP during a model load is obeyed
+    /// no later than one during audio would be.
+    /// </summary>
+    private const int HeaderPollMs = 30;
+
     /// <summary>espeak-ng's own output rate, for silence written before any audio exists.</summary>
     private const int FallbackRate = 22050;
 
@@ -469,7 +476,26 @@ internal sealed class SpeechdModule
         {
             var stdout = process.StandardOutput.BaseStream;
 
-            if (WavHeader.Read(stdout) is not { } wav)
+            // THE HEADER IS WAITED FOR WITH ONE EAR ON STDIN. Its first bytes
+            // arrive only when the first audio exists, which after a cold model
+            // load is seconds away, and a blocking read here meant a STOP pressed
+            // during the load was obeyed only once there was audio to play. So the
+            // read runs aside and the loop below keeps asking the question the
+            // audio loop asks. On an interruption the finally kills the renderer,
+            // which ends the read.
+            var headerRead = Task.Run(() => WavHeader.Read(stdout));
+            _ = headerRead.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            // The wait handle rather than Wait(ms), which throws for a faulted read
+            // instead of reporting that it finished.
+            var finished = ((IAsyncResult)headerRead).AsyncWaitHandle;
+            while (!finished.WaitOne(HeaderPollMs))
+            {
+                if (DrainCommandsAndCheckInterrupt()) return false;
+            }
+
+            // GetResult rather than Result so a failed read is logged as itself
+            // and not as an AggregateException wrapping it.
+            if (headerRead.GetAwaiter().GetResult() is not { } wav)
             {
                 // Not a WAV. Either the renderer refused — vst-ctl exits non-zero
                 // with a reason on stderr, which is exactly what "never exit 0
@@ -619,6 +645,13 @@ internal sealed class SpeechdModule
     /// LIST for after this utterance, and losing it would be worth more than
     /// deferring it.</para>
     ///
+    /// <para><b>And the look goes on past it.</b> It used to stop at the first
+    /// command it put back, and, because it read through the put-back queue, find
+    /// that same command on every later look. So a STOP behind a SET was not seen
+    /// until the audio ran out. Now every line that has arrived is read, lines of a
+    /// deferred command's block are deferred as text (a message may well say
+    /// "STOP"), and only lines nobody has read yet are looked at.</para>
+    ///
     /// <para><b>A PAUSE is an interruption, not a note for later.</b> It used to
     /// be put back with the others, so the audio carried on and the 704 arrived
     /// after the utterance had finished — a pause key that did nothing until it
@@ -626,27 +659,30 @@ internal sealed class SpeechdModule
     /// </summary>
     private bool DrainCommandsAndCheckInterrupt()
     {
-        while (_in.ReadLine(block: false) is { } line)
+        while (_in.ReadUnseen(out bool data) is { } line)
         {
-            switch (line)
+            if (!data)
             {
-                case "STOP":
-                    _stopRequested = true;
-                    return true;
+                switch (line)
+                {
+                    case "STOP":
+                        _stopRequested = true;
+                        return true;
 
-                case "PAUSE":
-                    _pauseRequested = true;
-                    return true;
+                    case "PAUSE":
+                        _pauseRequested = true;
+                        return true;
 
-                case "QUIT":
-                    _stopRequested = true;
-                    _in.PushBack("QUIT");
-                    return true;
-
-                default:
-                    _in.PushBack(line);
-                    return false;
+                    case "QUIT":
+                        // Behind anything already deferred, so the commands the
+                        // server sent before it are still answered before it.
+                        _stopRequested = true;
+                        _in.PushBack("QUIT");
+                        return true;
+                }
             }
+
+            _in.PushBack(line);
         }
 
         return false;

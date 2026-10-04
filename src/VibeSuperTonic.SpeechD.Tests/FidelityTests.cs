@@ -36,8 +36,8 @@ public class FidelityTests
 
     /// <summary>
     /// An install whose renderers record every call. espeak's calls go one per
-    /// line to <c>espeak-calls.txt</c>, arguments joined with a bell character
-    /// that cannot appear in the text.
+    /// line to <c>espeak-calls.txt</c>: the arguments, then the text it read on
+    /// stdin, joined with a bell character that cannot appear in the text.
     /// </summary>
     private static string Install(string ctl = "exit 1")
     {
@@ -54,7 +54,8 @@ public class FidelityTests
         Script(Path.Combine(root, "vst-ctl"),
             "printf '%s\\n' \"$*\" > '$ROOT/ctl-args.txt'\n" + ctl, root);
         Script(Path.Combine(root, "espeak", "espeak-ng"),
-            "args=''\nfor a in \"$@\"; do args=\"$args$a\u0007\"; done\n" +
+            // The text arrives on stdin, and is recorded as the call's last field.
+            "args=''\nfor a in \"$@\"; do args=\"$args$a\u0007\"; done\nargs=\"$args$(cat)\"\n" +
             "printf '%s\\n' \"$args\" >> '$ROOT/espeak-calls.txt'\n" +
             "cat '$ROOT/audio.wav'", root);
         return root;
