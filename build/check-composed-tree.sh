@@ -54,6 +54,14 @@ vst_check_composed_tree() {
        must not ship. See Directory.Build.targets."
     info "native vst-ctl, no models, no CUDA provider"
 
+    # No ffmpeg. The snap and the Flatpak add their own (build-ffmpeg.sh) AFTER
+    # this tree; the tarball and the AppImage use the system's, by design. One
+    # in the tree would ship an encoder in the 75 MiB archive, and it would
+    # quietly win over the store packages' checked one.
+    found="$(find "$staging" -name 'ffmpeg' -print -quit)"
+    [[ -z "$found" ]] || die "the composed tree contains an ffmpeg ($found). Only the store packages
+       carry one, added after this tree by build/build-ffmpeg.sh."
+
     [[ -x "$staging/sandbox-setup.sh" ]] || die "sandbox-setup.sh is missing from the composed tree.
        Without it a snap or Flatpak user has no way to bind the hotkeys."
 }

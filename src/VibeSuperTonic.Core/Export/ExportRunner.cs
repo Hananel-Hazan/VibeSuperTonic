@@ -18,6 +18,24 @@ public enum ExportStatus
 public sealed record ExportOutcome(ExportStatus Status, string Message, long Samples = 0);
 
 /// <summary>
+/// Where <see cref="ExportRunner"/> may put its temp file when the destination's
+/// folder will not take one. Every member has a production default; the tests
+/// set them to stand for a folder that refuses, and a disk that fills mid-copy.
+/// </summary>
+public sealed class ExportStaging
+{
+    /// <summary>The private fallback folder. Default: <c>$XDG_CACHE_HOME/vibesupertonic/export</c>
+    /// (in a Flatpak, <c>~/.var/app/&lt;id&gt;/cache/...</c>; in a snap, under the snap's own home).</summary>
+    public string? PrivateDir { get; init; }
+
+    /// <summary>Create the given file and say whether that worked. Default: really create it.</summary>
+    public Func<string, bool>? CreateBeside { get; init; }
+
+    /// <summary>Wraps the destination stream during a fallback copy. Default: none.</summary>
+    public Func<Stream, Stream>? WrapDestination { get; init; }
+}
+
+/// <summary>
 /// Turns a <see cref="RequestVerb.Render"/> reply stream into a finished file
 /// of the requested format. Shared by the window's Export tab and
 /// <c>vst-ctl render --out file</c>.
@@ -32,9 +50,20 @@ public sealed record ExportOutcome(ExportStatus Status, string Message, long Sam
 /// is the failure this exists to prevent: an exported chapter that stops at
 /// minute nine looks exactly like a good one until somebody listens.</para>
 ///
-/// <para>For MP3, AAC and FLAC the render's WAV stream is piped to the system
-/// ffmpeg, which writes the temp file. ffmpeg exiting non-zero is a failure even
-/// when every byte was accepted.</para>
+/// <para>For MP3, AAC and FLAC the render's WAV stream is piped to ffmpeg (the
+/// system's, or the one a snap or Flatpak carries), which writes the temp file.
+/// ffmpeg exiting non-zero is a failure even when every byte was accepted.</para>
+///
+/// <para><b>When the folder refuses a temp file.</b> A Flatpak's save dialog
+/// hands back a path under the document portal,
+/// <c>/run/user/&lt;uid&gt;/doc/&lt;id&gt;/name</c>, which grants the one file
+/// chosen and may refuse anything else created beside it. Then the temp file goes
+/// to a private folder instead (<see cref="ExportStaging.PrivateDir"/>), and only
+/// a complete, successful encode is COPIED to the destination, since a rename
+/// cannot cross filesystems. That copy is the one step that is not atomic: if it
+/// fails, a destination this run created is removed, and one that already existed
+/// is reported as possibly incomplete, because there was nowhere beside it to
+/// keep the old one.</para>
 /// </summary>
 public static class ExportRunner
 {
@@ -47,7 +76,8 @@ public static class ExportRunner
         string outPath,
         FfmpegTools? ffmpeg,
         Func<bool>? cancelled = null,
-        Action<long>? progress = null)
+        Action<long>? progress = null,
+        ExportStaging? staging = null)
     {
         ArgumentNullException.ThrowIfNull(readLine);
 
@@ -67,14 +97,32 @@ public static class ExportRunner
         {
             encoder = ffmpeg?.EncoderFor(format);
             if (ffmpeg is null || encoder is null)
-                return Fail(FfmpegTools.Unavailable(format, ffmpeg, FfmpegDetector.IsSandboxed())
+                return Fail(FfmpegTools.Unavailable(format, ffmpeg, FfmpegDetector.BundledPath())
                             ?? "no encoder for that format");
         }
 
         // Hidden, unique, beside the target. Unique so two exports to one folder
         // cannot share it; beside the target so File.Move is a rename(2).
         // The name is bounded so a 255-byte target name cannot make its own temp name too long.
-        string temp = Path.Combine(dir, $".part-{Guid.NewGuid():N}-{Truncate(Path.GetFileName(full), 100)}");
+        string name = $".part-{Guid.NewGuid():N}-{Truncate(Path.GetFileName(full), 100)}";
+        string temp = Path.Combine(dir, name);
+        bool beside = (staging?.CreateBeside ?? TryCreate)(temp);
+        if (!beside)
+        {
+            // The folder will not take it (the document portal, or any folder
+            // where only the chosen file is writable). Stage privately; copy at the end.
+            string priv = staging?.PrivateDir ?? DefaultPrivateDir();
+            try
+            {
+                Directory.CreateDirectory(priv);
+                SweepStale(priv);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Fail($"cannot write a temporary file in {dir}, nor in {priv}: {ex.Message}");
+            }
+            temp = Path.Combine(priv, name);
+        }
 
         bool promoted = false;
         try
@@ -85,6 +133,8 @@ public static class ExportRunner
                 : Encode(readLine, ffmpeg!, format, encoder, temp, error, cancelled, progress);
 
             if (outcome.Status != ExportStatus.Done) return outcome;
+
+            if (!beside) return CopyInto(temp, full, staging?.WrapDestination, outcome);
 
             File.Move(temp, full, overwrite: true);
             promoted = true;
@@ -100,13 +150,89 @@ public static class ExportRunner
         }
     }
 
+    /// <summary>
+    /// The fallback's last step: the finished temp file, copied over the
+    /// destination. Reached only after a complete, successful encode, so a cancel
+    /// or a failed render never touches the destination on this path either.
+    /// </summary>
+    private static ExportOutcome CopyInto(string temp, string full, Func<Stream, Stream>? wrap, ExportOutcome done)
+    {
+        bool existed = File.Exists(full);
+        bool created = false;
+        try
+        {
+            using var source = new FileStream(temp, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var destination = new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.None);
+            created = !existed;
+            Stream sink = wrap?.Invoke(destination) ?? destination;
+            source.CopyTo(sink);
+            sink.Flush();
+            destination.Flush(flushToDisk: true);
+            return done;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (created) TryDelete(full);
+            return Fail(existed
+                ? $"cannot write {full}: {ex.Message}. Its folder allows no temporary file beside it, so the "
+                  + "existing file was being replaced in place and may now be incomplete."
+                : $"cannot write {full}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Whether a path is a file the Flatpak document portal granted
+    /// (<c>/run/user/&lt;uid&gt;/doc/&lt;id&gt;/name</c>). Only that exact name is
+    /// writable there, so a caller must not "correct" its extension: a renamed
+    /// target is a file the portal never granted.
+    /// </summary>
+    public static bool InDocumentPortal(string path)
+    {
+        const string Run = "/run/user/";
+        if (!path.StartsWith(Run, StringComparison.Ordinal)) return false;
+        int slash = path.IndexOf('/', Run.Length);
+        return slash > Run.Length
+               && path.AsSpan(Run.Length, slash - Run.Length).ToString().All(char.IsAsciiDigit)
+               && path.AsSpan(slash).StartsWith("/doc/", StringComparison.Ordinal);
+    }
+
+    /// <summary>Create <paramref name="path"/>, new and empty, and say whether that worked.</summary>
+    private static bool TryCreate(string path)
+    {
+        try
+        {
+            using (new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    private static string DefaultPrivateDir()
+    {
+        string? cache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        if (string.IsNullOrWhiteSpace(cache) || !Path.IsPathRooted(cache))
+            cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache");
+        return Path.Combine(cache, "vibesupertonic", "export");
+    }
+
+    /// <summary>Temp files a crash left in the private folder, a day old or more.</summary>
+    private static void SweepStale(string dir)
+    {
+        foreach (string f in Directory.EnumerateFiles(dir, ".part-*"))
+        {
+            try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-1)) File.Delete(f); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
     // -------------------------------------------------------------------- WAV
 
     private static ExportOutcome WriteWav(
         Func<string?> readLine, string temp, StringWriter error,
         Func<bool>? cancelled, Action<long>? progress)
     {
-        using var file = new FileStream(temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        // Create, not CreateNew: TryCreate already made it, empty, to prove the folder takes it.
+        using var file = new FileStream(temp, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
         var guarded = new FaultRecordingStream(file);
 
         long samples = 0;

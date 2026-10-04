@@ -2,9 +2,10 @@
 # @TARBALL_*@ lines with the Linux tarball it was given, by path for a local
 # build or by release URL for Flathub, always with its SHA-256.
 #
-# It builds nothing from source. It installs the tree pack-tar.sh composed and
-# asserted, as the AppImage and the snap do, so the eleven assertions apply to
-# this package too. Flathub accepts an upstream release archive pinned by hash.
+# It builds nothing of ours from source. It installs the tree pack-tar.sh
+# composed and asserted, as the AppImage and the snap do, so the eleven
+# assertions apply to this package too. The one thing it compiles is the export
+# ffmpeg (the first module), which the tarball deliberately does not carry.
 #
 # THE LAYOUT IS A CONTRACT WITH CODE. The tree goes to /app/lib/vibesupertonic,
 # and FlatpakPeer in Core recognises a deployment by that path: the host-side
@@ -37,6 +38,32 @@ finish-args:
   - --talk-name=org.kde.StatusNotifierWatcher
 
 modules:
+  # THE EXPORT ENCODER: MP3, AAC and FLAC. The sandbox cannot see the host's
+  # ffmpeg, and the runtime ships ffmpeg's libraries but not the `ffmpeg`
+  # program, so this builds a minimal LGPL one (build/build-ffmpeg.sh, the same
+  # recipe the snap and the from-source manifest use) into
+  # /app/lib/vibesupertonic/ffmpeg, where FfmpegDetector looks. Sources pinned:
+  # ffmpeg by commit, LAME by SHA-256, both equal to the script's pins
+  # (check-ffmpeg-pins.sh). The script itself is the RECIPE line, filled in by
+  # pack-flatpak.sh: the tarball does not carry it.
+  - name: ffmpeg-export
+    buildsystem: simple
+    build-commands:
+      - bash build-ffmpeg.sh --ffmpeg-src ffmpeg-src --lame-src lame-src --work "$PWD/work"
+          --out /app/lib/vibesupertonic/ffmpeg
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n8.1.3
+        commit: 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7
+        dest: ffmpeg-src
+      - type: archive
+        url: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
+        sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+        dest: lame-src
+      - type: file
+        path: @FFMPEG_RECIPE@
+
   - name: vibesupertonic
     buildsystem: simple
     # Install the tarball's bytes as they are. flatpak-builder otherwise strips

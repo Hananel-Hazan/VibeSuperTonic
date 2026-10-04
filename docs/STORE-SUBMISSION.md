@@ -29,7 +29,8 @@ a category, set by the listing:
 ## How the packages are built
 
 Both are **repackagings of the tarball**, the same design as the AppImage. Neither
-compiles anything, so the tarball's eleven assertions apply to both, and each
+compiles anything of ours (the one exception, an export ffmpeg, is below), so
+the tarball's eleven assertions apply to both, and each
 re-asks the cheap ones against the tree it actually packages
 ([check-composed-tree.sh](../build/check-composed-tree.sh)). One listing,
 [build/desktop/](../build/desktop/), serves both stores and travels inside the
@@ -46,6 +47,58 @@ bash build/pack-appimage.sh -v 0.2.17
 CI runs the snap and Flatpak packers on every push (`snap` and `flatpak` jobs in
 [build.yml](../.github/workflows/build.yml)), from the tarball the `pack` job
 built.
+
+### The one thing they do compile: an export ffmpeg (2026-10-03)
+
+MP3, AAC and FLAC export pipe the daemon's WAV into an `ffmpeg` found at runtime.
+The tarball and the AppImage use the system's; a snap or a Flatpak cannot see
+it, and the Flatpak runtime ships ffmpeg's *libraries* but not the `ffmpeg`
+program. So both store packages carry a minimal one, built by one recipe,
+[build-ffmpeg.sh](../build/build-ffmpeg.sh), used by the snap's `ffmpeg` part
+and by both Flatpak manifests:
+
+- **Sources, pinned in the script**: ffmpeg `n8.1.3` by commit
+  (`1041abdc`, from GitHub; ffmpeg.org's tarball host was not reachable from the
+  session that wrote this) and LAME 3.100 by SHA-256 (SourceForge). The Flatpak
+  manifests repeat both pins, because flatpak-builder must fetch the sources
+  itself (Flathub builds offline); [check-ffmpeg-pins.sh](../build/check-ffmpeg-pins.sh)
+  refuses a manifest that disagrees, before any build.
+- **LGPL only**: no `--enable-gpl`, no `--enable-nonfree`, so no `libfdk_aac`; AAC
+  is ffmpeg's native encoder. The script refuses a configuration that comes out
+  anything but "LGPL version 2.1 or later".
+- **`--disable-everything`, then exactly what export runs**: WAV/`pcm_s16le` in
+  on a pipe, encoders `libmp3lame`, `aac`, `flac`, muxers `mp3`, `ipod` (.m4a),
+  `flac`, protocols `pipe` and `file`, filters `aresample`, `aformat`, `anull`
+  (the daemon's interleaved s16 must become planar for both lossy encoders). No
+  network, devices, hardware acceleration, ffprobe or ffplay; `--disable-x86asm`.
+  ffmpeg's libraries and LAME are static; libc and libm come from the runtime.
+  **1.9 MB** stripped, measured.
+- **Where**: `$SNAP/ffmpeg/ffmpeg` and `/app/lib/vibesupertonic/ffmpeg/ffmpeg`,
+  which is where `FfmpegDetector.BundledPath` looks inside each sandbox (order:
+  `VST_FFMPEG`, the bundled one, `PATH`). Beside it: `LICENSE-FFMPEG.txt` (both
+  versions, their sources: the source offer, as `LICENSE-PHONEMIZER.txt` is for
+  espeak-ng), `COPYING.LGPLv2.1`, `COPYING.LAME` and `BUILD-INFO`.
+- **Checked**: [check-ffmpeg-bundle.sh](../build/check-ffmpeg-bundle.sh) asserts
+  the files, the version, no GPL/non-free configuration, the three encoders, and
+  a piped 0.1 s WAV encoding to all three formats with **exactly**
+  `FfmpegTools.BuildArgs`'s arguments (a unit test holds its copy of them to
+  BuildArgs). `pack-snap.sh` runs it on the finished snap (`--check` too) and,
+  with `--test-install`, inside `ctl`'s confinement; `pack-flatpak.sh
+  --test-install` runs it inside the sandbox. Both also ask `vst-ctl
+  --export-formats` under confinement, which must name the bundled ffmpeg.
+  [ffmpeg-bundle-sabotage.sh](../build/ffmpeg-bundle-sabotage.sh) breaks every
+  clause, the manifests' pins and the recipe's refusals, and CI's `linux` job
+  runs it.
+
+**Saving into the document portal.** A Flatpak's save dialog may return
+`/run/user/<uid>/doc/<id>/name`, a FUSE view that grants only the chosen file.
+`ExportRunner` first tries its usual hidden temp file beside the target; when the
+folder refuses it, the temp file goes to `$XDG_CACHE_HOME/vibesupertonic/export`
+and only a complete, successful encode is **copied** over the target (a rename
+cannot cross filesystems). A failed copy removes a target this run created, and
+reports one it was replacing as possibly incomplete. The Export tab also stops
+"correcting" the extension of a portal path, since a renamed file there is one
+the portal never granted.
 
 ## What the sandbox changed in the code, and why
 
@@ -121,7 +174,22 @@ answer. (The socket is also abstract, `@snap.vibesupertonic.ctl-<uid>`, with a
 same-user check in place of the file mode: a first fix, aimed at AppArmor, that
 did not help on its own and was kept.)
 
+**The export ffmpeg, verified and not (2026-10-03).** Built here with the
+script's `--fetch` (as the snap part does) and with `--ffmpeg-src/--lame-src` (as
+the Flatpak manifests do); it encodes MP3, AAC and FLAC from a piped WAV;
+`ExportRunner`'s real-ffmpeg test passed against it through `VST_FFMPEG`; every
+sabotage in `ffmpeg-bundle-sabotage.sh` was caught, a real rebuild without
+`aresample` among them. **Not yet observed**: the `ffmpeg` part under snapcraft,
+the module under flatpak-builder (both CI only), the in-confinement checks, the
+document-portal fallback against a real portal, and whether Flathub's reviewers
+accept a bundled ffmpeg CLI (the usual alternative, the `org.freedesktop.Platform.ffmpeg-full`
+extension, carries libraries rather than the program, so it would still need a
+CLI built against it; not checked here, since this session has no flatpak).
+
 **Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
+
+- [ ] **Export MP3 from the window in each package**, saving into the home
+      folder through the portal's dialog, and once over an existing file.
 
 - [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**
       ("has running apps"): the Speech Dispatcher module (speech-dispatcher keeps

@@ -164,6 +164,21 @@ jobs:
       - name: Check sandbox-setup.sh against a fake snap and Flatpak
         run: bash build/check-sandbox-setup.sh --negative-control
 
+      # THE STORE PACKAGES' EXPORT FFMPEG (build/build-ffmpeg.sh), built here as
+      # the snap's part builds it, then: its check passing, every sabotage of
+      # that check, of the manifests' pins and of the recipe's own refusals
+      # caught (a real rebuild without the aresample filter among them), and
+      # ExportRunner's real-ffmpeg test run against it rather than the runner's
+      # system ffmpeg. The snap and flatpak jobs check the same binary again
+      # inside the finished packages, under confinement. About three minutes.
+      - name: Build the store packages' ffmpeg, and see its checks fail
+        run: |
+          bash build/build-ffmpeg.sh --fetch --work "$RUNNER_TEMP/ffmpeg-work" --out "$RUNNER_TEMP/ffmpeg"
+          bash build/check-ffmpeg-bundle.sh "$RUNNER_TEMP/ffmpeg"
+          bash build/ffmpeg-bundle-sabotage.sh "$RUNNER_TEMP/ffmpeg" --rebuild "$RUNNER_TEMP/ffmpeg-work"
+          VST_FFMPEG="$RUNNER_TEMP/ffmpeg/ffmpeg" dotnet test src/VibeSuperTonic.Core.Tests -c Release --no-build --nologo \
+            --filter "FullyQualifiedName~ExportTests"
+
       # PublishAot only takes effect on `dotnet publish`, so the step above
       # compiles vst-ctl without ever exercising the native toolchain — and the
       # plan (Phase 7) names the release run as the first place this can fail.

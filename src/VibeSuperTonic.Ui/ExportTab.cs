@@ -62,7 +62,7 @@ public sealed class ExportTab : UserControl
     private const string DefaultVoiceLabel = "Default voice (from Tune)";
     private List<VoiceEntry> _voices = [];
     private FfmpegTools? _ffmpeg;
-    private bool _sandboxed;
+    private string? _bundled;          // the ffmpeg a snap or Flatpak carries; null outside one
 
     /// <summary>The render in flight, so Cancel can wake its blocked read.</summary>
     private RenderSession? _session;
@@ -123,12 +123,12 @@ public sealed class ExportTab : UserControl
     // -------------------------------------------------------------- the machine
 
     private string Suffix(ExportFormat f) =>
-        FfmpegTools.Unavailable(f, _ffmpeg, _sandboxed) is null ? "" : "  — unavailable";
+        FfmpegTools.Unavailable(f, _ffmpeg, _bundled) is null ? "" : "  — unavailable";
 
     /// <summary>Re-ask what this machine can do. On every show, so installing ffmpeg needs no restart.</summary>
     private async Task RefreshAsync()
     {
-        _sandboxed = FfmpegDetector.IsSandboxed();
+        _bundled = FfmpegDetector.BundledPath();
         _ffmpeg = await Task.Run(FfmpegDetector.Detect);
 
         // Rebuild the items so the "unavailable" suffixes re-render.
@@ -151,7 +151,7 @@ public sealed class ExportTab : UserControl
 
     private void UpdateFormatNote()
     {
-        _formatNote.Text = FfmpegTools.Unavailable(ChosenFormat, _ffmpeg, _sandboxed) ?? "";
+        _formatNote.Text = FfmpegTools.Unavailable(ChosenFormat, _ffmpeg, _bundled) ?? "";
         _formatNote.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
     }
 
@@ -230,7 +230,7 @@ public sealed class ExportTab : UserControl
         if (string.IsNullOrWhiteSpace(text)) { _status.Text = "Nothing to export — the text is empty."; return; }
 
         ExportFormat format = ChosenFormat;
-        if (FfmpegTools.Unavailable(format, _ffmpeg, _sandboxed) is { } why) { _status.Text = why; return; }
+        if (FfmpegTools.Unavailable(format, _ffmpeg, _bundled) is { } why) { _status.Text = why; return; }
 
         var top = TopLevel.GetTopLevel(this);
         if (top is null) return;
@@ -247,8 +247,10 @@ public sealed class ExportTab : UserControl
         if (target?.TryGetLocalPath() is not { } path) return;
 
         // The extension decides what the player sees; keep it honest if the user
-        // typed a different one.
-        if (!string.Equals(Path.GetExtension(path), ext, StringComparison.OrdinalIgnoreCase))
+        // typed a different one. Not in a Flatpak's document portal, which grants
+        // exactly the name chosen: a renamed target there is not writable at all.
+        if (!string.Equals(Path.GetExtension(path), ext, StringComparison.OrdinalIgnoreCase)
+            && !ExportRunner.InDocumentPortal(path))
             path += ext;
 
         var session = _client.OpenRender(new Request

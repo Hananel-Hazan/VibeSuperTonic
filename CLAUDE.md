@@ -386,6 +386,27 @@ SDK's version, not ours): regenerate it with
 [flathub workflow](.github/workflows/flathub.yml) refuses a stale one. When a
 `PackageReference` changes, that file changes with it.
 
+**The snap and the Flatpak carry a minimal ffmpeg for export; the tarball and
+the AppImage never do** (2026-10-03). A sandbox cannot see the host's ffmpeg, so
+MP3/AAC/FLAC were unavailable there. [build-ffmpeg.sh](build/build-ffmpeg.sh) is
+the one recipe for the snap's `ffmpeg` part and both Flatpak manifests: ffmpeg
+pinned by commit, LAME by SHA-256 (the pins live in the script; the manifests'
+copies are compared by [check-ffmpeg-pins.sh](build/check-ffmpeg-pins.sh)),
+LGPL only (no `--enable-gpl`/`--enable-nonfree`, so native `aac`, no fdk),
+`--disable-everything` plus exactly what `FfmpegTools.BuildArgs` uses, 1.9 MB. It
+lands at `$SNAP/ffmpeg/ffmpeg` and `/app/lib/vibesupertonic/ffmpeg/ffmpeg` with
+`LICENSE-FFMPEG.txt` (the source offer) beside it; `FfmpegDetector` looks there
+first inside a sandbox (`VST_FFMPEG`, bundled, `PATH`).
+[check-ffmpeg-bundle.sh](build/check-ffmpeg-bundle.sh) encodes a piped WAV with
+BuildArgs's exact arguments (ExportTests compares its copy, so **a new ffmpeg
+option in BuildArgs fails a unit test until the check, and maybe the recipe,
+follow**); the packers run it on the package and inside confinement, and
+`vst-ctl --export-formats` there must name the bundled one. Sabotage:
+[ffmpeg-bundle-sabotage.sh](build/ffmpeg-bundle-sabotage.sh), in CI's `linux`
+job. `check-composed-tree.sh` refuses an ffmpeg in the tarball's tree.
+`ExportRunner` falls back to a private temp file plus a copy when the target's
+folder refuses a sibling (the Flatpak document portal).
+
 **The WebGPU (Vulkan) pack is the vendor-neutral one, and its ORT is deliberately
 NOT the managed binding's minor** (2026-10-03). `build/install-webgpu.sh` fetches
 the `onnxruntime-webgpu` 1.27.0 wheel (Dawn linked statically; needs the system's

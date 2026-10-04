@@ -16,7 +16,31 @@ public sealed class ExportTests : IDisposable
     private const int Rate = 22050;
     private readonly string _dir = Directory.CreateTempSubdirectory("vst-export-").FullName;
 
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch (IOException) { } }
+    // The fallback's private staging folder, outside _dir so Leftovers() sees only the destination's.
+    private readonly string _private = Directory.CreateTempSubdirectory("vst-export-private-").FullName;
+
+    public void Dispose()
+    {
+        foreach (string d in new[] { _dir, _private })
+        {
+            try
+            {
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(d, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                Directory.Delete(d, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>A folder that refuses every file but the destination, as the document portal may.</summary>
+    private ExportStaging Refusing(Func<Stream, Stream>? wrap = null) => new()
+    {
+        PrivateDir = _private,
+        CreateBeside = _ => false,
+        WrapDestination = wrap,
+    };
+
+    private string PrivateLeftovers() => string.Join(",", Directory.GetFileSystemEntries(_private).Select(Path.GetFileName).Order());
 
     // ---------------------------------------------------------------- fixtures
 
@@ -153,19 +177,106 @@ public sealed class ExportTests : IDisposable
     [Fact]
     public void Availability_messages_say_what_to_do_and_differ_in_a_sandbox()
     {
-        Assert.Null(FfmpegTools.Unavailable(ExportFormat.Wav, null, sandboxed: true));
+        const string Bundled = "/snap/vibesupertonic/7/ffmpeg/ffmpeg";
+        Assert.Null(FfmpegTools.Unavailable(ExportFormat.Wav, null, Bundled));
 
-        string plain = FfmpegTools.Unavailable(ExportFormat.Mp3, null, sandboxed: false)!;
-        string boxed = FfmpegTools.Unavailable(ExportFormat.Mp3, null, sandboxed: true)!;
+        string plain = FfmpegTools.Unavailable(ExportFormat.Mp3, null, bundled: null)!;
+        string boxed = FfmpegTools.Unavailable(ExportFormat.Mp3, null, Bundled)!;
         Assert.Contains("install", plain, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ffmpeg", plain);
         Assert.Contains("WAV", plain);
         Assert.Contains("sandbox", boxed);
+        Assert.Contains(Bundled, boxed);                 // says WHICH file is missing
+        Assert.Contains("Reinstalling", boxed);
         Assert.DoesNotContain("apt install", boxed);
 
+        // The bundled one present and complete: no message at all, sandbox or not.
+        var full = new FfmpegTools(Bundled, new HashSet<string> { "libmp3lame", "aac", "flac" });
+        foreach (var f in Enum.GetValues<ExportFormat>())
+            Assert.Null(FfmpegTools.Unavailable(f, full, Bundled));
+
         var noAac = new FfmpegTools("/usr/bin/ffmpeg", new HashSet<string> { "libmp3lame" });
-        Assert.Contains("without a AAC encoder", FfmpegTools.Unavailable(ExportFormat.Aac, noAac, false)!);
-        Assert.Null(FfmpegTools.Unavailable(ExportFormat.Mp3, noAac, false));
+        Assert.Contains("without a AAC encoder", FfmpegTools.Unavailable(ExportFormat.Aac, noAac, null)!);
+        Assert.Null(FfmpegTools.Unavailable(ExportFormat.Mp3, noAac, null));
+    }
+
+    // ------------------------------------------------- which ffmpeg is used
+
+    [Fact]
+    public void The_bundled_ffmpeg_is_under_SNAP_or_the_flatpak_tree_and_nowhere_else()
+    {
+        Func<string, string?> env = n => n == "SNAP" ? "/snap/vibesupertonic/12/" : null;
+
+        Assert.Equal("/snap/vibesupertonic/12/ffmpeg/ffmpeg", FfmpegDetector.BundledPath(env, inSnap: true, inFlatpak: false));
+        Assert.Equal("/app/lib/vibesupertonic/ffmpeg/ffmpeg", FfmpegDetector.BundledPath(env, inSnap: false, inFlatpak: true));
+        // Outside a sandbox (and on a Flatpak's host side, which passes inFlatpak:
+        // false) there is none: the tarball ships no ffmpeg, and the host's is on PATH.
+        Assert.Null(FfmpegDetector.BundledPath(env, inSnap: false, inFlatpak: false));
+        // A relative or empty $SNAP names nothing.
+        Assert.Null(FfmpegDetector.BundledPath(n => n == "SNAP" ? "snap/x" : null, inSnap: true, inFlatpak: false));
+        Assert.Null(FfmpegDetector.BundledPath(_ => null, inSnap: true, inFlatpak: false));
+    }
+
+    [Fact]
+    public void Search_order_is_VST_FFMPEG_then_the_bundled_one_then_PATH()
+    {
+        const string Override = "/home/u/my-ffmpeg";
+        const string Bundled = "/snap/vibesupertonic/12/ffmpeg/ffmpeg";
+        const string OnPath = "/usr/bin/ffmpeg";
+        var all = new HashSet<string> { Override, Bundled, OnPath };
+        string? Env(string name, bool withOverride) => name switch
+        {
+            "VST_FFMPEG" => withOverride ? Override : null,
+            "PATH" => "/usr/local/bin:/usr/bin",
+            _ => null,
+        };
+
+        // The override wins over everything, when it names a file.
+        Assert.Equal(Override, FfmpegDetector.Locate(n => Env(n, true), all.Contains, Bundled));
+        // Without it, the package's own beats whatever is on PATH.
+        Assert.Equal(Bundled, FfmpegDetector.Locate(n => Env(n, false), all.Contains, Bundled));
+        // An override naming nothing falls through to the bundled one, not to PATH.
+        Assert.Equal(Bundled, FfmpegDetector.Locate(n => Env(n, true), new HashSet<string> { Bundled, OnPath }.Contains, Bundled));
+        // A bundled path whose file is missing falls through to PATH.
+        Assert.Equal(OnPath, FfmpegDetector.Locate(n => Env(n, false), new HashSet<string> { OnPath }.Contains, Bundled));
+        // Outside a sandbox: PATH, as before.
+        Assert.Equal(OnPath, FfmpegDetector.Locate(n => Env(n, false), all.Contains, bundled: null));
+        Assert.Null(FfmpegDetector.Locate(n => Env(n, false), _ => false, Bundled));
+    }
+
+    [Fact]
+    public void Bundled_ffmpeg_check_uses_the_exact_export_arguments()
+    {
+        // build/check-ffmpeg-bundle.sh encodes with a copy of BuildArgs's list, so
+        // a pack-time check proves the minimal ffmpeg can run what export runs. If
+        // BuildArgs gains an option (a filter, a muxer flag) that copy must gain
+        // it too, and build-ffmpeg.sh may need the component: otherwise MP3 export
+        // breaks in the snap and the Flatpak alone, with every other test green.
+        string script = File.ReadAllText(RepoFile("build/check-ffmpeg-bundle.sh"));
+
+        foreach (var (format, encoder, name) in new[]
+                 {
+                     (ExportFormat.Mp3, "libmp3lame", "mp3"),
+                     (ExportFormat.Aac, "aac", "aac"),
+                     (ExportFormat.Flac, "flac", "flac"),
+                 })
+        {
+            var args = FfmpegTools.BuildArgs(format, encoder, "/out");
+            Assert.Equal("/out", args[^1]);
+            string expected = $"args_{name}=\"{string.Join(' ', args.Take(args.Count - 1))}\"";
+            Assert.True(script.Contains(expected, StringComparison.Ordinal),
+                $"check-ffmpeg-bundle.sh does not encode {format} with BuildArgs's arguments; expected the line\n{expected}");
+        }
+    }
+
+    private static string RepoFile(string relative)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            string candidate = Path.Combine(dir.FullName, relative);
+            if (File.Exists(candidate)) return candidate;
+        }
+        throw new FileNotFoundException($"{relative} not found above {AppContext.BaseDirectory}");
     }
 
     // ------------------------------------------------------------- RenderWav
@@ -415,5 +526,166 @@ public sealed class ExportTests : IDisposable
             Assert.True(outcome.Status == ExportStatus.Done, $"{format}: {outcome.Message}");
             Assert.True(new FileInfo(target).Length > 100);
         }
+    }
+
+    // ------------------------------------- a folder that refuses a temp file
+
+    [Fact]
+    public void A_folder_that_refuses_a_temp_file_still_gets_the_whole_wav_staged_privately()
+    {
+        string target = Path.Combine(_dir, "out.wav");
+        File.WriteAllText(target, "old");
+
+        var outcome = ExportRunner.Run(Lines(GoodRender(1000)), ExportFormat.Wav, target, null, staging: Refusing());
+
+        Assert.True(outcome.Status == ExportStatus.Done, outcome.Message);
+        Assert.Equal("out.wav", Leftovers());                       // nothing was created beside it
+        Assert.Equal("", PrivateLeftovers());                       // and the staging copy is gone
+        var b = File.ReadAllBytes(target);
+        Assert.Equal(44 + 2000, b.Length);
+        Assert.Equal(2000u, BitConverter.ToUInt32(b, 40));          // real sizes, as on the rename path
+    }
+
+    [Fact]
+    public void A_folder_that_refuses_a_temp_file_gets_ffmpegs_output_and_ffmpeg_writes_privately()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string target = Path.Combine(_dir, "out.mp3");
+        string seen = Path.Combine(_private, "..", Path.GetFileName(_private) + "-seen");
+        // The fake records where it was told to write, then writes there.
+        var fake = Fake($"for a; do out=\"$a\"; done\necho \"$out\" > '{seen}'\ncat > \"$out\"");
+
+        var outcome = ExportRunner.Run(Lines(GoodRender(1000)), ExportFormat.Mp3, target, fake, staging: Refusing());
+
+        Assert.True(outcome.Status == ExportStatus.Done, outcome.Message);
+        Assert.StartsWith(_private + "/.part-", File.ReadAllText(seen).Trim());
+        File.Delete(seen);
+        Assert.Equal("bin-fake-ffmpeg,out.mp3", Leftovers());
+        Assert.Equal("", PrivateLeftovers());
+        Assert.Equal(44 + 2000, new FileInfo(target).Length);
+    }
+
+    [Fact]
+    public void In_a_refusing_folder_a_failed_render_or_a_cancel_never_touches_the_destination()
+    {
+        string target = Path.Combine(_dir, "out.wav");
+        File.WriteAllText(target, "precious");
+
+        var cut = ExportRunner.Run(Lines(Format(), Chunk(1000)), ExportFormat.Wav, target, null, staging: Refusing());
+        Assert.Equal(ExportStatus.Failed, cut.Status);
+
+        bool cancel = false;
+        int reads = 0;
+        string? Read() => ++reads switch { 1 => Format(), 2 => Chunk(1000), 3 => ((cancel = true) ? Chunk(1000) : null), _ => Final() };
+        var cancelled = ExportRunner.Run(Read, ExportFormat.Wav, target, null, () => cancel, staging: Refusing());
+        Assert.Equal(ExportStatus.Cancelled, cancelled.Status);
+
+        Assert.Equal("out.wav", Leftovers());
+        Assert.Equal("precious", File.ReadAllText(target));
+        Assert.Equal("", PrivateLeftovers());
+
+        // And a destination that did not exist is not created by a failure.
+        string fresh = Path.Combine(_dir, "new.wav");
+        ExportRunner.Run(Lines(Format(), Chunk(1000)), ExportFormat.Wav, fresh, null, staging: Refusing());
+        Assert.False(File.Exists(fresh));
+    }
+
+    [Fact]
+    public void A_copy_that_fails_midway_removes_a_destination_it_created_and_says_so_of_one_it_replaced()
+    {
+        // A disk that fills after 100 bytes of the copy.
+        ExportStaging FullDisk() => Refusing(s => new FailAfter(s, 100));
+
+        string fresh = Path.Combine(_dir, "new.wav");
+        var created = ExportRunner.Run(Lines(GoodRender(1000)), ExportFormat.Wav, fresh, null, staging: FullDisk());
+        Assert.Equal(ExportStatus.Failed, created.Status);
+        Assert.Contains("No space left", created.Message);
+        Assert.False(File.Exists(fresh), "a half-copied file this run created was left behind");
+        Assert.Equal("", PrivateLeftovers());
+
+        string old = Path.Combine(_dir, "old.wav");
+        File.WriteAllText(old, "precious");
+        var replaced = ExportRunner.Run(Lines(GoodRender(1000)), ExportFormat.Wav, old, null, staging: FullDisk());
+        Assert.Equal(ExportStatus.Failed, replaced.Status);
+        Assert.Contains("may now be incomplete", replaced.Message);
+        Assert.True(File.Exists(old), "a file the user already had was deleted");
+        Assert.Equal("", PrivateLeftovers());
+    }
+
+    [Fact]
+    public void A_private_folder_that_cannot_be_made_is_a_failure_that_names_both_places()
+    {
+        string notADir = Path.Combine(_private, "file");
+        File.WriteAllText(notADir, "");
+        var staging = new ExportStaging { PrivateDir = Path.Combine(notADir, "sub"), CreateBeside = _ => false };
+        int reads = 0;
+
+        var outcome = ExportRunner.Run(() => { reads++; return null; }, ExportFormat.Wav, Path.Combine(_dir, "o.wav"), null, staging: staging);
+
+        Assert.Equal(ExportStatus.Failed, outcome.Status);
+        Assert.Contains("nor in", outcome.Message);
+        Assert.Equal(0, reads);                                     // refused before the render was read
+        Assert.Equal("", Leftovers());
+    }
+
+    [Fact]
+    public void A_really_unwritable_folder_with_a_writable_file_in_it_is_exported_into()
+    {
+        // The real thing, without the seam: a folder where only the chosen file
+        // may be written, which is the document portal's shape. Root ignores the
+        // folder's mode, so this can only be observed as an ordinary user (CI).
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess) return;
+        string box = Path.Combine(_dir, "box");
+        Directory.CreateDirectory(box);
+        string target = Path.Combine(box, "out.wav");
+        File.WriteAllText(target, "old");
+        File.SetUnixFileMode(box, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var outcome = ExportRunner.Run(Lines(GoodRender(1000)), ExportFormat.Wav, target, null,
+                                           staging: new ExportStaging { PrivateDir = _private });
+
+            Assert.True(outcome.Status == ExportStatus.Done, outcome.Message);
+            Assert.Equal(new[] { "out.wav" }, Directory.GetFileSystemEntries(box).Select(Path.GetFileName).ToArray());
+            Assert.Equal(44 + 2000, new FileInfo(target).Length);
+            Assert.Equal("", PrivateLeftovers());
+        }
+        finally
+        {
+            File.SetUnixFileMode(box, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Theory]
+    [InlineData("/run/user/1000/doc/a1b2c3/speech", true)]
+    [InlineData("/run/user/0/doc/x/y.mp3", true)]
+    [InlineData("/run/user/1000/speech.mp3", false)]
+    [InlineData("/run/user/abc/doc/x/y", false)]
+    [InlineData("/run/user//doc/x/y", false)]
+    [InlineData("/home/u/run/user/1000/doc/x", false)]
+    public void Document_portal_paths_are_recognised(string path, bool expected) =>
+        Assert.Equal(expected, ExportRunner.InDocumentPortal(path));
+
+    /// <summary>Accepts <c>limit</c> bytes, then fails as a full disk does.</summary>
+    private sealed class FailAfter(Stream inner, int limit) : Stream
+    {
+        private int _written;
+
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            int take = Math.Min(buffer.Length, limit - _written);
+            if (take > 0) { inner.Write(buffer[..take]); _written += take; }
+            if (take < buffer.Length) throw new IOException("No space left on device");
+        }
+        public override void Flush() => inner.Flush();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }

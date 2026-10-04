@@ -34,6 +34,7 @@ on:
       - 'build/pack-tar.sh'
       - 'build/build-espeak.sh'
       - 'build/check-*.sh'
+      - 'build/build-ffmpeg.sh'
       - 'src/**/*.csproj'
       - 'Directory.Build.*'
       - '.github/workflows/flathub.yml'

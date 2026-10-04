@@ -18,6 +18,9 @@
 #     the tarball's is, and pack-tar.sh's pin check still applies;
 #   - build/pack-tar.sh then publishes, composes and runs all its assertions,
 #     exactly as a release run does. The tarball it also writes is discarded.
+#   - build/build-ffmpeg.sh builds the export ffmpeg (MP3, AAC, FLAC) from
+#     ffmpeg and LAME, two more pinned sources, into the installed tree only:
+#     the tarball carries none.
 #
 # NativeAOT (vst-ctl, vst-speechd) links with gcc here: the SDK has no clang, and
 # the ILCompiler targets fall back to gcc and bfd by themselves.
@@ -86,6 +89,14 @@ modules:
         bash build/pack-tar.sh
       - install -d /app/lib/vibesupertonic /app/bin
       - cp -a dist/release-linux/VibeSuperTonic/. /app/lib/vibesupertonic/
+      # THE EXPORT ENCODER, which the tarball deliberately does not carry: a
+      # minimal LGPL ffmpeg with LAME, for MP3, AAC and FLAC export, from the two
+      # pinned sources below, by the same script the snap and the other manifest
+      # run. The runtime ships ffmpeg's libraries but no `ffmpeg` program, and the
+      # sandbox cannot see the host's. /app/lib/vibesupertonic/ffmpeg is where
+      # FfmpegDetector looks inside a Flatpak.
+      - bash build/build-ffmpeg.sh --ffmpeg-src build/ffmpeg-out/ffmpeg-src --lame-src build/ffmpeg-out/lame-src
+          --work "$PWD/build/ffmpeg-out/work" --out /app/lib/vibesupertonic/ffmpeg
       # A wrapper, not a symlink: the window resolves its own directory, and a
       # script is certain to leave it the real one.
       - |
@@ -122,4 +133,15 @@ modules:
         url: https://github.com/waywardgeek/sonic.git
         commit: fbf75c3d6d846bad3bb3d456cbc5d07d9fd8c104
         dest: build/espeak-out/sonic
+      # The export ffmpeg's two sources, at build/build-ffmpeg.sh's pins (which
+      # check-ffmpeg-pins.sh compares): ffmpeg by commit, LAME by SHA-256.
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n8.1.3
+        commit: 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7
+        dest: build/ffmpeg-out/ffmpeg-src
+      - type: archive
+        url: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
+        sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+        dest: build/ffmpeg-out/lame-src
       - nuget-sources.json

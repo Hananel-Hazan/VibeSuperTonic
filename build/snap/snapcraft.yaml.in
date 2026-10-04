@@ -3,7 +3,7 @@
 # Never run snapcraft against this file directly: the payload is what makes
 # pack-tar.sh's assertions apply to the snap, and only the packer composes it.
 #
-# THREE DECISIONS THAT LOOK ODD AND ARE NOT.
+# FOUR DECISIONS THAT LOOK ODD AND ARE NOT.
 #
 # 1. The hotkey client, `ctl`, has NO extension. An extension wraps the command
 #    in a desktop-launch script, which on the hotkey path would be paid on every
@@ -22,6 +22,10 @@
 #    extension (decision 1), so it cannot rely on the extension's environment.
 #    Top-level environment is applied by snapd itself, at no startup cost.
 #
+# 4. The snap carries its own minimal ffmpeg (the `ffmpeg` part) for MP3, AAC
+#    and FLAC export, because confinement hides the host's. The tarball and the
+#    AppImage do not: they use the system's.
+#
 # No personal-files and no classic confinement. The two things that need the
 # desktop's own configuration (hotkeys, Speech Dispatcher) are done by
 # sandbox-setup.sh, which the user runs once on the host. See that file.
@@ -32,7 +36,7 @@ base: core24
 version: '@VERSION@'
 grade: @GRADE@
 confinement: strict
-license: MIT AND GPL-3.0-or-later
+license: MIT AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-or-later
 adopt-info: vibesupertonic
 icon: snap/gui/vibesupertonic.png
 website: https://github.com/Hananel-Hazan/VibeSuperTonic
@@ -141,3 +145,24 @@ parts:
       - libwayland-client0
     organize:
       'usr/lib/x86_64-linux-gnu/*': lib/native/
+
+  # THE EXPORT ENCODER: MP3, AAC and FLAC. A snap cannot see the host's ffmpeg,
+  # so it carries a minimal LGPL one, at $SNAP/ffmpeg/ffmpeg, which is where
+  # FfmpegDetector looks inside a snap. build/build-ffmpeg.sh is the one recipe
+  # for both store packages: it fetches ffmpeg at a pinned commit and LAME at a
+  # pinned SHA-256, verifies both, configures --disable-everything plus what an
+  # export uses, LGPL only, and writes LICENSE-FFMPEG.txt (the source offer)
+  # beside the binary. pack-snap.sh copies the script into ffmpeg-recipe/ and
+  # checks the result (check-ffmpeg-bundle.sh) on the finished snap and, with
+  # --test-install, under confinement. The tarball carries no ffmpeg.
+  ffmpeg:
+    plugin: nil
+    source: ffmpeg-recipe
+    build-packages:
+      - gcc
+      - make
+      - git
+      - curl
+      - ca-certificates
+    override-build: |
+      bash build-ffmpeg.sh --fetch --work "$CRAFT_PART_BUILD/work" --out "$CRAFT_PART_INSTALL/ffmpeg"

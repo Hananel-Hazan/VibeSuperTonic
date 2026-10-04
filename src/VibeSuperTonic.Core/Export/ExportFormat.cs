@@ -17,7 +17,9 @@ public enum ExportFormat
 /// uses). Bundling one would put a patent-encumbered native library in an
 /// archive with a 75 MiB budget; the system's ffmpeg is already there on most
 /// desktops, is kept patched by the distro, and is detected at runtime. WAV is
-/// written by this process and never needs it.</para>
+/// written by this process and never needs it. The snap and the Flatpak, which
+/// cannot see the host's, carry a minimal LGPL one of their own; see
+/// <see cref="FfmpegDetector"/>.</para>
 /// </summary>
 public static class ExportFormats
 {

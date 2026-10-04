@@ -104,6 +104,15 @@ PY
 # shellcheck source=check-composed-tree.sh
 source "$root/build/check-composed-tree.sh"
 
+# The export ffmpeg: both manifests build it from build-ffmpeg.sh's pinned
+# sources, and install it where FfmpegDetector looks. Before any build, since a
+# drifted pin fails a twenty-minute offline build at best.
+ffmpeg_version="$(awk -F= '/^FFMPEG_VERSION=/ { v = $2 } END { print v }' "$root/build/build-ffmpeg.sh")"
+[[ -n "$ffmpeg_version" ]] || die "no FFMPEG_VERSION= in build/build-ffmpeg.sh"
+pins_said="$(bash "$root/build/check-ffmpeg-pins.sh" 2>&1)" || die "the store manifests disagree with build/build-ffmpeg.sh:
+       $pins_said"
+info "$pins_said"
+
 (( lint )) && [[ -n "$flathub_tag" || $from_source -eq 0 ]] \
     && { echo "--lint goes with --from-source: it lints what that builds" >&2; exit 64; }
 
@@ -179,7 +188,8 @@ else
           - dist
           - .git
           - .flatpak-builder
-          - build/espeak-out"
+          - build/espeak-out
+          - build/ffmpeg-out"
 fi
 
 rm -rf "$work"
@@ -241,7 +251,9 @@ if [[ -n "$manifest_url" ]]; then
 else
     location="path: $tarball"
 fi
+# The export ffmpeg's recipe, which the tarball does not carry, as a file source.
 sed -e "s|@TARBALL_LOCATION@|$location|" -e "s|@TARBALL_SHA256@|$sha256|" \
+    -e "s|@FFMPEG_RECIPE@|$root/build/build-ffmpeg.sh|" \
     "$root/build/flatpak/$app_id.yml.in" > "$manifest"
 if grep -c '@[A-Z_]*@' "$manifest" >/dev/null; then
     die "a placeholder survived in $manifest"
@@ -292,6 +304,17 @@ for f in "share/applications/$app_id.desktop" "share/metainfo/$app_id.metainfo.x
 done
 info "the layout FlatpakPeer expects, and the desktop files the stores read"
 
+# The export ffmpeg is there, beside its LGPL texts. That it RUNS is asked
+# inside the sandbox by --test-install: it is built against the runtime, which
+# this host's libc may be older than.
+for f in ffmpeg/ffmpeg ffmpeg/LICENSE-FFMPEG.txt ffmpeg/COPYING.LGPLv2.1 ffmpeg/COPYING.LAME ffmpeg/BUILD-INFO; do
+    [[ -s "$files/$f" ]] || die "the build has no /app/lib/vibesupertonic/$f. Without the ffmpeg
+       MP3, AAC and FLAC export are unavailable in the Flatpak; without the
+       texts it is distributed without its licence."
+done
+[[ -x "$files/ffmpeg/ffmpeg" ]] || die "/app/lib/vibesupertonic/ffmpeg/ffmpeg is not executable"
+info "the export ffmpeg and its licence texts are at /app/lib/vibesupertonic/ffmpeg"
+
 # THE HOST-SIDE HOTKEY CLIENT. Run from the deployment as the desktop runs it,
 # it must find the daemon in the app's shared runtime directory, not in its own.
 # If FlatpakPeer failed to read the metadata it would look in
@@ -327,6 +350,21 @@ if (( test_install )); then
             | awk '/^(299|399) / { last = $0 } END { print last }' || true)"
     [[ "$init" == 299\ * ]] || die "the installed module answered INIT with: ${init:-nothing}"
     info "the module answers INIT inside the sandbox"
+
+    # THE EXPORT FFMPEG, inside the sandbox: FfmpegDetector (through vst-ctl)
+    # must choose the bundled one, and it must encode a piped WAV to MP3, AAC
+    # and FLAC with the exact export arguments. The check is fed on stdin: the
+    # repository is not inside the sandbox.
+    formats="$(flatpak run --command=/app/lib/vibesupertonic/vst-ctl "$app_id" --export-formats 2>&1)" \
+        || die "inside the Flatpak, vst-ctl --export-formats says a format is unavailable:
+       $formats"
+    [[ "$formats" == *"/app/lib/vibesupertonic/ffmpeg/ffmpeg (bundled)"* ]] || die "inside the Flatpak, vst-ctl did not choose the bundled ffmpeg:
+       $formats"
+    said_ffmpeg="$(timeout 120 flatpak run --command=bash "$app_id" -s -- /app/lib/vibesupertonic/ffmpeg "$ffmpeg_version" \
+                   < "$root/build/check-ffmpeg-bundle.sh" 2>&1)" \
+        || die "the export ffmpeg failed its check inside the sandbox:
+       $said_ffmpeg"
+    info "inside the sandbox vst-ctl picks the bundled ffmpeg, and it encodes MP3, AAC and FLAC"
 
     # The real deployment path, which is what sandbox-setup.sh and the hotkey
     # use. It goes through `active`, which the build directory does not have.

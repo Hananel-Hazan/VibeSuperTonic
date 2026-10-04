@@ -1,7 +1,8 @@
 namespace VibeSuperTonic.Core.Export;
 
 /// <summary>
-/// The system's ffmpeg, as far as an export is concerned: where it is, which
+/// An ffmpeg (the system's, or the one a snap or Flatpak carries), as far as an
+/// export is concerned: where it is, which
 /// encoders it has, and the arguments that turn a WAV on stdin into a file.
 /// Pure and testable; the one process it describes is started by
 /// <see cref="ExportRunner"/>.
@@ -103,19 +104,24 @@ public sealed record FfmpegTools(string Path, IReadOnlySet<string> Encoders)
 
     /// <summary>
     /// The sentence the Export tab shows for a format, or null when it is
-    /// available. <paramref name="sandboxed"/> changes the advice, not the
-    /// verdict: a snap or Flatpak is simply not shown the host's ffmpeg.
+    /// available. <paramref name="bundled"/> is the ffmpeg a snap or Flatpak
+    /// carries (<see cref="FfmpegDetector.BundledPath()"/>), null outside one. It
+    /// changes the advice, not the verdict: a sandbox cannot see the host's
+    /// ffmpeg, so "install ffmpeg" would be advice that cannot work there, and
+    /// reaching this with a bundled path means the package's own is missing or
+    /// broken.
     /// </summary>
-    public static string? Unavailable(ExportFormat format, FfmpegTools? tools, bool sandboxed)
+    public static string? Unavailable(ExportFormat format, FfmpegTools? tools, string? bundled)
     {
         if (format == ExportFormat.Wav) return null;
         string name = ExportFormats.ShortName(format);
 
         if (tools is null)
         {
-            return sandboxed
-                ? $"{name} export needs ffmpeg, and this sandboxed install (snap or Flatpak) cannot see the one on your system. "
-                  + "Export WAV here, or use the tarball or AppImage build for MP3, AAC and FLAC."
+            return bundled is not null
+                ? $"{name} export uses the ffmpeg this sandboxed install (snap or Flatpak) carries, and it is missing "
+                  + $"or did not run ({bundled}); the one on your system is not visible from inside the sandbox. "
+                  + "Reinstalling the package restores it. WAV export works without it."
                 : $"{name} export needs ffmpeg, which is not installed. Install it (for example `sudo apt install ffmpeg`, "
                   + "`sudo dnf install ffmpeg` or `sudo pacman -S ffmpeg`) and reopen this tab. WAV works without it.";
         }

@@ -82,6 +82,12 @@ compose_and_build() {
     step "Checking the composed tree…"
     vst_check_composed_tree "$staging" "$version"
     vst_check_store_metadata "$staging" "$version"
+    # The export ffmpeg's recipe: the part calls build-ffmpeg.sh and installs
+    # where FfmpegDetector looks. (The Flatpak manifests are checked too: one
+    # recipe, three manifests.)
+    pins_said="$(bash "$root/build/check-ffmpeg-pins.sh" 2>&1)" || die "the store manifests disagree with build/build-ffmpeg.sh:
+       $pins_said"
+    info "$pins_said"
 
     # ------------------------------------------------------------------- compose
     step "Composing the snapcraft project…"
@@ -102,6 +108,10 @@ compose_and_build() {
     sed "s|^Icon=.*|Icon=\${SNAP}/usr/share/icons/hicolor/256x256/apps/$app_id.png|" \
         "$staging/desktop/$app_id.desktop" > "$share/applications/$app_id.desktop"
     cp "$staging/desktop/$app_id.png" "$project/snap/gui/vibesupertonic.png"
+
+    # The export ffmpeg's recipe, as the `ffmpeg` part's source. One script for
+    # the snap and both Flatpak manifests; see snapcraft.yaml.in.
+    install -Dm755 "$root/build/build-ffmpeg.sh" "$project/ffmpeg-recipe/build-ffmpeg.sh"
 
     sed -e "s|@VERSION@|$version|g" -e "s|@GRADE@|$grade|g" \
         "$root/build/snap/snapcraft.yaml.in" > "$project/snap/snapcraft.yaml"
@@ -275,6 +285,16 @@ init="$(printf 'INIT\nQUIT\n' | timeout 30 "$extract/vst-speechd" 2>/dev/null | 
 [[ "$init" == 299\ * ]] || die "the module inside the snap answered INIT with: ${init:-nothing}"
 info "binaries report $version; the module answers INIT"
 
+# THE EXPORT FFMPEG, as packed: where FfmpegDetector looks ($SNAP/ffmpeg), its
+# LGPL texts beside it, the pinned version, libmp3lame, aac and flac, and a
+# piped WAV encoding to all three with the exact export arguments. Without it
+# the Export tab offers WAV only, which nothing else here would notice.
+ffmpeg_version="$(awk -F= '/^FFMPEG_VERSION=/ { v = $2 } END { print v }' "$root/build/build-ffmpeg.sh")"
+said_ffmpeg="$(bash "$root/build/check-ffmpeg-bundle.sh" "$extract/ffmpeg" "$ffmpeg_version" 2>&1)" \
+    || die "the snap's export ffmpeg failed its check:
+       $said_ffmpeg"
+info "export ffmpeg: ${said_ffmpeg#ok: }"
+
 rm -rf "$extract"
 
 # ------------------------------------------------------------ under snapd
@@ -336,6 +356,23 @@ if (( test_install )); then
     init="$(printf 'INIT\nQUIT\n' | "${as_user[@]}" timeout 60 snap run vibesupertonic.speechd 2>/dev/null \
             | awk '/^(299|399) / { last = $0 } END { print last }' || true)"
     [[ "$init" == 299\ * ]] || die "the Speech Dispatcher module under confinement answered INIT with: ${init:-nothing}"
+
+    # THE EXPORT FFMPEG UNDER CONFINEMENT. Two questions the unpacked snap above
+    # cannot answer: does the code (FfmpegDetector, through vst-ctl) find the
+    # bundled one when it runs inside the snap, and may a confined process
+    # execute it and encode? The check script is fed on stdin, because the
+    # repository is not inside the snap.
+    formats="$("${as_user[@]}" timeout 60 snap run vibesupertonic.ctl --export-formats 2>&1)" \
+        || die "inside the snap, vst-ctl --export-formats says a format is unavailable:
+       $formats"
+    [[ "$formats" == *"/snap/vibesupertonic/"*"/ffmpeg/ffmpeg (bundled)"* ]] || die "inside the snap, vst-ctl did not choose the bundled ffmpeg:
+       $formats"
+    said_ffmpeg="$("${as_user[@]}" timeout 120 snap run --shell vibesupertonic.ctl \
+                     -c 'exec bash -s -- "$SNAP/ffmpeg" "$1"' vst "$ffmpeg_version" \
+                     < "$root/build/check-ffmpeg-bundle.sh" 2>&1)" \
+        || die "the export ffmpeg failed its check under confinement:
+       $said_ffmpeg"
+    info "under confinement vst-ctl picks the bundled ffmpeg, and it encodes MP3, AAC and FLAC"
 
     inside="$("${as_user[@]}" timeout 30 snap run vibesupertonic.setup bind 2>&1 || true)"
     [[ "$inside" == *"Run this in a terminal"* ]] || die "vibesupertonic.setup did not refuse inside the snap. It said:

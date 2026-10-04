@@ -89,6 +89,35 @@ if (args.Contains("--version"))
     return 0;
 }
 
+// Which formats `render --out` can write here, and with which ffmpeg. Also a
+// question about this install rather than the daemon, so no daemon is involved.
+// pack-snap.sh and pack-flatpak.sh ask it INSIDE the sandbox: it is the only
+// check that FfmpegDetector, under real confinement, finds the ffmpeg the
+// package carries. Exit 0 only when every format is available.
+if (args.Contains("--export-formats"))
+{
+    FfmpegTools? tools = FfmpegDetector.Detect();
+    string? bundled = FfmpegDetector.BundledPath();
+    string which = tools is null ? "none" : tools.Path == bundled ? $"{tools.Path} (bundled)" : tools.Path;
+    Console.WriteLine($"ffmpeg: {which}");
+    int unavailable = 0;
+    foreach (ExportFormat f in Enum.GetValues<ExportFormat>())
+    {
+        if (FfmpegTools.Unavailable(f, tools, bundled) is { } why)
+        {
+            Console.WriteLine($"{ExportFormats.ShortName(f)}: no. {why}");
+            unavailable++;
+        }
+        else
+        {
+            Console.WriteLine(f == ExportFormat.Wav
+                ? "WAV: yes"
+                : $"{ExportFormats.ShortName(f)}: yes ({tools!.EncoderFor(f)})");
+        }
+    }
+    return unavailable == 0 ? 0 : 1;
+}
+
 bool noStart = args.Contains("--no-start");
 
 // `diagnostics` only. --json prints the snapshot as one line for jq (the default
@@ -609,7 +638,11 @@ static void PrintUsage() =>
                        renamed), so a cancel or a crash leaves nothing behind.
           --format F   `render --out` only: wav, mp3, aac or flac. Defaults to the
                        file's extension, then WAV. mp3/aac/flac are encoded by the
-                       system's ffmpeg; without one the command says how to get it.
+                       system's ffmpeg (a snap or Flatpak carries its own);
+                       without one the command says how to get it.
+          --export-formats
+                       say which formats `render --out` can write here, and with
+                       which ffmpeg; exit 1 if any cannot. Needs no daemon.
           --json       `diagnostics` as one JSON line instead of a table
           --text       `diagnostics` includes a truncated snippet of the text being
                        read. Off by default: this is what gets pasted into reports
@@ -1042,7 +1075,7 @@ static int RunRender(StreamReader reader, Socket socket, string outPath, ExportF
     if (toFile && ExportFormats.NeedsFfmpeg(fileFormat))
     {
         ffmpeg = FfmpegDetector.Detect();
-        if (FfmpegTools.Unavailable(fileFormat, ffmpeg, FfmpegDetector.IsSandboxed()) is { } why)
+        if (FfmpegTools.Unavailable(fileFormat, ffmpeg, FfmpegDetector.BundledPath()) is { } why)
         {
             Console.Error.WriteLine(why);
             return 1;
