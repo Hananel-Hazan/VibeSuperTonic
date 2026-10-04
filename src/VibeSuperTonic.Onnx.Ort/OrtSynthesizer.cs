@@ -79,7 +79,7 @@ public sealed class OrtSynthesizer : ISynthesizer
         if (!ExecutionProviders.IsKnown(provider))
             throw new ArgumentException(
                 $"unknown execution provider '{provider}'; expected " +
-                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}' or '{ExecutionProviders.OpenVino}'", nameof(provider));
+                $"'{ExecutionProviders.Cpu}', '{ExecutionProviders.Cuda}', '{ExecutionProviders.OpenVino}' or '{ExecutionProviders.WebGpu}'", nameof(provider));
 
         _onnxDir = Path.Combine(modelsRoot, "onnx");
         _voiceStylesDir = Path.Combine(modelsRoot, "voice_styles");

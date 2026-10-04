@@ -158,7 +158,7 @@ DaemonLog.Initialize(dataDir);
 GpuProviderPack.ReexecIfNeeded(LinuxDataPaths.StoreRoot, DaemonLog.Write);
 
 // Which vendor's pack is installed, if any — that is what "gpu" means on this
-// machine. A pack that brings its own libonnxruntime.so (OpenVINO) is wired in
+// machine. A pack that brings its own libonnxruntime.so (OpenVINO, WebGPU) is wired in
 // here, still before any ONNX Runtime call. Never throws; every failure leaves
 // the shipped runtime and the CPU.
 GpuPack? gpuPack = GpuProviderPack.Activate(LinuxDataPaths.StoreRoot, DaemonLog.Write);

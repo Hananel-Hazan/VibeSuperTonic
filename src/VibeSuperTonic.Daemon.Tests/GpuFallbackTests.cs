@@ -490,6 +490,60 @@ public class GpuFallbackTests : IDisposable
     }
 
     [Fact]
+    public void A_WebGpu_session_that_dies_mid_render_falls_back_to_the_CPU_like_CUDA_does()
+    {
+        var log = new List<string>();
+        var gpu = Fake.Rendering(() => throw new InvalidOperationException(
+            "[ErrorCode:Fail] WebGPU device lost"));
+        var requested = new List<string>();
+
+        var switcher = Build(gpu, (_, provider) =>
+        {
+            requested.Add(provider);
+            return Fake.Rendering(() => [7]);
+        }, log, ExecutionProviders.WebGpu);
+
+        Assert.Equal([7], switcher.Synthesize("hello", Options));
+        Assert.Equal(ExecutionProviders.Cpu, switcher.Decision.Provider);
+        Assert.Equal([ExecutionProviders.Cpu], requested);
+        Assert.Contains(log, l => l.Contains("WebGPU failed in use"));
+        Assert.Empty(switcher.SweepableGpuProviders);
+    }
+
+    [Fact]
+    public void The_WebGpu_pack_is_the_installed_one_only_when_nothing_ahead_of_it_is()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "webgpu"));
+        Assert.Equal(ExecutionProviders.WebGpu, GpuProviderPack.Installed(_root)!.Provider);
+
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "openvino"));
+        Assert.Equal(ExecutionProviders.OpenVino, GpuProviderPack.Installed(_root)!.Provider);
+    }
+
+    [Fact]
+    public void A_WebGpu_pack_without_its_runtime_is_reported_and_leaves_the_CPU_in_charge()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "runtime", "webgpu"));
+        var log = new List<string>();
+
+        var pack = GpuProviderPack.Activate(_root, log.Add);
+
+        Assert.Equal(ExecutionProviders.WebGpu, pack!.Provider);
+        Assert.Contains(log, l => l.Contains("not usable") && l.Contains("continuing on the CPU"));
+    }
+
+    [Fact]
+    public void The_shipped_runtime_refuses_WebGpu_with_a_sentence_instead_of_crashing()
+    {
+        // The runtime the archive ships has no WebGPU provider. Every machine
+        // without the pack is in this state, and it must come back as a reason.
+        string? reason = Onnx.Ort.OrtProviders.Probe(ExecutionProviders.WebGpu);
+
+        Assert.NotNull(reason);
+        Assert.Contains("install-webgpu.sh", reason);
+    }
+
+    [Fact]
     public void An_OpenVino_pack_without_its_runtime_is_reported_and_leaves_the_CPU_in_charge()
     {
         Directory.CreateDirectory(Path.Combine(_root, "runtime", "openvino"));

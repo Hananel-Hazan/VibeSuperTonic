@@ -36,6 +36,9 @@ public static class OrtProviders
             case ExecutionProviders.OpenVino:
                 options.AppendExecutionProvider("OpenVINO", OpenVinoOptions(device));
                 return;
+            case ExecutionProviders.WebGpu:
+                options.AppendExecutionProvider("WebGPU", WebGpuOptions());
+                return;
             default:
                 throw new ArgumentException($"unknown execution provider '{provider}'", nameof(provider));
         }
@@ -79,9 +82,33 @@ public static class OrtProviders
                     : " (OpenVINO found no usable Intel GPU: it needs the distribution's " +
                       "OpenCL / Level Zero compute runtime, e.g. intel-opencl-icd)";
             }
+            else if (provider == ExecutionProviders.WebGpu)
+            {
+                // "No supported adapters" is the pack's runtime reaching Dawn and
+                // finding no Vulkan GPU; anything else is the runtime that ships,
+                // which has no WebGPU provider at all.
+                reason += reason.Contains("adapter", StringComparison.OrdinalIgnoreCase)
+                    ? " (WebGPU found no usable Vulkan GPU: it needs libvulkan.so.1 and a Vulkan " +
+                      "driver for the GPU, e.g. mesa-vulkan-drivers)"
+                    : " (the WebGPU pack is not in use; install-webgpu.sh adds it)";
+            }
             return reason;
         }
     }
+
+    /// <summary>
+    /// Vulkan, explicitly: Dawn on Linux can also reach OpenGL ES, which is not
+    /// what the pack's libvulkan check, its hint or its measurement are about.
+    /// Measured: both keys are read (a bad value is refused at append), and
+    /// <c>dawnBackendType=D3D12</c> on Linux finds no adapter, so the key does
+    /// restrict the backend. High performance prefers the discrete GPU on a
+    /// hybrid machine.
+    /// </summary>
+    private static Dictionary<string, string> WebGpuOptions() => new()
+    {
+        ["dawnBackendType"] = "Vulkan",
+        ["powerPreference"] = "high-performance",
+    };
 
     private static Dictionary<string, string> OpenVinoOptions(int device)
     {
