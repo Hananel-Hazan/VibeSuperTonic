@@ -208,6 +208,53 @@ public class GpuFallbackTests : IDisposable
         Assert.DoesNotContain(log, l => l.Contains("failed in use"));
     }
 
+    /// <summary>
+    /// A chunk that captured the session just before an idle-time swap disposed
+    /// it. A render is not a session utterance, so the speechd module's render
+    /// can be mid-utterance while the session reads Idle and a press rebuilds
+    /// (here, for a new inter-op count). OrtSynthesizer.Dispose waits for renders
+    /// already inside Synthesize, but not for one between capturing the session
+    /// and entering it: that one meets ObjectDisposedException. Read as a GPU
+    /// fault, it turned the GPU off for the life of the process over a swap that
+    /// had already built a perfectly good GPU session.
+    /// </summary>
+    [Fact]
+    public void A_chunk_that_meets_a_session_disposed_by_a_swap_retries_on_the_new_one_and_keeps_the_gpu()
+    {
+        RequestGpu();
+        var log = new List<string>();
+        var config = new HostConfig(DataDir, ModelsRoot);
+        config.Reload(force: true);
+        var replacement = Fake.Rendering(() => [4, 5, 6]);
+        int builds = 0;
+
+        ProviderSwitchingSynthesizer? sut = null;
+        var stale = Fake.Rendering(() =>
+        {
+            // The swap lands between this chunk capturing the session and using it.
+            File.WriteAllText(Path.Combine(DataDir, "settings.json"),
+                """{"Provider":"gpu","OnnxInterOpThreads":3}""");
+            config.Reload(force: true);
+            Assert.True(sut!.ReevaluateWhenIdle());
+            throw new ObjectDisposedException("OrtSynthesizer");
+        });
+
+        sut = new ProviderSwitchingSynthesizer(
+            config,
+            new ExecutionDecision(2, ExecutionProviders.Cuda, "test", FromProfile: false),
+            stale,
+            (_, provider) => { builds++; Assert.Equal(ExecutionProviders.Cuda, provider); return replacement; },
+            gpuUnavailable: null,
+            sessionIdle: () => SpeechStateProbe.Idle,
+            log: log.Add);
+
+        Assert.Equal([4, 5, 6], sut.Synthesize("hello", Options));
+        Assert.Equal(ExecutionProviders.Cuda, sut.Decision.Provider);
+        Assert.Equal(1, builds);
+        Assert.DoesNotContain(log, l => l.Contains("failed in use"));
+        Assert.NotEmpty(sut.SweepableGpuProviders);
+    }
+
     [Fact]
     public void ACpuRenderThatThrowsIsLeftAlone()
     {

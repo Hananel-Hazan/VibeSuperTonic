@@ -445,9 +445,11 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         Action? onFallback = null)
     {
         // Captured under the gate and used outside it. An idle-time swap cannot
-        // land under a render — the dispose that follows one waits for in-flight
-        // renders (OrtSynthesizer.Dispose) — and the mid-render swap below
-        // replaces _current only after the call it is recovering from has thrown.
+        // land under a render already inside Synthesize — the dispose that
+        // follows one waits for in-flight renders (OrtSynthesizer.Dispose) — and
+        // one that lands between this capture and the call is the
+        // ObjectDisposedException case below. The mid-render swap replaces
+        // _current only after the call it is recovering from has thrown.
         ISynthesizer current;
         string provider;
         lock (_gate)
@@ -459,6 +461,15 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
         try
         {
             return call(current);
+        }
+        catch (ObjectDisposedException) when (Replaced(current) is { } replacement)
+        {
+            // Not the GPU: an idle-time swap disposed the session between the
+            // capture above and the call. The session reads Idle while the speechd
+            // module's render is mid-utterance, and Dispose waits only for renders
+            // already inside Synthesize. Latching the GPU off for this would throw
+            // away the GPU session the swap just built; take that one instead.
+            return call(replacement);
         }
         catch (Exception ex) when (
             provider != ExecutionProviders.Cpu &&
@@ -486,6 +497,12 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
                 throw;
             }
         }
+    }
+
+    /// <summary>The session in force, when it is no longer <paramref name="captured"/>.</summary>
+    private ISynthesizer? Replaced(ISynthesizer captured)
+    {
+        lock (_gate) return ReferenceEquals(_current, captured) ? null : _current;
     }
 
     /// <summary>
