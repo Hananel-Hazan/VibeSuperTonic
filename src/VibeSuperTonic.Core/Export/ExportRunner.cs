@@ -368,16 +368,26 @@ public static class ExportRunner
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 
     /// <summary>
-    /// ffmpeg alone, not its process tree: it starts no children, and finding a
-    /// tree means reading every process in /proc, which a snap's AppArmor profile
-    /// refuses at /proc/1/cmdline. That UnauthorizedAccessException escaped as
-    /// "cannot write …: Access to the path '/proc/1/cmdline' is denied", hiding
-    /// why ffmpeg was being stopped at all (revision 14, 2026-10-15). A kill that
-    /// fails is never the export's verdict.
+    /// The process tree, because the "ffmpeg" found may be a wrapper script whose
+    /// child holds the output pipes: kill only the script and the wait for those
+    /// pipes lasts as long as the child does (the cancel test's fake is one).
+    ///
+    /// <para><b>Then ffmpeg alone, when the tree cannot be found.</b> Finding it
+    /// means reading every process in /proc, and a snap's AppArmor profile refuses
+    /// /proc/1/cmdline. That UnauthorizedAccessException escaped as "cannot write
+    /// …: Access to the path '/proc/1/cmdline' is denied", hiding why ffmpeg was
+    /// being stopped at all (revision 14, 2026-10-15). The bundled ffmpeg starts
+    /// no children, so inside a sandbox the plain kill is the whole job. A kill
+    /// that fails is never the export's verdict.</para>
     /// </summary>
     private static void TryKill(Process p)
     {
-        try { if (!p.HasExited) p.Kill(); }
+        try
+        {
+            if (p.HasExited) return;
+            try { p.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { p.Kill(); }
+        }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
                                        or UnauthorizedAccessException or IOException) { }
     }
