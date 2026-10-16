@@ -186,6 +186,32 @@ accept a bundled ffmpeg CLI (the usual alternative, the `org.freedesktop.Platfor
 extension, carries libraries rather than the program, so it would still need a
 CLI built against it; not checked here, since this session has no flatpak).
 
+**The Flatpak on a real desktop, first time, Kubuntu 2026-10-16 (0.2.17 bundle).**
+Three faults, none visible to CI:
+
+- **The window could not open on Wayland** (`XOpenDisplay failed`): `fallback-x11`
+  withholds X11 whenever Wayland exists, and Avalonia draws only through X11.
+  Note that adding `--socket=x11` beside `fallback-x11` still gave no display;
+  the fallback has to go. Fixed in `389b699`, asserted by
+  `check-flatpak-sockets.sh`. Flathub's linter now reports
+  `finish-args-contains-both-x11-and-wayland`, which this app genuinely needs.
+- **No tray icon, ever**: the proxy refuses `RequestName` for
+  `org.kde.StatusNotifierItem-<pid>-1` with ServiceUnknown. Hidden because the
+  snap's icon sat in the same tray. Fixed in `3cda92a` (fall back to the unique
+  name), seen registering from inside the sandbox.
+- **Export works**: a new file and an overwrite, granted to the Flatpak's id, and
+  the busy message while reading. **The sandbox gets `ext-data-control-v1`**
+  (the daemon logged `selection source: wayland`), but the hotkey itself was not
+  pressed: that needs a logout, skipped.
+
+**And the snap's tray-opened window still could not export a new file** on
+stable revision 16. The grant goes to `snap.vibesupertonic_ctl` (snapd reports
+ctl's own desktop file), and the snap sees only `snap.vibesupertonic`'s portal
+folder. Revision 15's confirmation had overwritten a file that already had a
+visible grant. Fixed in `56e52cc`: the window passes the grant on with
+`Documents.GrantPermissions`, measured working from inside ctl's confinement.
+**Not yet seen in a built snap.**
+
 **Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
 
 - [ ] **Export MP3 from the window in each package**, saving into the home
