@@ -109,6 +109,28 @@ compose_and_build() {
         "$staging/desktop/$app_id.desktop" > "$share/applications/$app_id.desktop"
     cp "$staging/desktop/$app_id.png" "$project/snap/gui/vibesupertonic.png"
 
+    # A HIDDEN ENTRY FOR EVERY APP THAT CAN OPEN THE WINDOW. The tray opens it
+    # under the confinement of whatever started the daemon, usually the bare ctl,
+    # and an app with no desktop entry is one `snap routine portal-info` reports
+    # as `DesktopFile=.`. xdg-desktop-portal then grants every file chosen in a
+    # save or open dialog to an app called "." (xdg-document-portal: "Invalid id
+    # ."), the snap sees an empty /run/user/<uid>/doc/<id>, and export fails with
+    # "the folder ... does not exist". Revision 12, Kubuntu, 2026-10-15; the same
+    # dialog from a menu-opened window was granted to snap.vibesupertonic and
+    # worked. No StartupWMClass, so the window still belongs to the real entry.
+    for starter in daemon ctl speechd; do
+        cat > "$share/applications/vibesupertonic-$starter.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=VibeSuperTonic ($starter)
+Comment=Lets the portal recognise VibeSuperTonic when its tray opens the window
+Exec=vibesupertonic.$starter
+Icon=\${SNAP}/usr/share/icons/hicolor/256x256/apps/$app_id.png
+NoDisplay=true
+Terminal=false
+EOF
+    done
+
     # The export ffmpeg's recipe, as the `ffmpeg` part's source. One script for
     # the snap and both Flatpak manifests; see snapcraft.yaml.in.
     install -Dm755 "$root/build/build-ffmpeg.sh" "$project/ffmpeg-recipe/build-ffmpeg.sh"
@@ -230,6 +252,20 @@ for app in daemon ctl speechd; do
     done
 done
 info "version $version, strict, five apps, ctl is bare, and the daemon's starters carry its plugs and the window's"
+
+# AND A DESKTOP ENTRY, hidden, for the same reason: without one, the portal
+# grants the tray-opened window's save dialog to an app called "." (see the
+# compose step). snapcraft puts an app's entry at meta/gui/<app>.desktop.
+for app in daemon ctl speechd; do
+    entry="$extract/meta/gui/$app.desktop"
+    [[ -f "$entry" ]] || die "the '$app' app has no desktop entry (meta/gui/$app.desktop). A window the
+       tray opens under its confinement is one the portal cannot name, so its
+       save dialog grants the file to \".\" and export fails. See snapcraft.yaml.in."
+    nodisplay="$(grep -c '^NoDisplay=true$' "$entry" || true)"
+    [[ "$nodisplay" == 1 ]] || die "meta/gui/$app.desktop is not NoDisplay=true, so it would show in the
+       application menu beside the real entry."
+done
+info "daemon, ctl and speechd each carry a hidden desktop entry"
 
 # NO refresh-mode ON AN APP THAT IS NOT A SERVICE. snapd installs such a snap
 # without a word, so --test-install passes, and then the Store refuses the
@@ -373,6 +409,34 @@ if (( test_install )); then
         || die "the export ffmpeg failed its check under confinement:
        $said_ffmpeg"
     info "under confinement vst-ctl picks the bundled ffmpeg, and it encodes MP3, AAC and FLAC"
+
+    # WHAT THE PORTAL WILL CALL EACH STARTER, asked of snapd the way
+    # xdg-desktop-portal asks it: `snap routine portal-info <pid>` for a process
+    # running under that app's confinement. `DesktopFile=.` is revision 12's
+    # export failure (a tray-opened window's file granted to "."), and the
+    # meta/gui check above cannot tell whether snapd installed the entry.
+    for app in daemon ctl speechd; do
+        "${as_user[@]}" timeout 30 snap run --shell "vibesupertonic.$app" -c 'exec sleep 20' >/dev/null 2>&1 &
+        sleeper=$!
+        info_said=""
+        for _ in $(seq 50); do
+            # A sleep whose confinement is this app's, found by its AppArmor label.
+            pid=""
+            for candidate in $(pgrep -x sleep || true); do
+                label="$(cat "/proc/$candidate/attr/current" 2>/dev/null || true)"
+                [[ "$label" == "snap.vibesupertonic.$app "* ]] && pid="$candidate"
+            done
+            if [[ -n "$pid" ]]; then info_said="$(snap routine portal-info "$pid" 2>&1 || true)"; break; fi
+            sleep 0.2
+        done
+        kill "$sleeper" 2>/dev/null || true
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+        wait "$sleeper" 2>/dev/null || true
+        [[ "$info_said" == *"DesktopFile=vibesupertonic_$app.desktop"* ]] || die "snap routine portal-info for the '$app' app does not name its entry:
+       ${info_said:-no process found under snap.vibesupertonic.$app}
+       The portal would grant a tray-opened window's save dialog to \".\"."
+    done
+    info "the portal can name daemon, ctl and speechd (DesktopFile=vibesupertonic_<app>.desktop)"
 
     inside="$("${as_user[@]}" timeout 30 snap run vibesupertonic.setup bind 2>&1 || true)"
     [[ "$inside" == *"Run this in a terminal"* ]] || die "vibesupertonic.setup did not refuse inside the snap. It said:

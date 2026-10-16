@@ -109,16 +109,25 @@ apps:
   # upload of a snap carrying it failed schema validation on 2026-09-27, after
   # local snapd had installed it without complaint. Instead the daemon notices a
   # held update and asks the user (SnapUpdateWatch, UpdatePrompt).
+  #
+  # Each has a hidden (NoDisplay) desktop entry, for the same reason it has the
+  # window's plugs: the tray opens the window under its confinement, and the
+  # portal recognises an app only by its desktop entry. Without one, every file
+  # chosen in that window's save dialog is granted to an app called "." and the
+  # snap never sees it (pack-snap.sh, where the entries are written).
   daemon:
     command: vibesupertonicd
+    desktop: usr/share/applications/vibesupertonic-daemon.desktop
     plugs: *daemon-plugs
 
   ctl:
     command: vst-ctl
+    desktop: usr/share/applications/vibesupertonic-ctl.desktop
     plugs: *daemon-plugs
 
   speechd:
     command: vst-speechd
+    desktop: usr/share/applications/vibesupertonic-speechd.desktop
     plugs: *daemon-plugs
 
   setup:

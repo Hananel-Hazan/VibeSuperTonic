@@ -190,6 +190,21 @@ CLI built against it; not checked here, since this session has no flatpak).
 
 - [ ] **Export MP3 from the window in each package**, saving into the home
       folder through the portal's dialog, and once over an existing file.
+      **Snap, revision 12, Kubuntu 2026-10-15: works from a menu-opened window,
+      fails from a tray-opened one.** From the menu, WAV and MP3 (128 kbps,
+      valid) landed in `~/Downloads/01`, granted to `snap.vibesupertonic`. From
+      the tray: "Export failed: the folder /run/user/1000/doc/44660954 does not
+      exist". The tray opens the window under `ctl`'s confinement, `ctl` had no
+      desktop entry, so `snap routine portal-info` said `DesktopFile=.` and the
+      portal granted the file to an app called "." (`xdg-document-portal:
+      Invalid id .`), which the snap cannot see. **Fixed, not yet seen on the
+      desktop**: `daemon`, `ctl` and `speechd` carry hidden desktop entries;
+      pack-snap.sh asserts them in `meta/gui/` and, with `--test-install`, that
+      portal-info names `vibesupertonic_<app>.desktop` for each. Both checks
+      were run against revision 12 and failed for all three apps, and passed
+      for the window app. To see on revision 13: export from a tray-opened
+      window, and once over an existing file. The Flatpak has no tray/menu
+      split (one app id), but is still untried.
 
 - [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**
       ("has running apps"): the Speech Dispatcher module (speech-dispatcher keeps
