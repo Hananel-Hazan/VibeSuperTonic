@@ -470,7 +470,7 @@ rule below working rather than a coincidence.
 | `0.2.12` | Skipped | never cut |
 | `0.2.13` | Two numbers that did not describe the daemon: a benchmark measuring a `TotalStep` no voice ran at, and a banner that could not clear its own warning. Both reported from the running install | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.13`, not published.** (It briefly carried this project's work on 2026-08-28 before being reclaimed to `0.2.11`; nothing was ever cut under it then) |
 | `0.2.12` | All ten of TESTING-PLAN's items, the ORT hash pin, and four window fixes — the Tune tab's unreadable dropdowns, the Pronunciations tab losing unsaved rules, the scope label, and a false claim in `INSTALL.txt` | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.12`, not published.** It began as "checks only, accumulates until it carries something visible" — and then it did |
-| `0.2.17` | The snap and the Flatpak — [STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md) — and the sandbox-aware store, install check and socket they need. Chosen by the user as a patch release | **under development** since 2026-09-25 |
+| `0.2.17` | The snap and the Flatpak — [STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md) — and the sandbox-aware store, install check and socket they need. Chosen by the user as a patch release | **shipped 2026-10-16**, tagged `v0.2.17` (`ccc2da9`), on GitHub Releases with the Windows ZIP; snap revision 16 (stable grade) on `edge` |
 | `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
 
 **A first `0.2.11` was packed and then withdrawn the same day**, and the
@@ -500,7 +500,7 @@ collides with nothing. What it does mean: **`dist/` may still hold a
 `0.2.13` tarball from before the renumber, and it is not a release.** Delete it
 rather than reasoning about it.
 
-`0.2.17` is the number being built. **Everything after it is a decision to ask
+`0.2.17` shipped on 2026-10-16. **Everything after it is a decision to ask
 about** — propose a bump from what changed, and use
 `AskUserQuestion`.
 

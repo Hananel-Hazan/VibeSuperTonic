@@ -402,6 +402,14 @@ assertion runs there too. The tree it installs is the one the tarball holds.
   eight runtime packs from 10.0.8 to 10.0.12. The Flathub build and the other
   artifacts now ship the same .NET runtime, 10.0.12.
 
+**State on 2026-10-16:** v0.2.17 tagged and pushed, `flathub.yml` green on the
+tag (run 38926327561), and `dist/flathub/` written for it. The fork
+`Hananel-Hazan/flathub` exists with nothing pushed. **The pull request must be
+opened by the user**: Flathub's template asks the submitter to confirm no AI
+tool or agent generated or automated the submission PR, to attach a video of
+the Flatpak running, and to disclose AI-generated material in the app.
+AppImageHub: AppImage/appimage.github.io#10295, opened 2026-10-16.
+
 Submission, once CI is green and v0.2.17 is tagged and pushed:
 
 1. Screenshots are in the metainfo (done), at tag URLs.
