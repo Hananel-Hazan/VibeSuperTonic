@@ -298,6 +298,9 @@ step "Checking what came out…"
 files="$builddir/files/lib/vibesupertonic"
 [[ -x "$files/vibesupertonicd" ]] || die "the build has no /app/lib/vibesupertonic/vibesupertonicd.
        FlatpakPeer and DaemonLaunch both depend on that path."
+# X11 for the window, always; fallback-x11 broke 0.2.17 on every Wayland desktop.
+bash "$root/build/check-flatpak-sockets.sh" "$builddir/metadata" \
+    || die "the Flatpak's display sockets are wrong (above)."
 for f in "share/applications/$app_id.desktop" "share/metainfo/$app_id.metainfo.xml" \
          "share/icons/hicolor/256x256/apps/$app_id.png" "bin/vibesupertonic"; do
     [[ -e "$builddir/files/$f" ]] || die "the build has no /app/$f"

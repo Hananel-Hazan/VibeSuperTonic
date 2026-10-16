@@ -38,10 +38,15 @@ sdk-extensions:
 command: vibesupertonic
 
 finish-args:
-  # The window, on either display server. X11 only when Wayland is absent.
+  # The window draws ONLY through X11 (Avalonia 11 has no Wayland backend), so
+  # it needs X11 always, XWayland on a Wayland desktop. NOT fallback-x11: that
+  # withholds X11 whenever Wayland exists, and 0.2.17's window aborted with
+  # "XOpenDisplay failed" on every Wayland desktop while CI, on Xvfb with no
+  # Wayland, passed. Wayland stays for the daemon, which reads the selection
+  # through the Wayland data-control protocol. pack-flatpak.sh asserts both.
   - --share=ipc
+  - --socket=x11
   - --socket=wayland
-  - --socket=fallback-x11
   # The voice.
   - --socket=pulseaudio
   # The first-run model download, from Hugging Face.
