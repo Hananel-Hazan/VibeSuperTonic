@@ -38,12 +38,28 @@ they work:
 **On Flathub, the Flatpak is built by Flathub, from source.** Flathub does not
 take prebuilt archives, so its build compiles this release's tag and espeak-ng
 there, offline, from pinned sources, and runs the same packer and the same
-checks as the tarball. One
-visible difference: it carries the .NET runtime that Flathub's SDK provides,
-10.0.8 at the time of writing, where the other packages carry 10.0.12. It gets
-.NET fixes when Flathub updates that SDK. The listing appears once Flathub's
+checks as the tarball. It carries the .NET runtime that Flathub's SDK provides,
+10.0.12, the same as the other packages, and gets .NET fixes when Flathub
+updates that SDK. The listing appears once Flathub's
 review is done; until then, the `.flatpak` file on this page installs the same
 program.
+
+## Export works in the snap and the Flatpak
+
+A sandbox cannot see the system's ffmpeg, so both packages carry a small one of
+their own, built only for this: MP3, AAC and FLAC, LGPL, 1.9 MB, with its
+source offer in `LICENSE-FFMPEG.txt` beside it. The tarball and the AppImage
+still use the system's.
+
+- **Saving through the desktop's file dialog works** from a window the tray
+  opened, not only from one opened from the menu. The tray's window used to
+  get a file it was not allowed to write, and the export failed with "the
+  folder … does not exist".
+- **Export while VibeSuperTonic is reading aloud is refused, and says why
+  until the reading ends.** The message changes to "You can export now" when
+  it does, so you know when to try again. Before, the refusal was a bare
+  "busy (Speaking)", and in the snap it came out as an unrelated
+  `/proc/1/cmdline` error.
 
 ## Hotkeys and the screen reader: one command in a terminal
 

@@ -211,9 +211,18 @@ CLI built against it; not checked here, since this session has no flatpak).
       the tree, AppArmor refused `/proc/1/cmdline`, and the uncaught exception
       became the export's message. Now a plain `Kill()` whose failure is never
       the verdict; a unit test with a lingering fake ffmpeg fails on a TryKill
-      that throws. To see on revision 15: export from a tray-opened window,
-      once over an existing file, and once while the hotkey is speaking (it
-      should say the daemon is busy). The Flatpak has no tray/menu
+      that throws. (Its first replacement, a plain `Kill()`, left a wrapper
+      script's child holding the pipes and broke the cancel test; the tree
+      kill is back, with ffmpeg alone as the fallback.)
+      **Confirmed on revision 15, Kubuntu 2026-10-15**, window opened from the
+      tray (`snap.vibesupertonic.ctl`): WAV exported twice, the second over the
+      first; MP3 exported (395 KB); an MP3 export while the hotkey spoke said
+      "busy (Speaking) …", and the kernel logged the `/proc/1/cmdline` denial
+      at that moment, so the fallback kill ran, and no ffmpeg was left behind.
+      **Decided 2026-10-16: export keeps refusing while anything reads**, and
+      the window keeps the message up until the reading ends, then says it
+      can export (`ExportBusyGate`, asked before the save dialog opens; 6
+      tests, a sabotage caught). The Flatpak is still untried. The Flatpak has no tray/menu
       split (one app id), but is still untried.
 
 - [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**

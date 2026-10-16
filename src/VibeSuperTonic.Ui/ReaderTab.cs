@@ -205,6 +205,10 @@ public sealed class ReaderTab : UserControl
         // itself on the next press.
         _state.Text = "not connected — the next hotkey press starts the engine again";
         _text.SelectionStart = _text.SelectionEnd = 0;
+
+        // A daemon that is gone is reading nothing; without this the Export
+        // tab's "busy" message would wait for an Idle that never arrives.
+        StateChanged?.Invoke(SpeechState.Idle);
     }
 
     // ------------------------------------------------------------- the window
@@ -274,14 +278,21 @@ public sealed class ReaderTab : UserControl
         _scroller.Offset = new Vector(0, Math.Clamp(target, 0, max));
     }
 
-    private void Show(SpeechState state) => _state.Text = state switch
+    /// <summary>Every state the stream reports. The Export tab waits on it for the reading to end.</summary>
+    public event Action<SpeechState>? StateChanged;
+
+    private void Show(SpeechState state)
     {
-        SpeechState.Idle => "idle",
-        SpeechState.Preparing => "preparing…",
-        SpeechState.Speaking => "speaking",
-        SpeechState.Stopping => "stopping…",
-        _ => state.ToString().ToLowerInvariant(),
-    };
+        _state.Text = state switch
+        {
+            SpeechState.Idle => "idle",
+            SpeechState.Preparing => "preparing…",
+            SpeechState.Speaking => "speaking",
+            SpeechState.Stopping => "stopping…",
+            _ => state.ToString().ToLowerInvariant(),
+        };
+        StateChanged?.Invoke(state);
+    }
 
     private static string Summarize(string text)
     {

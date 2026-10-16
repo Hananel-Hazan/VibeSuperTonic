@@ -68,10 +68,17 @@ public sealed class ExportTab : UserControl
     private RenderSession? _session;
     private volatile bool _cancelRequested;
 
+    /// <summary>Refuses export while reading aloud, and keeps saying so until the reading ends.</summary>
+    private readonly ExportBusyGate _busy = new();
+
     public ExportTab(DaemonClient client, ReaderTab reader)
     {
         _client = client;
         _reader = reader;
+        _reader.StateChanged += state =>
+        {
+            if (_busy.OnState(state) is { } ready) _status.Text = ready;
+        };
 
         _format.ItemsSource = Enum.GetValues<ExportFormat>().ToList();
         _format.ItemTemplate = new Avalonia.Controls.Templates.FuncDataTemplate<ExportFormat>(
@@ -232,6 +239,12 @@ public sealed class ExportTab : UserControl
         ExportFormat format = ChosenFormat;
         if (FfmpegTools.Unavailable(format, _ffmpeg, _bundled) is { } why) { _status.Text = why; return; }
 
+        // Before the save dialog, so nobody picks a file name for an export
+        // that is then refused. Asked of the daemon, not of the Reader's last
+        // event, which a dropped stream could leave stale.
+        var status = await _client.SendAsync(new Request { Verb = RequestVerb.Status });
+        if (status?.Status is { } s && _busy.Check(s.State) is { } busy) { _status.Text = busy; return; }
+
         var top = TopLevel.GetTopLevel(this);
         if (top is null) return;
 
@@ -292,7 +305,8 @@ public sealed class ExportTab : UserControl
         {
             ExportStatus.Done => $"Saved {path}",
             ExportStatus.Cancelled => "Cancelled. No file was written.",
-            _ => $"Export failed: {outcome.Message}",
+            // A reading that started after the check: same message, same wait.
+            _ => _busy.FromRefusal(outcome.Message) ?? $"Export failed: {outcome.Message}",
         };
     }
 
