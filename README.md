@@ -11,13 +11,12 @@
 
 <p align="center">
   <a href="https://snapcraft.io/vibesupertonic"><img alt="Get it from the Snap Store" src="https://snapcraft.io/static/images/badges/en/snap-store-black.svg" height="48"></a>
-  <a href="#flatpak"><img alt="Get it on Flathub (coming soon)" src="https://flathub.org/api/badge?locale=en" height="48"></a>
   <a href="#appimage"><img alt="Download the AppImage" src="https://docs.appimage.org/_images/download-appimage-banner.svg" height="48"></a>
 </p>
 
 <p align="center">
-  <a href="#snap-ubuntu-app-center-and-kubuntu-discover"><img alt="Snap: edge channel" src="https://img.shields.io/badge/snap-edge%20channel-82BEA0?logo=snapcraft&logoColor=white"></a>
-  <a href="#flatpak"><img alt="Flathub: coming soon" src="https://img.shields.io/badge/Flathub-coming%20soon-4A86CF?logo=flathub&logoColor=white"></a>
+  <a href="#snap-ubuntu-app-center-and-kubuntu-discover"><img alt="Snap: stable" src="https://img.shields.io/badge/snap-stable-82BEA0?logo=snapcraft&logoColor=white"></a>
+  <a href="#flatpak"><img alt="Flatpak: from Releases" src="https://img.shields.io/badge/Flatpak-from%20Releases-4A86CF?logo=flatpak&logoColor=white"></a>
   <a href="#tarball"><img alt="Tarball" src="https://img.shields.io/badge/tar.gz-portable-555555?logo=gnu&logoColor=white"></a>
   <a href="#windows"><img alt="Windows: SAPI 5" src="https://img.shields.io/badge/Windows-SAPI%205-0078D6?logo=windows&logoColor=white"></a>
   <br>
@@ -106,7 +105,7 @@ These are the missing things, stated plainly so you don't find them the hard way
 - 📦 **After a snap update, the screen-reader voice keeps running the old version until you next log in.** Speech Dispatcher never restarts a voice module, so we can't swap it underneath you. The hotkey switches to the new version by itself after five quiet minutes.
 - 🎵 **No pitch control and no phoneme tags.** Supertonic works from spelling and has no pitch parameter.
 - 🧪 **Orca works on Kubuntu, but it hasn't had a daily screen-reader user yet.** Someone who lives in Orca will notice things we don't. [We'd love your report](#calling-ai-riders-and-ai-agents).
-- 🏪 **It isn't in the stores' stable channels yet.** The snap is on `edge`, and the Flathub submission is being prepared.
+- 🏪 **It isn't on Flathub.** The Flatpak is a file on the [Releases page](https://github.com/Hananel-Hazan/VibeSuperTonic/releases/latest).
 - 🪟 **On Windows it speaks English only, and the binaries are unsigned**, so SmartScreen will look at you suspiciously on first run.
 
 ## Install
@@ -114,7 +113,7 @@ These are the missing things, stated plainly so you don't find them the hard way
 ### Snap (Ubuntu App Center and Kubuntu Discover)
 
 ```bash
-sudo snap install vibesupertonic --edge      # --edge until it reaches stable
+sudo snap install vibesupertonic
 ```
 
 Then, once, in a terminal:
@@ -130,14 +129,12 @@ Updates arrive on their own, and `sudo snap refresh vibesupertonic` works while 
 
 ### Flatpak
 
-Not on Flathub yet ([the plan](docs/STORE-SUBMISSION.md#flathub)). Until then, every CI run builds one. Download the `linux-flatpak` artifact from [a green build](https://github.com/Hananel-Hazan/VibeSuperTonic/actions/workflows/build.yml), then:
+Not on Flathub. Download `VibeSuperTonic-<version>-x86_64.flatpak` from the [Releases page](https://github.com/Hananel-Hazan/VibeSuperTonic/releases/latest), then:
 
 ```bash
 flatpak install --user VibeSuperTonic-*.flatpak
 bash "$(flatpak info --show-location io.github.hananel_hazan.VibeSuperTonic)/files/lib/vibesupertonic/sandbox-setup.sh" bind
 ```
-
-Once it's on Flathub, the install becomes `flatpak install flathub io.github.hananel_hazan.VibeSuperTonic`, and Discover will list it once Flatpak support is added (`plasma-discover-backend-flatpak`).
 
 ### AppImage
 
@@ -176,7 +173,7 @@ mkdir VibeSuperTonic.AppImage.home     # or: ./VibeSuperTonic.AppImage --appimag
 - **Moving the folder:** move all of it, then run `./VibeSuperTonic.AppImage bind` once in the new place.
 - **What stays outside:** two registrations that belong to your desktop, not to the app: the hotkeys and the screen-reader voice. The desktop only ever looks for them in your real home, so `bind` and `speechd-install` write them there even under a portable home. That's on purpose.
 
-Once 0.2.17 is out, the AppImage will also be listed on [AppImageHub](https://appimage.github.io/), the AppImage catalog.
+It has been submitted to [AppImageHub](https://appimage.github.io/), the AppImage catalog, and is listed there once its review passes.
 
 ### Tarball
 
@@ -312,8 +309,8 @@ In both cases the Control Panel's own Test button keeps working, because the Con
 - [x] Linux: daemon, hotkeys, Reader window, tray icon *(0.2.8 tarball, 0.2.9 AppImage)*
 - [x] Piper as a second engine: 65 voices, 35 languages *(0.2.11)*
 - [x] Speech Dispatcher module for Orca *(0.2.11)*
-- [x] Snap, working under strict confinement on Kubuntu *(0.2.17, `edge`)*
-- [ ] Snap on `stable`, with a store listing and screenshots
+- [x] Snap, working under strict confinement on Kubuntu *(0.2.17)*
+- [x] Snap on `stable`, with a store listing and screenshots *(0.2.17)*
 - [ ] Flatpak on Flathub
 - [x] Orca speaking through the snap on Kubuntu *(0.2.17)*
 - [ ] A report from a daily screen-reader user

@@ -35,9 +35,11 @@
       makes, never something the build infers.
 
       0.2.16 has its release notes (2026-09-06). 0.2.17 is the snap and the
-      Flatpak, begun 2026-09-25 and chosen by the user as a patch release.
+      Flatpak, begun 2026-09-25 and chosen by the user as a patch release,
+      shipped 2026-10-16. 0.2.18, the same day: the fixes the Flatpak's and the
+      snap's first desktop test found, chosen by the user as a patch release.
     -->
-    <VstVersion>0.2.17</VstVersion>
+    <VstVersion>0.2.18</VstVersion>
 
     <!--
       And every assembly in the tree carries it. Set here rather than per-project

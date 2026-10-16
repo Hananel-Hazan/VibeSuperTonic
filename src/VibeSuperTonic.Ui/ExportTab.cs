@@ -266,6 +266,13 @@ public sealed class ExportTab : UserControl
             && !ExportRunner.InDocumentPortal(path))
             path += ext;
 
+        // The snap's tray-opened window gets a grant the snap cannot see.
+        if (await SnapDocumentGrant.EnsureWritableAsync(path) is { } unusable)
+        {
+            _status.Text = $"Export failed: {unusable}";
+            return;
+        }
+
         var session = _client.OpenRender(new Request
         {
             Verb = RequestVerb.Render,

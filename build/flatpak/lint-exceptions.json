@@ -1,6 +1,7 @@
 {
     "io.github.hananel_hazan.VibeSuperTonic": [
         "appstream-external-screenshot-url",
-        "appstream-screenshots-not-mirrored-in-ostree"
+        "appstream-screenshots-not-mirrored-in-ostree",
+        "finish-args-contains-both-x11-and-wayland"
     ]
 }

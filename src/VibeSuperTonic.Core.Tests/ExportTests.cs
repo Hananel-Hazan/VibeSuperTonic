@@ -689,6 +689,18 @@ public sealed class ExportTests : IDisposable
     public void Document_portal_paths_are_recognised(string path, bool expected) =>
         Assert.Equal(expected, ExportRunner.InDocumentPortal(path));
 
+    [Theory]
+    [InlineData("/run/user/1000/doc/5a9287e4/flatpak-test.mp3", "5a9287e4")]   // the one Kubuntu handed the snap
+    [InlineData("/run/user/0/doc/x/y.mp3", "x")]
+    [InlineData("/run/user/1000/doc/5a9287e4/", null)]                         // no file name
+    [InlineData("/run/user/1000/doc/5a9287e4", null)]
+    [InlineData("/run/user/1000/doc/by-app/snap.x/y", null)]                   // deeper than a document
+    [InlineData("/run/user/1000/doc/abc123/sub/y.mp3", null)]                  // deeper, with an id-shaped first part
+    [InlineData("/run/user/1000/doc/a.b/y.mp3", null)]                         // ids are alphanumeric
+    [InlineData("/home/u/Downloads/speech.mp3", null)]
+    public void A_portal_paths_document_id_is_read_and_nothing_else_is(string path, string? expected) =>
+        Assert.Equal(expected, ExportRunner.DocumentId(path));
+
     /// <summary>Accepts <c>limit</c> bytes, then fails as a full disk does.</summary>
     private sealed class FailAfter(Stream inner, int limit) : Stream
     {

@@ -114,7 +114,20 @@ internal sealed class TrayIcon : IDisposable
             // the pid in the name is the thing you want when two daemons are
             // somehow running.
             string busName = $"org.kde.StatusNotifierItem-{Environment.ProcessId}-1";
-            await RequestNameAsync(connection, busName);
+            try
+            {
+                await RequestNameAsync(connection, busName);
+            }
+            catch (DBusException ex) when (connection.UniqueName is { Length: > 0 } unique)
+            {
+                // A Flatpak may not own names it was not granted, and its proxy
+                // refuses with ServiceUnknown. The specification accepts the
+                // unique name, and KDE's watcher takes any name on the bus. Until
+                // 2026-10-16 this exception left the Flatpak with no tray icon,
+                // unnoticed because the snap's icon sat in the same tray.
+                _log($"tray: cannot own {busName} ({ex.ErrorName}); registering as {unique}");
+                busName = unique;
+            }
 
             _menu = new TrayMenu(Rows(), _log);
             connection.AddMethodHandler(new StatusNotifierItem(
