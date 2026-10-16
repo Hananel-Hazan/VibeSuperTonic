@@ -352,7 +352,11 @@ public class ProtocolTests
     public void A_leading_double_dot_reaches_the_voice_as_a_single_dot()
     {
         string root = Install(working: true);
-        RunIn(root, "SPEAK", "..a line that starts with a dot", ".", "QUIT");
+        // No QUIT: end of input ends the run once the utterance is done. A QUIT
+        // right behind the message is a shutdown DURING the utterance, which
+        // kills espeak, and on a loaded CI runner that landed before the text
+        // was written to it: "" instead of the text, twice on 2026-10-16.
+        RunIn(root, "SPEAK", "..a line that starts with a dot", ".");
 
         Assert.Equal(".a line that starts with a dot", TextHandedToTheVoice(root));
     }
@@ -361,7 +365,11 @@ public class ProtocolTests
     public void A_multi_line_message_reaches_the_voice_whole()
     {
         string root = Install(working: true);
-        RunIn(root, "CHAR", "first", "second", ".", "QUIT");
+        // No QUIT: end of input ends the run once the utterance is done. A QUIT
+        // right behind the message is a shutdown DURING the utterance, which
+        // kills espeak, and on a loaded CI runner that landed before the text
+        // was written to it: "" instead of the text, twice on 2026-10-16.
+        RunIn(root, "CHAR", "first", "second", ".");
 
         Assert.Equal("first\nsecond", TextHandedToTheVoice(root));
     }
