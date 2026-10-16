@@ -446,6 +446,19 @@ tool or agent generated or automated the submission PR, to attach a video of
 the Flatpak running, and to disclose AI-generated material in the app.
 AppImageHub: AppImage/appimage.github.io#10295, opened 2026-10-16.
 
+**Read before submitting (2026-10-16): `dist/flathub/` is not submittable.**
+Flathub's [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
+says manifests "must not contain AI-generated or AI-assisted content", and
+disclosure does not exempt them. Every commit to the source manifest and to
+`gen-nuget-sources.py` is co-authored by Claude. The policy also forbids AI
+tools from opening the pull request or writing its description, commits or
+review replies, and requires the app's own AI-generated material to be
+disclosed with its extent (243 of 268 commits are co-authored, as of today).
+So the Flathub manifest must be written by the maintainer by hand, with
+`flatpak-dotnet-generator.py` from flatpak-builder-tools for the NuGet sources,
+and the steps below describe the mechanics only. The in-repo manifests remain
+right for CI and the local bundle.
+
 Submission, once CI is green and v0.2.17 is tagged and pushed:
 
 1. Screenshots are in the metainfo (done), at tag URLs.
