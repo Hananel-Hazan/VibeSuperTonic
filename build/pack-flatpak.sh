@@ -399,8 +399,17 @@ fi
 #   repo      on the OSTree repository the build exported: desktop file,
 #             metainfo, icons, the ELF architectures, finish-args, size.
 #
-# The manifest check has NO exceptions. The repo check has two, in
-# build/flatpak/lint-exceptions.json, and both are about screenshot MIRRORING,
+# Both checks read build/flatpak/lint-exceptions.json, which holds three.
+#
+# finish-args-contains-both-x11-and-wayland, added 2026-10-16 by the user's
+# decision. Flathub wants one display server; this app needs both. The window
+# draws only through X11 (Avalonia 11 has no Wayland backend; with
+# fallback-x11 it aborted on every Wayland desktop), and the daemon reads the
+# selection through Wayland's data-control protocol. A Flathub submission has
+# to ask for this exception, with that reason; remove it here once Avalonia
+# can draw on Wayland.
+#
+# The other two are about screenshot MIRRORING,
 # which only Flathub's builders do: they copy each screenshot to
 # dl.flathub.org/media and commit it to a screenshots/<arch> ref. Outside that
 # pipeline the catalogue keeps our own URLs, and the linter says so. Doing the
@@ -436,9 +445,6 @@ if (( lint )); then
     fbl() ( cd "$lintdir" && flatpak run --filesystem="$work" --filesystem="$root/build/flatpak:ro" \
                 --command=flatpak-builder-lint org.flatpak.Builder "$@" )
 
-    fbl manifest "$lintdir/$app_id.yml" \
-        || die "Flathub's linter did not pass the manifest (above). Findings would block the submission."
-    info "manifest: clean, no exceptions"
     # THE SCREENSHOTS BEFORE THE TAG. appstreamcli compose drops a screenshot
     # it cannot fetch, and before the release tag is pushed every one of ours
     # is a 404, so the repo check reports appstream-missing-screenshots (run 7,
@@ -471,9 +477,13 @@ PY
         die "$missing of ${#shots[@]} screenshots do not resolve at v$version, and the rest do: a broken URL"
     fi
 
+    fbl --exceptions --user-exceptions "$exceptions" manifest "$lintdir/$app_id.yml" \
+        || die "Flathub's linter did not pass the manifest (above). Findings would block the submission."
+    info "manifest: clean, apart from x11-and-wayland (see lint-exceptions.json above)"
+
     fbl --exceptions --user-exceptions "$exceptions" repo "$repo" \
         || die "Flathub's linter did not pass the built repository (above). Findings would block the submission."
-    info "repo: clean, apart from the two screenshot-mirroring findings only Flathub's builders can clear"
+    info "repo: clean, apart from x11-and-wayland and the two screenshot-mirroring findings only Flathub's builders can clear"
 fi
 
 size="$(du -h "$out" | cut -f1)"

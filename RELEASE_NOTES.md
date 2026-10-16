@@ -1,3 +1,47 @@
+# VibeSuperTonic v0.2.18
+
+*Fixes for the snap and the Flatpak, found the day 0.2.17 shipped.*
+
+```
+VibeSuperTonic-0.2.18-linux-x64.tar.gz
+VibeSuperTonic-0.2.18-amd64.snap           (built by CI)
+VibeSuperTonic-0.2.18-x86_64.flatpak       (built by CI)
+VibeSuperTonic-0.2.18-x86_64.AppImage
+VibeSuperTonic-0.2.18-win.zip              (built by CI; unchanged)
+```
+
+0.2.17's store packages had been tested by CI and, for the snap, on a desktop.
+The first test of the Flatpak on a desktop found three faults, and a closer
+look at the snap found a fourth. None of them affects the tarball or the
+AppImage.
+
+## The snap
+
+- **Exporting a new file from a window the tray opened works.** It failed
+  with "the folder /run/user/1000/doc/… does not exist". The desktop's file
+  dialog gave the file to a part of the snap that cannot see it. The window
+  now hands that permission on to the part that can. Replacing an existing
+  file had always worked, which is why 0.2.17's own check passed. A window
+  opened from the application menu was never affected.
+
+## The Flatpak
+
+- **The window opens on Wayland desktops.** It closed straight away with
+  "XOpenDisplay failed". The package asked for X11 only as a fallback, which
+  Flatpak withholds whenever Wayland is present, and the window draws only
+  through X11. It now asks for both: X11 for the window, Wayland so the hotkey
+  can read the selection.
+- **The tray icon appears.** It never did: the sandbox may not claim the name
+  the icon normally registers under, and the error ended the icon's setup. It
+  now registers under the name the sandbox does allow. If you saw a
+  VibeSuperTonic tray icon with the 0.2.17 Flatpak, it came from another
+  installation.
+- **Export, and reading the selection, work inside the sandbox.** Checked on
+  Kubuntu: a new file and an overwrite through the file dialog, and KDE grants
+  the sandbox the Wayland protocol the hotkey reads the selection with.
+
+---
+
 # VibeSuperTonic v0.2.17
 
 *A snap and a Flatpak, so it can be installed from the Ubuntu App Center and from KDE Discover.*
