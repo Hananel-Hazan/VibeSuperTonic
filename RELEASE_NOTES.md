@@ -2,9 +2,6 @@
 
 *A snap and a Flatpak, so it can be installed from the Ubuntu App Center and from KDE Discover.*
 
-**Ready to pack; not packed yet.** Delete this paragraph in the release commit.
-The steps are in [docs/RELEASE-0.2.17.md](docs/RELEASE-0.2.17.md).
-
 ```
 VibeSuperTonic-0.2.17-linux-x64.tar.gz     61 MB
 VibeSuperTonic-0.2.17-amd64.snap           (built by CI)
