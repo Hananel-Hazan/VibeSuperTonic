@@ -202,8 +202,18 @@ CLI built against it; not checked here, since this session has no flatpak).
       pack-snap.sh asserts them in `meta/gui/` and, with `--test-install`, that
       portal-info names `vibesupertonic_<app>.desktop` for each. Both checks
       were run against revision 12 and failed for all three apps, and passed
-      for the window app. To see on revision 13: export from a tray-opened
-      window, and once over an existing file. The Flatpak has no tray/menu
+      for the window app. **Revision 14 (the fix), same day:** portal-info names
+      all four entries, and the file the "." grant had swallowed is now granted
+      to `snap.vibesupertonic` as well. Its export then failed with "cannot
+      write …: Access to the path '/proc/1/cmdline' is denied": the render was
+      refused (the hotkey was still speaking, 14 s earlier), `TryKill` stopped
+      ffmpeg with `Kill(entireProcessTree: true)`, .NET walked /proc to find
+      the tree, AppArmor refused `/proc/1/cmdline`, and the uncaught exception
+      became the export's message. Now a plain `Kill()` whose failure is never
+      the verdict; a unit test with a lingering fake ffmpeg fails on a TryKill
+      that throws. To see on revision 15: export from a tray-opened window,
+      once over an existing file, and once while the hotkey is speaking (it
+      should say the daemon is busy). The Flatpak has no tray/menu
       split (one app id), but is still untried.
 
 - [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**

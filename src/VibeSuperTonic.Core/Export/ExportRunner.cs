@@ -367,10 +367,19 @@ public static class ExportRunner
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 
+    /// <summary>
+    /// ffmpeg alone, not its process tree: it starts no children, and finding a
+    /// tree means reading every process in /proc, which a snap's AppArmor profile
+    /// refuses at /proc/1/cmdline. That UnauthorizedAccessException escaped as
+    /// "cannot write …: Access to the path '/proc/1/cmdline' is denied", hiding
+    /// why ffmpeg was being stopped at all (revision 14, 2026-10-15). A kill that
+    /// fails is never the export's verdict.
+    /// </summary>
     private static void TryKill(Process p)
     {
-        try { if (!p.HasExited) p.Kill(entireProcessTree: true); }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        try { if (!p.HasExited) p.Kill(); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                       or UnauthorizedAccessException or IOException) { }
     }
 
     private static void TryDelete(string path)

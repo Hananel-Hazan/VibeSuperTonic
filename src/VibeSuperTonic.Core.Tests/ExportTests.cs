@@ -477,6 +477,29 @@ public sealed class ExportTests : IDisposable
     }
 
     [Fact]
+    public void A_daemon_refusal_during_an_encode_stops_ffmpeg_and_reports_the_daemons_words()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string target = Path.Combine(_dir, "out.mp3");
+        string busy = Protocol.Encode(Response.Fail("busy (Speaking) — this daemon is speaking"));
+
+        // The kill path: ffmpeg is still reading when the render fails. In a snap,
+        // killing ffmpeg's process tree threw on /proc/1/cmdline and the user read
+        // "cannot write …: Access to the path '/proc/1/cmdline' is denied" instead
+        // of this (revision 14, 2026-10-15).
+        // An ffmpeg that is still running after its input closes, so the kill
+        // really happens (one that exits on EOF leaves nothing to kill, and this
+        // test then passed with a TryKill that threw). exec, so the kill reaches
+        // the sleep and the output pipes close.
+        var lingering = Fake(CopyToLastArg + "\nexec sleep 30");
+        var outcome = ExportRunner.Run(Lines(Format(), Chunk(500), busy), ExportFormat.Mp3, target, lingering);
+
+        Assert.Equal(ExportStatus.Failed, outcome.Status);
+        Assert.Equal("busy (Speaking) — this daemon is speaking", outcome.Message);
+        Assert.False(File.Exists(target));
+    }
+
+    [Fact]
     public void An_ffmpeg_that_succeeds_but_writes_nothing_is_a_failure()
     {
         if (OperatingSystem.IsWindows()) return;
