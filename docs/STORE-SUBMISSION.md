@@ -401,6 +401,16 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
 4. Automated review should pass, because nothing privileged is requested. Promote
    `edge` → `stable` once the checklist above is done.
 
+**State on 2026-10-16, read from the store's API:** `stable` holds 0.2.17
+(revision 16), and `beta` and `edge` hold 0.2.18 (revision 19). The dashboard's
+categories are *Education* and *Productivity*, not the *Utilities* step 3
+proposed. Either is defensible; there is still no Accessibility category to
+choose. **0.2.18 is not on `stable` yet**, so the App Center and Discover offer
+0.2.17, which lacks the tray-window fix. **Promote revision 18, not 19**: 18 is
+byte-identical to the GitHub release asset and `stable` grade; 19 is a `devel`
+CI build of the commit after the tag, which `stable` refuses.
+`snapcraft release vibesupertonic 18 stable,candidate`.
+
 ### Flathub
 
 **A source-build manifest exists since 2026-09-27; not yet seen building on
@@ -456,3 +466,66 @@ The tarball manifest stays for CI's `flatpak` job and a local bundle.
 
 The app id is permanent once published. `io.github.hananel_hazan` is verified
 through the GitHub account, so there is no domain to prove.
+
+## Beyond the two stores (2026-10-16)
+
+Drafted for 0.2.18, neither submitted. Both are thin wrappers around a release
+asset, so they need no build of their own and inherit every packer assertion.
+
+### AUR: [build/aur/](../build/aur/PKGBUILD)
+
+`vibesupertonic-appimage`, which installs **the release AppImage whole** at
+`/opt/vibesupertonic/VibeSuperTonic.AppImage` with `/usr/bin/vibesupertonic`
+linked to it, and the desktop entry, metainfo, icon and licence from the tag.
+It is not built from the tarball because a tarball tree in root-owned `/opt`
+cannot run: outside an AppImage or a sandbox, `LinuxDataPaths.ResolveStore`
+puts the store beside the executable. The AppImage branch already falls back to
+`$XDG_DATA_HOME/vibesupertonic`. A real distro package (from source, or the
+tarball in `/usr/lib`) would need a third branch there first.
+
+Verified in an `archlinux:latest` container: `makepkg` builds it, `pacman -U`
+installs it, `vibesupertonic --version` through the symlink prints the version
+(with `APPIMAGE_EXTRACT_AND_RUN=1`, because the container could not FUSE-mount),
+and `appstreamcli validate` passes. namcap's two remaining complaints, ELF under
+`/opt` and `fuse3` "maybe not needed", are expected for an AppImage package: the
+runtime calls `fusermount3` by name, so namcap cannot see the dependency.
+
+To publish: an AUR account with an SSH key, then
+`git clone ssh://aur@aur.archlinux.org/vibesupertonic-appimage.git`, copy in
+`PKGBUILD`, `vibesupertonic-appimage.install` and `.SRCINFO`, commit, push. Each
+release bumps `pkgver`, the five hashes, and regenerates `.SRCINFO` with
+`makepkg --printsrcinfo`.
+
+### winget: [build/winget/](../build/winget/manifests/h/HananelHazan/VibeSuperTonic/0.2.18)
+
+`HananelHazan.VibeSuperTonic`, the release ZIP installed as a **portable** zip,
+with the x64 .NET 10 runtime and VC++ redistributable as dependencies. The
+folder stays one portable unit; no installer was added, by decision
+(2026-10-16).
+
+- **`ArchiveBinariesDependOnPath: true`**: winget puts the folder itself on
+  PATH instead of a symlink in `WinGet\Links`. The launcher takes its own
+  folder as the root for every COM path it registers (`AppContext.BaseDirectory`),
+  and a launch through a symlink could otherwise register the Links folder.
+- **Settings and models survive upgrades**: winget's portable uninstall does not
+  purge unless `--purge` or `purgePortablePackage` asks it to, so `data\` and
+  `models\` beside the exe are kept.
+- **What winget cannot do, the install notes say**, because a portable package
+  runs no code at install or uninstall: register once with *Repair all* or
+  `--register`; run `--unregister` before `winget uninstall`, or dead voices stay
+  in every SAPI list; close SAPI programs before `winget upgrade`, because the
+  engine DLL is loaded in-process and cannot be replaced while one holds it.
+  The Status tab's lock row names the holders. A real fix for the last one is the
+  half-upgraded-engine item in [WINDOWS-PLAN.md](WINDOWS-PLAN.md).
+- **The x86 pair** cannot be a dependency of an x64 package; the launcher's first
+  window already detects it missing and offers the winget command.
+
+Validated against winget's published 1.10.0 JSON schemas, with a sabotaged copy
+seen failing (a string boolean and a short hash). Not yet run:
+`winget validate --manifest <dir>` and `winget install --manifest <dir>` on
+Windows, which come before the PR to `microsoft/winget-pkgs`.
+
+Found on the way, and corrected in README and INSTALL.txt: a plain launch of
+`VibeSuperTonic.exe` **never registers**. Only *Repair all* (Status tab) and
+`--register` do. Both documents said the first run, or any re-run after a move,
+did it.

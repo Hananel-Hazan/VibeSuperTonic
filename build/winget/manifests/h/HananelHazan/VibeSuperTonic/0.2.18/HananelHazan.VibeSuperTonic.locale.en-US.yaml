@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+PackageIdentifier: HananelHazan.VibeSuperTonic
+PackageVersion: 0.2.18
+PackageLocale: en-US
+Publisher: Hananel Hazan
+PublisherUrl: https://github.com/Hananel-Hazan
+PublisherSupportUrl: https://github.com/Hananel-Hazan/VibeSuperTonic/issues
+Author: Hananel Hazan
+PackageName: VibeSuperTonic
+PackageUrl: https://github.com/Hananel-Hazan/VibeSuperTonic
+License: MIT
+LicenseUrl: https://github.com/Hananel-Hazan/VibeSuperTonic/blob/v0.2.18/LICENSE
+ShortDescription: Neural text-to-speech voices for Windows, running on your own computer.
+Description: |-
+  VibeSuperTonic adds natural-sounding neural voices to Windows as SAPI voices, so
+  Narrator, Balabolka and any program that speaks through SAPI can use them.
+  Speech is generated on your machine; nothing you read is sent anywhere.
+  On first run it registers the voices (one UAC prompt) and downloads the voice
+  models from Hugging Face after you accept their licence.
+InstallationNotes: |-
+  Register the voices once (one UAC prompt): run VibeSuperTonic, open the Status tab and press Repair all, or run: VibeSuperTonic --register
+  Before winget uninstall, run: VibeSuperTonic --unregister. winget cannot run it for you, and skipping it leaves dead VibeSuperTonic voices in every SAPI voice list.
+  Before winget upgrade, close programs that are speaking with these voices (Narrator, Balabolka, ...); the Status tab names them. Your settings and models are kept.
+Moniker: vibesupertonic
+Tags:
+- accessibility
+- narrator
+- sapi
+- screen-reader
+- speech
+- text-to-speech
+- tts
+- voice
+ReleaseNotesUrl: https://github.com/Hananel-Hazan/VibeSuperTonic/releases/tag/v0.2.18
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0
