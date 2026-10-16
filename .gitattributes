@@ -1,0 +1,30 @@
+# Line-ending policy.
+#
+# Without this file the repo had no policy at all: core.autocrlf unset, HEAD
+# stored as LF, and an editor writing CRLF into the working tree. The result was
+# `git status` reporting 47 modified files and `git diff` showing 10,877
+# insertions against 10,810 deletions — of which the real content change was 13
+# files and 217 insertions. Everything else was carriage returns.
+#
+# Committing in that state would have buried every real change under a
+# whole-tree whitespace rewrite and destroyed `git blame` for the entire engine.
+#
+# `text=auto` normalizes to LF *in the repository* while leaving the working
+# tree alone, so Windows checkouts still get CRLF and the churn is simply never
+# recorded.
+* text=auto
+
+# Interpreters that care about their own line endings, regardless of platform.
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# Never touch these.
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.onnx binary
+*.wav  binary
+*.zip  binary
+*.gz   binary

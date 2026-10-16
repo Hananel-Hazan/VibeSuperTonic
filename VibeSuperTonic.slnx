@@ -1,5 +1,13 @@
 <Solution>
+  <!--
+    Windows half of the tree. Companion to VibeSuperTonic.linux.slnx.
+    Everything here is net10.0-windows: a COM-hosting SAPI engine, a WinForms
+    launcher, and a System.Speech test harness. See the isolation section in
+    docs/LINUX-PORT-PLAN.md for why the two platforms get separate solutions.
+  -->
   <Folder Name="/src/">
+    <Project Path="src/VibeSuperTonic.Core/VibeSuperTonic.Core.csproj" />
+    <Project Path="src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj" />
     <Project Path="src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj" />
     <Project Path="src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj" />
     <Project Path="src/VibeSuperTonic.TestHarness/VibeSuperTonic.TestHarness.csproj" />

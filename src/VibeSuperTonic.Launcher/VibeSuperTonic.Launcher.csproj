@@ -23,8 +23,18 @@
     time one side gained a language.
   -->
   <ItemGroup>
-    <Compile Include="..\VibeSuperTonic.Engine\Synth\SupertonicLanguages.cs" Link="Shared\SupertonicLanguages.cs" />
-    <Compile Include="..\VibeSuperTonic.Engine\Settings\LogRotation.cs" Link="Shared\LogRotation.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Pronunciation rules and the text sanitizer, shared with the engine. The
+      launcher used to keep its own copy of these types with a comment telling
+      the reader to keep the two in sync by hand; the Test pane and the engine
+      can no longer disagree about what a rule does, because they run the same
+      code. Same motivation as the linked files above — see the isolation
+      section in docs/LINUX-PORT-PLAN.md.
+    -->
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
   </ItemGroup>
 
 </Project>

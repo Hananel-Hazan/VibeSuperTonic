@@ -1,0 +1,4 @@
+# Publish drop + tarball for the Mint box. Large (111 MB expanded, 46 MB packed)
+# and reproducible from source, so it is never committed. bin/ and obj/ are
+# already covered by the repo-root .gitignore.
+out/

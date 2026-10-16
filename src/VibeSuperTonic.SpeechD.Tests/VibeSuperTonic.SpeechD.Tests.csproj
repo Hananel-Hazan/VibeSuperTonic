@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The module's protocol state machine.
+
+    WHY THIS IS WORTH A PROJECT. A module that answers out of order does not
+    merely misbehave: the gate probe desynchronised the stream once and
+    speech-dispatcher REFUSED TO START AT ALL rather than run without that
+    module — taking the user's working espeak-ng down with it. That is trap 1's
+    failure arriving from a different direction, and it is not something an
+    end-to-end run against a live server catches reliably, because by then the
+    server is gone and there is nothing left to ask.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+
+    <!--
+      NOT <VstPortable>. That flag asserts a project is platform-neutral and
+      turns CA1416 into an error, which is right for Core.Tests and wrong here:
+      Speech Dispatcher is a Linux thing, the module reads a Linux file
+      descriptor, and this project's fixtures chmod +x a shell script. The
+      platform-neutral half of this feature — the escaping, the block framing,
+      the routing, the WAV reader — lives in Core and is tested there, on both
+      runners.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.SpeechD\VibeSuperTonic.SpeechD.csproj" />
+  </ItemGroup>
+
+</Project>

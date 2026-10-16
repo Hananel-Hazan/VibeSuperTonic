@@ -95,7 +95,7 @@ internal sealed class BenchmarkTab : UserControl
         _results.Columns.Add("CPU %", 70);
         _results.Columns.Add("Peak RAM", 90);
         _results.Columns.Add("Verdict", 220);
-        _results.Columns.Add("Notes", 180);
+        _results.Columns.Add("Notes", 300);
 
         _log = new TextBox
         {
@@ -113,7 +113,8 @@ internal sealed class BenchmarkTab : UserControl
             Height = 70,
             Padding = new Padding(8, 6, 8, 6),
             BackColor = Color.FromArgb(248, 250, 255),
-            Text = "How to read this:  RTF < 0.5 = plenty of headroom (green).  0.5–1.0 = real-time but tight (yellow).  ≥ 1.0 = will not keep up (red, drop a preset).  CPU and RAM affect comfort, not whether playback works.  Pick the highest preset that stays green.",
+            Text = "How to read this:  RTF is the engine's synthesis speed — seconds of compute per second of speech.  < 0.5 = plenty of headroom (green).  0.5–1.0 = real-time but tight (yellow).  ≥ 1.0 = will not keep up (red, drop a preset).  CPU and RAM affect comfort, not whether playback works.  Pick the highest preset that stays green.\r\n"
+                 + "Runs happen in the render helper, not in this window, and each one plays no audio.  Elapsed time is NOT the measurement: the engine paces its output to real time so playback keeps its last word, so a run always takes about as long as the speech it produces.",
         };
 
         Controls.Add(_results);
@@ -156,19 +157,25 @@ internal sealed class BenchmarkTab : UserControl
             if (_presetPicker.GetItemChecked(i))
                 presets.Add(Enum.Parse<QualityPreset>((string)_presetPicker.Items[i]));
 
-        // Snapshot current settings so we always restore — even on cancel/error.
-        var saved = EngineSettingsRegistry.Load();
         var progress = new Progress<string>(msg => _log.AppendText(msg + Environment.NewLine));
+
+        // Snapshot current settings so we always restore — even on cancel, error,
+        // or a crash that never reaches the finally (the scope also writes the
+        // snapshot to disk, and the next launch puts it back).
+        var restore = EngineSettingsRegistry.BeginTemporaryChange(progress);
 
         try
         {
             int idx = 0;
+            int benchWords = Bench.Benchmark.CountWords(Bench.Benchmark.TrimToWords(text, wordCap));
             foreach (var preset in presets)
             {
                 idx++;
                 if (ct.IsCancellationRequested) break;
-                _progressLabel.Text = $"Running {preset} ({idx}/{presets.Count}) on {voiceId} — {Bench.Benchmark.CountWords(Bench.Benchmark.TrimToWords(text, wordCap))} words…";
-                var r = await Benchmark.RunAsync(preset, $"VibeSuperTonic_{voiceId}", text, wordCap, progress, ct);
+                string prefix = $"Running {preset} ({idx}/{presets.Count}) on {voiceId} — {benchWords} words";
+                _progressLabel.Text = prefix + "…";
+                var pct = new Progress<int>(p => _progressLabel.Text = $"{prefix} — {p}%");
+                var r = await Benchmark.RunAsync(preset, voiceId, text, wordCap, progress, ct, pct);
                 AddResultRow(r);
                 if (ct.IsCancellationRequested) { _progressLabel.Text = $"Cancelled at {preset} ({idx}/{presets.Count})."; break; }
             }
@@ -177,12 +184,7 @@ internal sealed class BenchmarkTab : UserControl
         catch (Exception ex) { _log.AppendText($"Benchmark failed: {ex.Message}{Environment.NewLine}"); _progressLabel.Text = "Failed."; }
         finally
         {
-            try
-            {
-                EngineSettingsRegistry.Save(saved);
-                _log.AppendText("--- restored prior settings ---" + Environment.NewLine);
-            }
-            catch (Exception ex) { _log.AppendText($"Could not restore settings: {ex.Message}{Environment.NewLine}"); }
+            restore.Dispose();
             _run.Enabled = true;
             _stop.Enabled = false;
         }
@@ -197,7 +199,11 @@ internal sealed class BenchmarkTab : UserControl
         item.SubItems.Add(r.AverageCpuPct.ToString("F0"));
         item.SubItems.Add($"{r.PeakProcessRssMb:F0} MB");
         item.SubItems.Add(verdict);
-        item.SubItems.Add(r.Error ?? $"{r.SynthSeconds:F1}s synth / {r.AudioSeconds:F1}s audio");
+        // Model load and first-audio latency are called out separately from RTF:
+        // they are one-off costs a reader pays at the start of a passage, not
+        // throughput, and folding them into the headline number is what made the
+        // old benchmark unreadable.
+        item.SubItems.Add(r.Error ?? $"start {r.StartupSeconds:F1}s · first audio {r.FirstByteMs:F0}ms · {r.AudioSeconds:F0}s audio");
         item.UseItemStyleForSubItems = false;
         item.SubItems[5].BackColor = ColorTranslator.FromHtml(colour);
         item.SubItems[5].ForeColor = Color.White;

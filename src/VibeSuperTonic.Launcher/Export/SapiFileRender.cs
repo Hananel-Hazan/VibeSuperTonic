@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using System.Text;
+using VibeSuperTonic.Launcher.Host;
 
 namespace VibeSuperTonic.Launcher.Export;
 
@@ -49,121 +48,51 @@ internal static class SapiFileRender
     private static void RunPipeline(ExportRequest req, string outPath, string format, int bitrate,
         IProgress<string>? log, CancellationToken ct, IProgress<int>? progress, string? controlPath)
     {
-        var saved = EngineSettingsRegistry.Load();
-        ApplyExportSettings(saved, req);
-        try
-        {
-            log?.Report($"Settings: TotalStep={req.TotalStep} DspRate={req.DspRate:F2} " +
-                        $"DML={(req.ForceDirectML ? "on" : "off")}");
+        // The scope restores on dispose AND leaves a recovery record on disk, so
+        // a render that takes the Control Panel down with it does not strand the
+        // user's global quality at the export's settings.
+        using var restore = EngineSettingsRegistry.BeginTemporaryChange(log);
+        ApplyExportSettings(restore.Snapshot, req);
 
-            string textToSpeak = req.Text;
-            if (req.PreviewSeconds is int sec && sec > 0)
-            {
-                int charCap = Math.Max(80, (int)(sec * CharsPerSecondEstimate));
-                if (textToSpeak.Length > charCap)
-                {
-                    int end = charCap;
-                    while (end < textToSpeak.Length && !char.IsWhiteSpace(textToSpeak[end])) end++;
-                    textToSpeak = textToSpeak[..Math.Min(end, textToSpeak.Length)];
-                }
-                log?.Report($"Preview: rendering first ~{sec}s ({textToSpeak.Length} chars).");
-            }
+        log?.Report($"Settings: TotalStep={req.TotalStep} DspRate={req.DspRate:F2} " +
+                    $"DML={(req.ForceDirectML ? "on" : "off")}");
 
-            RunRenderHost(req.VoiceId, textToSpeak, outPath, format, bitrate, log, ct, progress, controlPath);
-        }
-        finally
+        string textToSpeak = req.Text;
+        if (req.PreviewSeconds is int sec && sec > 0)
         {
-            try
+            int charCap = Math.Max(80, (int)(sec * CharsPerSecondEstimate));
+            if (textToSpeak.Length > charCap)
             {
-                EngineSettingsRegistry.Save(saved);
-                log?.Report("Restored prior engine settings.");
+                int end = charCap;
+                while (end < textToSpeak.Length && !char.IsWhiteSpace(textToSpeak[end])) end++;
+                textToSpeak = textToSpeak[..Math.Min(end, textToSpeak.Length)];
             }
-            catch (Exception ex)
-            {
-                log?.Report($"WARNING: could not restore engine settings: {ex.Message}");
-            }
+            log?.Report($"Preview: rendering first ~{sec}s ({textToSpeak.Length} chars).");
         }
+
+        RunRenderHost(req.VoiceId, textToSpeak, outPath, format, bitrate, log, ct, progress, controlPath);
     }
 
     /// <summary>
-    /// Spawns the helper, streams its stdout into <paramref name="log"/> (parsing
-    /// "PROGRESS n" lines into <paramref name="progress"/>), honors
-    /// <paramref name="ct"/> by killing the child, and throws on a non-zero exit.
+    /// Builds the helper's argument list for a render and hands it to
+    /// <see cref="RenderHostProcess"/>, which owns spawning, stdout/progress
+    /// streaming, cancellation and exit-code handling for every caller.
     /// </summary>
     private static void RunRenderHost(string voiceId, string text, string outPath, string format, int bitrate,
         IProgress<string>? log, CancellationToken ct, IProgress<int>? progress, string? controlPath)
     {
-        string exe = Path.Combine(AppContext.BaseDirectory, "render", "VibeSuperTonic.RenderHost.exe");
-        if (!File.Exists(exe))
-            throw new FileNotFoundException(
-                $"Render helper not found at {exe}. Re-extract the release ZIP — the 'render' folder ships next to VibeSuperTonic.exe.");
-
-        // Text goes via a temp file: chapters/books blow past command-line limits
-        // and would mangle Unicode/newlines.
-        string textFile = Path.Combine(Path.GetTempPath(), $"vst_rendertext_{Guid.NewGuid():N}.txt");
-        File.WriteAllText(textFile, text, new UTF8Encoding(false));
-
-        try
+        var args = new List<string>
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = exe,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = AppContext.BaseDirectory,
-            };
-            psi.ArgumentList.Add("--voice");  psi.ArgumentList.Add(voiceId);
-            psi.ArgumentList.Add("--out");    psi.ArgumentList.Add(outPath);
-            psi.ArgumentList.Add("--text");   psi.ArgumentList.Add(textFile);
-            psi.ArgumentList.Add("--format"); psi.ArgumentList.Add(format);
-            if (format is "mp3" or "aac") { psi.ArgumentList.Add("--bitrate"); psi.ArgumentList.Add(bitrate.ToString()); }
-            if (controlPath is not null) { psi.ArgumentList.Add("--control"); psi.ArgumentList.Add(controlPath); }
+            "--mode", "render",
+            "--voice", voiceId,
+            "--out", outPath,
+            "--format", format,
+        };
+        if (format is "mp3" or "aac") { args.Add("--bitrate"); args.Add(bitrate.ToString()); }
+        if (controlPath is not null) { args.Add("--control"); args.Add(controlPath); }
 
-            using var proc = new Process { StartInfo = psi };
-            var stderr = new StringBuilder();
-            proc.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data is null) return;
-                if (e.Data.StartsWith("PROGRESS ", StringComparison.Ordinal)
-                    && int.TryParse(e.Data.AsSpan(9), out int pct))
-                    progress?.Report(pct);
-                else
-                    log?.Report(e.Data);
-            };
-            proc.ErrorDataReceived += (_, e) =>
-            {
-                if (e.Data is null) return;
-                stderr.AppendLine(e.Data);
-                log?.Report("render error: " + e.Data);
-            };
-
-            log?.Report($"Spawning render helper for voice {voiceId} (format {format})…");
-            proc.Start();
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-
-            while (!proc.WaitForExit(150))
-            {
-                if (!ct.IsCancellationRequested) continue;
-                log?.Report("Cancel requested — terminating render helper.");
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                throw new OperationCanceledException(ct);
-            }
-            proc.WaitForExit(); // flush async readers
-
-            if (proc.ExitCode != 0)
-            {
-                string detail = stderr.ToString().Trim();
-                throw new InvalidOperationException(
-                    $"Render helper failed (exit {proc.ExitCode}){(detail.Length > 0 ? ": " + detail : ".")}");
-            }
-        }
-        finally
-        {
-            try { File.Delete(textFile); } catch { }
-        }
+        log?.Report($"Spawning render helper for voice {voiceId} (format {format})…");
+        RenderHostProcess.RunWithText(args, text, log, ct, progress);
     }
 
     private static void ApplyExportSettings(EngineSettings saved, ExportRequest req)

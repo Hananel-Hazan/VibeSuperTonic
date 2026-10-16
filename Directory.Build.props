@@ -1,0 +1,87 @@
+<Project>
+
+  <!--
+    Repo-wide build settings.
+
+    Two platforms share this tree — the Windows SAPI engine and the Linux daemon
+    (docs/LINUX-PORT-PLAN.md) — so anything that must NOT drift between them
+    belongs here rather than in an individual csproj.
+
+    Deliberately does NOT set BaseOutputPath / BaseIntermediateOutputPath.
+    build/pack-zip.ps1 copies from literal
+    bin\Release\net10.0-windows\win-x64\publish paths; relocating the output tree
+    breaks the packer's copy step silently and the ZIP gets composed from
+    whatever was left in the staging folder. Tidier bin\ layout is not worth that
+    failure mode.
+  -->
+
+  <PropertyGroup>
+    <!--
+      SINGLE SOURCE OF TRUTH FOR THE SHIPPED VERSION.
+
+      build/pack-zip.ps1 (Windows) and build/pack-tar.sh (Linux, Phase 7) both
+      read this value, so one number produces both artifacts. A per-script
+      default is exactly how the two platforms end up shipping "the same"
+      release under two different numbers — pack-zip.ps1 carried a hardcoded
+      0.2.0 default for three releases past 0.2.0.
+
+      This is the version being BUILT, not the last one shipped, and that
+      changed on 2026-08-27 when CI started packing: the pack job runs
+      pack-tar.sh with no -v on every push, so a default naming the last release
+      would have CI produce artifacts named after a release that already exists
+      — and a local run with no -v would overwrite the genuine one in dist/.
+      So it is bumped when a version's work BEGINS, and a release run still
+      passes -Version explicitly. Per CLAUDE.md the bump is a decision the user
+      makes, never something the build infers.
+
+      0.2.16 has its release notes (2026-09-06). 0.2.17 is the snap and the
+      Flatpak, begun 2026-09-25 and chosen by the user as a patch release.
+    -->
+    <VstVersion>0.2.17</VstVersion>
+
+    <!--
+      And every assembly in the tree carries it. Set here rather than per-project
+      as of 2026-08-19, which REVERSES the scoping decision the daemon's csproj
+      used to state: the Linux binaries stamped VstVersion, the Windows ones did
+      not, so 0.2.8 shipped with a Control Panel whose About tab read
+      "Version: 1.0.0.0" — the .NET default, unchanged since the first commit and
+      wrong for eight releases.
+
+      The old reasoning was that changing assembly versions on the shipping
+      platform is not a side effect a shared props file deserves to have. True as
+      far as it goes, and the cost of honouring it was a version number nobody
+      could read off the product they were holding. It is now deliberate rather
+      than a side effect: nothing binds against these versions (SAPI registration
+      is path-keyed, none of the assemblies are strong-named), and the About tab
+      reads them back off the shipped binaries so a stale engine left behind by
+      an extract-over-the-old-folder shows up as a mismatch instead of silence.
+
+      Consequence worth knowing: bumping <VstVersion> now changes every
+      assembly's version, so a release run rebuilds everything. That is the
+      intended behaviour — one number, one product.
+    -->
+    <Version>$(VstVersion)</Version>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      Lets a non-Windows box restore and build net10.0-windows projects. The
+      targeting packs download on any OS; only COM hosting and the actual run are
+      Windows-only. Without this, `dotnet build` of the Engine on the Mint
+      development box dies at restore with NETSDK1100 before producing any
+      diagnostic worth reading.
+    -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!--
+    Opt-in strictness for platform-neutral projects (<VstPortable>true</VstPortable>)
+    lives in Directory.Build.targets, NOT here.
+
+    This file is imported at the TOP of every csproj, before the project sets its
+    own properties, so a condition on VstPortable evaluates against an empty
+    value and does nothing — quietly, with the build still green and the rule
+    apparently in place. Do not move it back.
+  -->
+
+</Project>

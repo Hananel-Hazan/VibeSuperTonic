@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Reads the Wayland PRIMARY selection through ext-data-control-v1, with no
+    daemon, no model and no audio device.
+
+    Exists because X11SelectionSource cannot see a native Wayland client's
+    selection, and on a Plasma 6 Wayland session that is nearly every
+    application — measured 2026-08-22, where the only X11 client running on the
+    user's desktop was one Electron app. `vst-ctl read` answered "nothing is
+    selected" for everything else.
+
+    A spike rather than a first draft inside the daemon, for the same reason
+    Phase 0 was a spike: this is several hundred lines of hand-built Wayland
+    protocol marshalling, the failure mode of a mistake is a SEGFAULT rather
+    than an exception, and the daemon is the process that owns the user's
+    speech. Prove the protocol here, then port the working shape across.
+
+    Not VstPortable: Linux-only by construction.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>wlsel</AssemblyName>
+    <VstPortable>false</VstPortable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>

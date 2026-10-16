@@ -10,6 +10,14 @@
     <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
     <AssemblyName>VibeSuperTonic.Engine</AssemblyName>
     <RootNamespace>VibeSuperTonic.Engine</RootNamespace>
+    <!--
+      Selects the DirectML code path in SupertonicSdk.LoadTextToSpeech.
+      AppendExecutionProvider_DML ships ONLY in Microsoft.ML.OnnxRuntime.DirectML;
+      the CPU-only package (which the Linux build must use) does not declare it, so
+      the call has to be compiled out rather than skipped at runtime. Defined here
+      means the Windows engine is unchanged — same IL as before the guard.
+    -->
+    <DefineConstants>$(DefineConstants);ORT_DIRECTML</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +45,15 @@
       assembly next to the engine and wins over the framework's. Removed.
     -->
 
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Platform-neutral text/DSP logic shared with the Linux daemon. Core carries no
+      PackageReference of its own, so this adds a few KB of pure managed code to
+      every SAPI host the engine loads into — see docs/LINUX-PORT-PLAN.md.
+    -->
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

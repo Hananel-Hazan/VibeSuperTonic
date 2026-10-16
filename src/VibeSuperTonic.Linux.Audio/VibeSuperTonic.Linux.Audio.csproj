@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Linux audio output. The counterpart to VibeSuperTonic.Onnx.Cpu on the other
+    end of the pipeline: Core defines the seam (IAudioSink), this implements it
+    against libpulse, and nothing portable links libpulse.
+
+    Its own project rather than a folder in the daemon because Phase 6's app is a
+    second consumer, and because a project boundary is what stops the P/Invoke
+    surface leaking upward — the daemon should never see a pa_ symbol.
+
+    Deliberately NOT VstPortable. It is Linux-only by construction, and marking
+    it portable would turn the platform attributes on PulseAudioSink into build
+    errors in the one project where they are the point.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>VibeSuperTonic.Linux.Audio</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Linux.Audio</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Platform-neutral half of VibeSuperTonic. Shared by the Windows SAPI engine
+    and (from Phase 3) the Linux daemon — see docs/LINUX-PORT-PLAN.md.
+
+    THREE RULES, all load-bearing:
+
+      1. TargetFramework is net10.0, NOT net10.0-windows. Windows-only types are
+         still *reachable* from a neutral TFM but are flagged by CA1416, which
+         VstPortable promotes to an error. That is the enforcement — a
+         `using Microsoft.Win32;` in here fails the build on the machine that
+         wrote it, not on the other platform's CI job days later.
+
+      2. NO PackageReference. Ever. The DirectML and CPU builds of ONNX Runtime
+         ship the same managed assembly name with different managed API surfaces
+         (R-13 in the port plan), so an assembly shared by both hosts cannot
+         reference either one. Core stays package-free and the ORT-touching code
+         lives in the per-platform backends. If something here seems to need a
+         package, it belongs in a host project instead.
+
+      3. No InternalsVisibleTo. The end state (Way 3) compiles these sources
+         directly into each host rather than referencing a built assembly, where
+         `internal` becomes internal-to-each-host and cross-assembly grants stop
+         meaning anything. Everything the tests need is public on purpose, so
+         that migration is a csproj edit rather than a refactor.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>VibeSuperTonic.Core</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Core</RootNamespace>
+    <VstPortable>true</VstPortable>
+  </PropertyGroup>
+
+</Project>

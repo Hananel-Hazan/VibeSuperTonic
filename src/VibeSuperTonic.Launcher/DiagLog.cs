@@ -1,4 +1,5 @@
 using System.Text;
+using VibeSuperTonic.Core.Diagnostics;
 
 namespace VibeSuperTonic.Launcher;
 
@@ -48,7 +49,7 @@ internal static class DiagLog
                 // closes the file every line, so one extra stat is noise, and a
                 // crash-oriented logger can't rely on ever reaching a shutdown.
                 string path = LogPath;
-                Shared.LogRotation.RollIfNeeded(path);
+                LogRotation.RollIfNeeded(path);
                 // AppendAllText opens, writes, flushes, and closes — so the line
                 // is on disk before this call returns, surviving a later AV.
                 File.AppendAllText(path, line, Encoding.UTF8);

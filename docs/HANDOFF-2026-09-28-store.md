@@ -1,0 +1,140 @@
+# Handoff — snap and Flatpak (0.2.17), for 2026-09-28
+
+Branch `claude/kubuntu-ubuntu-store-submission-gzfqcb`, **identical to `Dev`**: `Dev` was fast-forwarded to it on 2026-09-27, with the user's approval, once `build.yml` was green on the head. No PR.
+Read these first:
+
+- `CLAUDE.md`: "The store packages", and its new Flathub paragraph.
+- [STORE-SUBMISSION.md](STORE-SUBMISSION.md): its checklist is the live state.
+- [RELEASE-0.2.17.md](RELEASE-0.2.17.md): the runbook.
+
+[The 09-27 handoff](HANDOFF-2026-09-27-store.md) is still accurate on the snap,
+on the user's machine and on the tooling. This one adds only what changed.
+
+## Where it stands
+
+- **`build.yml` is green on `8e707b2`** (run 87, all eight jobs; the edge upload skipped), the last code commit. That covers
+  every job: pack, smoke, speechd, parity, snap with `--test-install`, flatpak,
+  and Windows.
+- **The `flathub` workflow is new.** It runs on pushes to `main`, `Dev` and
+  `claude/**` that touch what it builds from: `build/flatpak/**`, the packers,
+  `build-espeak.sh`, the `check-*.sh` scripts, any `.csproj`, and
+  `Directory.Build.*`. It also runs on manual dispatch.
+  - Run 1 (`31d0d94`) went red in its first real step. See the table below.
+  - Run 2 (`c8deba3`, id 36319430193) was red, and got much further. All four
+    publishes succeeded **offline** in the SDK, NativeAOT included. It then
+    failed in espeak-ng's configure step (see `bf71b44` below). An earlier
+    version of this handoff said run 2 showed the package list matching. It
+    did not: the refusing step was skipped only because the build had failed.
+  - Run 3 (`25f8231`, id 36320821518): **the whole build passed**, including
+    `--test-install`. The only failing step was the refusal of a stale package
+    list, and it was right to fail (see `467913a` below).
+  - Run 4 (`c0edc74`, id 36321933374): **green**, every step. It is the first
+    fully green run: the offline source build, `--test-install`, and the
+    package-list check all passed.
+  - Runs 5–7 added **Flathub's own linter** (`--lint`) and fixed how it runs:
+    - run 5 died on git's "dubious ownership" check (`2cf4ed0`);
+    - run 6's linter crashed, unable to create its state directory (`fc50258`);
+    - run 7 is the first in which the linter checked anything. It found one
+      error, `appstream-missing-screenshots`, which is expected before the tag
+      is pushed (`8e707b2`).
+  - Run 8 (`8e707b2`, id 36325656175): **green, linter included.** The manifest
+    lints clean, with no exceptions. The repository lints clean, with the
+    screenshots marked unverified until `v0.2.17` is pushed. The only other
+    output is a warning: see "The 26.08 runtime" below.
+- The user's Kubuntu still runs **snap revision 10** from `edge`. Nothing new
+  was published. Merging to `main` still publishes to `edge`.
+
+## What happened on 2026-09-27, after the 09-27 handoff
+
+| Commit | What |
+| --- | --- |
+| `31d0d94` | **Flathub from source.** New manifest `build/flatpak/…source.yml.in`: the `dotnet10` SDK extension, 34 NuGet packages pinned by SHA-512 in `nuget-sources.json`, espeak-ng at `build-espeak.sh`'s pin, and `pack-tar.sh` run inside the build, so every packer assertion still runs. `pack-flatpak.sh --from-source` builds it; `--flathub TAG` writes the submission to `dist/flathub/`. The new `flathub.yml` workflow regenerates the package list **inside the SDK** and refuses a committed file that differs, then builds, installs and runs `--test-install`. Rehearsed locally against a feed of only the pinned packages. |
+| `c8deba3` | Run 1 died at `gen-nuget-sources.py --in-sdk`, before any build: `UnauthorizedAccessException: Access to the path '/github/home/.dotnet' is denied`. dotnet's first run inside `flatpak run` tries to create `~/.dotnet`. In the CI container `HOME` is `/github/home`, owned by the runner's user, while the job runs as root, and bwrap drops the capability root would need to write there anyway. The restore now gets `HOME` and `DOTNET_CLI_HOME` under its own temporary directory. The manifest's build already set `DOTNET_CLI_HOME` to the build directory, so it was not affected. |
+| `bf71b44` | Run 2's failure, twice over. espeak-ng's `cmake/deps.cmake` clones libsonic at configure time whenever none is installed, even with `USE_LIBSONIC=OFF`, where nothing links it. Offline, the clone fails. The manifest now carries sonic as a git source, and `build-espeak.sh --sonic-src` passes it to CMake through `FETCHCONTENT_SOURCE_DIR_SONIC-GIT`, refusing any commit but the one `deps.cmake` names. The manifest's build command also gained `set -e`: without it, `pack-tar.sh` ran on after the failure, and the log blamed the missing payload instead of the cause. Seen locally with the network cut off: without the flag, CI's clone failure; with it, a full pass with all 35 voices; with sonic one commit off, refused. |
+| `467913a` | Run 3's one red step. The committed package list came from a workstation SDK (10.0.112, runtime packs 10.0.12). Flathub's `dotnet10//25.08` restores **10.0.8**, and brings its own apphost, so `Microsoft.NETCore.App.Host` drops out: 33 packages, not 34. The new file is exactly what run 3 printed, and the build it fed verified every hash. **So the Flathub build ships .NET runtime 10.0.8, while the tarball, snap and AppImage ship 10.0.12.** Its runtime patches arrive when Flathub updates the extension, not when we bump. |
+| `4f2f1cf` | **`flathub.json`**, `{"only-arches": ["x86_64"]}`. Flathub builds aarch64 too unless told otherwise, and this package cannot. The packer copies it into the submission and refuses to write or build without it (seen refused: missing, aarch64 added, empty). |
+| `fade3d0` | **`--lint`**: Flathub's linter (`flatpak-builder-lint` from `org.flatpak.Builder`, as Flathub runs it) on the submission-shaped manifest and on the built repository, in `flathub.yml`. `--flathub TAG` now also checks every screenshot URL is pinned to the tag and resolves. |
+| `bb6cd19` | 0.2.17 notes checked against every code commit since 09-25. Added the Voices tab's aligned buttons, and a paragraph on the Flathub build (built by Flathub from the tag, .NET 10.0.8, listed after review). |
+| `2cf4ed0`, `fc50258` | Making `--lint` run in CI: git calls pass `-c safe.directory`; the linter runs from its own writable directory. Neither was a finding. |
+| `8e707b2` | The screenshot exception that expires. `appstream-missing-screenshots` is added for a run **only** when every screenshot is pinned to `v<version>` and every one is a 404, which is the state until the tag is pushed. All reachable: full check. Some of each: fail. The two standing exceptions in `lint-exceptions.json` (screenshot mirroring, which only Flathub's builders do) **have not been observed yet**: no run has had screenshots to mirror. If the first run after the tag shows either one not firing, remove it. |
+
+## What the flathub workflow proved
+
+Run 3 (`25f8231`) is the first full pass of Flathub's build, as Flathub will run
+it. Each of these was seen in its log:
+
+1. **Offline build.** Every NuGet package came from `nuget-sources/`, espeak-ng
+   and sonic came from the manifest's git sources, and NativeAOT linked with the
+   SDK's gcc.
+2. **`pack-tar.sh` inside the SDK, with every assertion.** All four versions
+   are 0.2.17. `vst-ctl` and `vst-speechd` are native. No models. The catalog
+   is pinned and hashed. No ICU. espeak-ng: 34 voices phonemise, 31
+   dictionaries. `INIT` gets 299. The speechd installer refuses a voiceless
+   install. No GPU provider, and ORT pinned by SHA-512. glibc floor 2.34.
+   Budgets: 61 MiB of 75, espeak 14 MiB of 18, `vst-ctl` 5 ms.
+3. **`--test-install`.** The installed bundle reports 0.2.17, and its store
+   lands under `~/.var/app/…/data/vibesupertonic`. The module answers `INIT`
+   inside the sandbox. The deployment's `vst-ctl` finds the shared socket.
+   `sandbox-setup.sh` refuses to run inside.
+
+Run 8 added the fourth:
+
+4. **Flathub's linter.** The manifest check found nothing. The repository check
+   found nothing except the screenshots, which cannot resolve before the tag.
+
+The package-list check stays a **standing check**. When Flathub moves the
+`dotnet10` extension to a new runtime, the job prints the regenerated file,
+builds with it anyway, and fails at the end. Commit the printed file as
+`build/flatpak/nuget-sources.json`, as `467913a` did. Any other failure is a
+real finding about the source build: fix the manifest or the packer, and never
+add a network grant.
+
+## The 26.08 runtime
+
+The linter warns, on both checks, that `org.freedesktop.Platform` **26.08** is
+available; we build on 25.08. It is a warning, so it does not block the
+submission, but a reviewer may ask. Moving means changing `25.08` to `26.08` in
+the source manifest, in `flathub.yml`'s container and SDK install, and in the
+`--in-sdk` argument. CI then prints a new package list, because the `dotnet10`
+extension on 26.08 carries its own runtime version, and that list gets
+committed. Check first that `org.freedesktop.Sdk.Extension.dotnet10//26.08`
+exists. Not done here: it is a release-time choice for the user, not a fix.
+
+## Open, in rough order
+
+1. **Done: `build.yml` run 87 is green, and `Dev` was fast-forwarded to this
+   branch.** The push to `Dev` publishes nothing. It starts `build.yml` and
+   `flathub` there; check that both are green.
+2. **The release itself**, per [RELEASE-0.2.17.md](RELEASE-0.2.17.md). The
+   09-27 handoff's item 1 still applies word for word, including the notes check
+   and "pack, verify, tag in one sitting". **The user pushes the tag and
+   publishes.**
+3. **Snap listing on snapcraft.io**, then `--grade stable`, then candidate, then
+   stable (runbook step 5). Promotion is a manual `snapcraft release`.
+4. **Flathub submission** (runbook step 6). It needs the tag, because
+   `--flathub v0.2.17` pins the manifest to the tag's commit. Then fork
+   `flathub/flathub`, branch from `new-pr`, and open the PR with the manifest,
+   `nuget-sources.json` and `flathub.json`. `--flathub` refuses to write them
+   until the screenshots resolve at the tag, so push the tag first. It also needs the user's GitHub account. No other
+   account is needed.
+5. **The Flatpak desktop checklist** in STORE-SUBMISSION: tray, Orca, and
+   selection capture on Plasma/Wayland. It needs a real desktop, so a cloud
+   session cannot do it.
+6. Unchanged from 09-27:
+   - the snap's 108 ms hotkey cost (accepted);
+   - Windows `PipelineLatencyTests` flakes (do not loosen them);
+   - the speechd install hang's cause (unproven; the rollback makes it safe).
+
+## Tooling notes
+
+The 09-27 notes still apply, plus these:
+
+- **flatpak is not installed in the cloud container**, and `gen-nuget-sources.py
+  --in-sdk` needs it. Without `--in-sdk` the script runs the machine's own
+  `dotnet`, which pins that SDK's runtime packs. That is right only when it is the
+  same SDK version as the extension's. **The CI regeneration is the one to trust.**
+- The flathub workflow's container is
+  `ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08`, run
+  `--privileged`. `HOME` there belongs to another uid, so anything that writes
+  under `$HOME` from inside `flatpak run` needs its own directory, as
+  `c8deba3` did.

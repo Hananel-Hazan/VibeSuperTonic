@@ -1,4 +1,5 @@
 using System.Windows.Forms;
+using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.Launcher.Ui;
 

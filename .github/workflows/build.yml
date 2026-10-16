@@ -2,17 +2,39 @@ name: build
 
 on:
   push:
-    branches: [main]
+    # Dev is where the Linux port is being built (docs/LINUX-PORT-PLAN.md), and
+    # the plan's own gate for the second isolation step is "Core.Tests green on
+    # Windows and on Linux, in CI, not locally". With main-only triggers that
+    # gate could never be reached from the branch the work actually happens on —
+    # every commit below would land on main already unverified.
+    branches: [main, Dev]
     paths-ignore:
       - 'README.md'
       - 'LICENSE'
       - '.gitignore'
-      - '.github/**'
   pull_request:
-    branches: [main]
+    branches: [main, Dev]
   workflow_dispatch:
+    inputs:
+      publish_edge:
+        # A manual run from a branch uploads only when asked. See the snap job.
+        description: 'Upload the snap to the Snap Store edge channel'
+        type: boolean
+        default: false
+      snap_grade:
+        # stable only for a release run, from the tagged commit. The edge-only
+        # credential still decides where it can go: a stable-grade snap reaches
+        # edge, and a person promotes it with `snapcraft release`.
+        description: 'Snap grade (stable is for a release run only)'
+        type: choice
+        options: [devel, stable]
+        default: devel
 
 jobs:
+  # ---------------------------------------------------------------- Windows
+  # Produces the shippable ZIP. Also the only job that can catch a regression in
+  # the 32-bit engine, which is the half of the product with no local coverage —
+  # nobody runs a 32-bit SAPI host by accident.
   build:
     runs-on: windows-latest
     steps:
@@ -24,17 +46,42 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
+      # Core is platform-neutral, but "runs on Linux" is not evidence that it
+      # runs on Windows — line endings, path separators, string comparison and
+      # culture all differ, and the text/offset code this suite covers touches
+      # the first three. The isolation gate in docs/LINUX-PORT-PLAN.md requires
+      # this suite green on BOTH runners; the Linux job alone only half-satisfies
+      # it. Placed before the publishes so a Core regression fails in seconds
+      # rather than after two RID publishes and a ZIP.
+      - name: Test platform-neutral code
+        run: dotnet test src/VibeSuperTonic.Core.Tests/VibeSuperTonic.Core.Tests.csproj -c Release --nologo
+
       - name: Restore + build engine (x64)
         run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x64 --no-self-contained --nologo
 
       - name: Restore + build engine (x86)
         run: dotnet publish src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj -c Release -r win-x86 --no-self-contained --nologo
 
+      # The ORT 1.22.1 pin in VibeSuperTonic.Engine.csproj is load-bearing: 1.23.0
+      # dropped the win-x86 native from the package, and the failure is silent —
+      # publish succeeds, the x86 folder gets DirectML.dll but no onnxruntime.dll,
+      # and the engine dies with DllNotFoundException on first Speak inside a
+      # 32-bit host. The csproj says so in a comment; this step is what enforces
+      # it. Most likely future cause of a bump: the Linux port, which needs the
+      # CPU package and has no reason to care about win-x86.
+      - name: Assert win-x86 ONNX Runtime native survived the publish
+        shell: pwsh
+        run: |
+          $pub = "src/VibeSuperTonic.Engine/bin/Release/net10.0-windows/win-x86/publish"
+          $dll = Get-ChildItem $pub -Recurse -Filter onnxruntime.dll -ErrorAction SilentlyContinue
+          if (-not $dll) {
+            Get-ChildItem $pub -Recurse | Select-Object -ExpandProperty Name | Sort-Object
+            throw "win-x86 publish contains no onnxruntime.dll. ORT was probably bumped past 1.22.1 — read the pin comment in src/VibeSuperTonic.Engine/VibeSuperTonic.Engine.csproj before changing that version."
+          }
+          Write-Host "OK: $($dll[0].FullName) ($([math]::Round($dll[0].Length/1MB,1)) MB)"
+
       - name: Restore + build launcher (x64 single-file)
         run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x64 --nologo
-
-      - name: Restore + build launcher (x86 single-file)
-        run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x86 --nologo
 
       - name: Compose release ZIP
         run: ./build/pack-zip.ps1 -Version "ci-${{ github.sha }}"
@@ -46,3 +93,520 @@ jobs:
           name: VibeSuperTonic-ci-${{ github.sha }}
           path: dist/*.zip
           retention-days: 14
+
+  # ------------------------------------------------------------------ Linux
+  # Builds the platform-neutral half of the tree (docs/LINUX-PORT-PLAN.md).
+  # Exists so the two platforms guard each other: without it, a Windows-motivated
+  # change to shared code breaks Linux and nobody finds out until someone next
+  # opens the Mint box, and the Windows job above cannot see a net10.0 project
+  # regress because it never builds one on a machine where Windows types are
+  # absent.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Build Linux solution
+        run: dotnet build VibeSuperTonic.linux.slnx -c Release --nologo
+
+      # Was guarded on the directory existing, so it would activate by itself
+      # when Phase 1 landed Core.Tests. It has: the guard is now permanently true
+      # and only obscures a failure to restore.
+      - name: Test platform-neutral code
+        run: >
+          dotnet test VibeSuperTonic.linux.slnx -c Release --nologo
+          --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      # WHY THIS EXISTS. A failing test step reports "Process completed with exit
+      # code 1" and nothing else to anyone without admin rights on the repository
+      # — the job log needs them, and the check-run annotations carry only that
+      # one line. The step summary does NOT: it comes back in the check-run's
+      # `output.summary`, readable by anybody. So the names of the failing tests
+      # go there, and a red run becomes diagnosable from outside.
+      - name: Which tests failed
+        if: failure()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          print("## Failing tests\n")
+          found = False
+          for f in glob.glob("TestResults/**/*.trx", recursive=True):
+              for r in ET.parse(f).getroot().iterfind(".//t:UnitTestResult", ns):
+                  if r.get("outcome") != "Failed":
+                      continue
+                  found = True
+                  print(f"### {r.get('testName')}\n")
+                  msg = r.find(".//t:Message", ns)
+                  tr = r.find(".//t:StackTrace", ns)
+                  print("```")
+                  if msg is not None and msg.text: print(msg.text.strip()[:1500])
+                  if tr is not None and tr.text: print(tr.text.strip()[:1500])
+                  print("```\n")
+          if not found:
+              print("No failed test was recorded — the step failed before or "
+                    "outside the test run. Check the build output.")
+          PY
+
+      # sandbox-setup.sh is what gives a snap or Flatpak install its hotkeys and
+      # its Speech Dispatcher module, and every way it can be wrong is silent: a
+      # key bound to a path the next update removes, a module command speechd
+      # lists and never runs, a write inside the sandbox that looks like success.
+      # Hermetic (a fake snap mount and a fake Flatpak installation, all writes
+      # redirected), about a second, and --negative-control makes it prove it can
+      # fail before its pass is believed.
+      - name: Check sandbox-setup.sh against a fake snap and Flatpak
+        run: bash build/check-sandbox-setup.sh --negative-control
+
+      # THE STORE PACKAGES' EXPORT FFMPEG (build/build-ffmpeg.sh), built here as
+      # the snap's part builds it, then: its check passing, every sabotage of
+      # that check, of the manifests' pins and of the recipe's own refusals
+      # caught (a real rebuild without the aresample filter among them), and
+      # ExportRunner's real-ffmpeg test run against it rather than the runner's
+      # system ffmpeg. The snap and flatpak jobs check the same binary again
+      # inside the finished packages, under confinement. About three minutes.
+      - name: Build the store packages' ffmpeg, and see its checks fail
+        run: |
+          bash build/build-ffmpeg.sh --fetch --work "$RUNNER_TEMP/ffmpeg-work" --out "$RUNNER_TEMP/ffmpeg"
+          bash build/check-ffmpeg-bundle.sh "$RUNNER_TEMP/ffmpeg"
+          bash build/ffmpeg-bundle-sabotage.sh "$RUNNER_TEMP/ffmpeg" --rebuild "$RUNNER_TEMP/ffmpeg-work"
+          VST_FFMPEG="$RUNNER_TEMP/ffmpeg/ffmpeg" dotnet test src/VibeSuperTonic.Core.Tests -c Release --no-build --nologo \
+            --filter "FullyQualifiedName~ExportTests"
+
+      # PublishAot only takes effect on `dotnet publish`, so the step above
+      # compiles vst-ctl without ever exercising the native toolchain — and the
+      # plan (Phase 7) names the release run as the first place this can fail.
+      # That is the same shape as the win-x86 ONNX pin: a build that succeeds
+      # while producing something that does not work.
+      #
+      # It fails in two directions and both matter. Without clang and the
+      # platform headers the publish errors out, which is the toolchain answer
+      # Phase 7 needs before it starts rather than during. And a publish that
+      # silently falls back to a managed binary ships a client that starts in
+      # ~107 ms instead of 6 — it works, so nothing complains, and the only
+      # symptom is a hotkey that feels sluggish on every single press.
+      - name: Publish vst-ctl (NativeAOT)
+        run: dotnet publish src/VibeSuperTonic.Ctl/VibeSuperTonic.Ctl.csproj -c Release -r linux-x64 -o out/ctl --nologo
+
+      - name: Assert the shipped client is a native binary
+        run: |
+          if [ ! -f out/ctl/vst-ctl ]; then
+            echo "no vst-ctl in the publish output:"; ls -la out/ctl; exit 1
+          fi
+          if [ -f out/ctl/vst-ctl.dll ]; then
+            echo "vst-ctl.dll is present, so this is a managed publish, not an AOT one."
+            echo "The client would start in ~107 ms instead of 6 — most of the"
+            echo "acknowledgement budget, spent before any work begins."
+            exit 1
+          fi
+          file out/ctl/vst-ctl | grep -q 'ELF 64-bit.*executable' || {
+            echo "vst-ctl is not a native ELF executable:"; file out/ctl/vst-ctl; exit 1
+          }
+          echo "OK: $(file -b out/ctl/vst-ctl | cut -d, -f1-2), $(du -h out/ctl/vst-ctl | cut -f1)"
+
+  # ------------------------------------------------------------------- pack
+  #
+  # WHY THIS JOB EXISTS. build/pack-tar.sh carries ten assertions, and until
+  # this job they ran ONLY on the machine that packed a release, only when a
+  # human ran the packer. Every one of them guards a failure that is silent — a
+  # stale binary, a managed apphost, 330 MB of CUDA provider, a missing espeak
+  # dictionary that makes a voice produce no sound while exiting 0, a Speech
+  # Dispatcher module that answers the server's INIT with a refusal and is
+  # therefore never offered at all. A green `build` job said nothing about any
+  # of them.
+  #
+  # It is also the only job that builds espeak-ng, so P5's payload is otherwise
+  # unverified between releases.
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      # The pin is a fixed commit, so the key is exact: the payload rebuilds only
+      # when the pin moves. piper-voices.json and P1's corpus are in the key too
+      # because they DECIDE WHICH DICTIONARIES the payload contains — a catalog
+      # that gained a language against a cached payload would fail the packer's
+      # behavioural check, which is the right outcome but a confusing way to
+      # learn it.
+      - name: Cache the espeak-ng payload
+        id: espeak-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/espeak-out/espeak
+            build/espeak-out/install
+          key: espeak-${{ runner.os }}-${{ hashFiles('build/build-espeak.sh', 'piper-voices.json', 'spike/piper-phonemes/corpus.json') }}
+
+      - name: Build espeak-ng
+        if: steps.espeak-cache.outputs.cache-hit != 'true'
+        run: bash build/build-espeak.sh
+
+      # No -v: the default is <VstVersion> from Directory.Build.props, which is
+      # what assertion 1 checks the binaries against. Passing a version here
+      # would test the flag rather than the agreement.
+      - name: Pack the Linux tarball, with its eleven assertions
+        run: bash build/pack-tar.sh
+
+      # The script travels WITH the tarball rather than being checked out in the
+      # smoke job: that job runs in a bare ubuntu:22.04 container, which has no
+      # git, and actions/checkout without git falls back to a REST download —
+      # one more thing to fail for a reason unrelated to the archive.
+      - name: Upload the tarball and its smoke test
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: |
+            dist/*.tar.gz
+            build/smoke-test.sh
+          retention-days: 7
+
+  # ----------------------------------------------------------------- parity
+  #
+  # DOES OUR PHONEMISER STILL AGREE WITH PIPER'S. P1 was the go/no-go for the
+  # whole Piper plan — 327 sentences, 8 languages, zero divergences — and it has
+  # been re-run by hand ever since, which means a phonemiser regression is
+  # invisible until somebody remembers. What it catches is not a crash: it is
+  # the same ids coming out slightly different, which reaches a user as a voice
+  # that sounds subtly wrong and nothing anywhere reporting a fault.
+  #
+  # It needs no Python and no network — corpus.json holds what piper itself
+  # produced, committed — so the only input is the espeak payload, keyed on the
+  # same cache the pack job fills.
+  #
+  # --negative-control FIRST, and in the same invocation: it runs the corpus
+  # once per deliberate sabotage and requires every one to diverge, then runs
+  # the parity check. A pass means something only because the harness has just
+  # been shown failing. That flag found a real hole on its own first run — a
+  # sabotage that diverged on ZERO sentences, because the corpus never exercised
+  # the code it broke.
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Cache the espeak-ng payload
+        id: espeak-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/espeak-out/espeak
+            build/espeak-out/install
+          key: espeak-${{ runner.os }}-${{ hashFiles('build/build-espeak.sh', 'piper-voices.json', 'spike/piper-phonemes/corpus.json') }}
+
+      - name: Build espeak-ng
+        if: steps.espeak-cache.outputs.cache-hit != 'true'
+        run: bash build/build-espeak.sh
+
+      # Exit codes, which is what makes this a check rather than a report:
+      # 1 a sentence diverged, 2 the payload was not found, 3 a sabotage in the
+      # negative control was NOT caught. All three were watched happening before
+      # this job was written.
+      - name: Phoneme parity against piper, with its negative control
+        env:
+          VST_ESPEAK_LIB: ${{ github.workspace }}/build/espeak-out/espeak/libespeak-ng.so.1
+          VST_ESPEAK_DATA: ${{ github.workspace }}/build/espeak-out/espeak/espeak-ng-data
+        run: |
+          if dotnet run --project spike/piper-phonemes -c Release -- --negative-control \
+               > /tmp/parity.log 2>&1; then
+            cat /tmp/parity.log
+          else
+            cat /tmp/parity.log
+            exit 1
+          fi
+
+      - name: What the parity run said
+        if: failure()
+        run: |
+          echo '## Phoneme parity failed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/parity.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------- speechd
+  #
+  # DOES THE USER'S SCREEN READER STILL WORK AFTER WE INSTALL. That is a
+  # different question from "does our module work", and it is the one with a
+  # person on the other end of it: trap 1 — a user config REPLACES the system
+  # one rather than extending it — makes "adding VibeSuperTonic silently removed
+  # espeak-ng" the DEFAULT outcome of a naive installer, and the symptom is a
+  # blind user's desktop going quiet.
+  #
+  # spike/speechd-s4-install/restore-test.sh drives a PRIVATE speech-dispatcher
+  # through six scenarios and 40 checks, and it is the one check in this file
+  # that needs a real speech-dispatcher — which is why it was hand-run until
+  # now, and why S5 lists it. It redirects exactly one variable, XDG_CONFIG_HOME,
+  # so it can never touch a real user's configuration; on a runner there is no
+  # user to protect, but the harness is the same one that has to be safe here.
+  #
+  # No audio device is needed: --speak is off by default, so nothing is ever
+  # played. What is asserted is what spd-say -O reports before, during and after
+  # an install, and that --remove puts it back.
+  speechd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      # THE SUBJECT OF THE TEST, not a build dependency: speech-dispatcher is
+      # what the installer has to leave working, and espeak-ng is the module it
+      # must not remove. The scratch install composed below is ours.
+      - name: Install speech-dispatcher and its espeak-ng module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            speech-dispatcher speech-dispatcher-espeak-ng
+
+      # Same key as the pack job, so the two share one payload: the module
+      # refuses INIT without a phonemiser beside it, which is the whole of
+      # scenario D.
+      - name: Cache the espeak-ng payload
+        id: espeak-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/espeak-out/espeak
+            build/espeak-out/install
+          key: espeak-${{ runner.os }}-${{ hashFiles('build/build-espeak.sh', 'piper-voices.json', 'spike/piper-phonemes/corpus.json') }}
+
+      - name: Build espeak-ng
+        if: steps.espeak-cache.outputs.cache-hit != 'true'
+        run: bash build/build-espeak.sh
+
+      # --compose publishes the three binaries into a scratch install with FAKE
+      # models: what is being tested is registration and restoration, not
+      # synthesis, and a real model download would put 383 MB into a job that
+      # does not need it.
+      - name: Does espeak-ng still answer after we install, and after --remove
+        run: |
+          if bash spike/speechd-s4-install/restore-test.sh --compose > /tmp/restore.log 2>&1; then
+            cat /tmp/restore.log
+          else
+            cat /tmp/restore.log
+            exit 1
+          fi
+
+      - name: What the restore test said
+        if: failure()
+        run: |
+          echo '## The speech-dispatcher restore test failed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -80 /tmp/restore.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------ smoke
+  #
+  # DOES THE ARCHIVE OPEN SOMEWHERE ELSE. Every check above runs on a machine
+  # with the .NET SDK, a display, ICU, espeak-ng and every build dependency the
+  # product does not ship. The glibc-floor assertion measures ELF symbol
+  # versions and concludes "Ubuntu 22.04+"; this job is that claim's experiment,
+  # run on the oldest distro the floor says is supported.
+  #
+  # ubuntu:22.04 bare, with nothing installed into it beyond what tar needs.
+  smoke:
+    runs-on: ubuntu-latest
+    needs: pack
+    container: ubuntu:22.04
+    steps:
+      - name: Download the tarball and its smoke test
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      # NOTHING IS INSTALLED INTO THIS CONTAINER. That is the experiment: the
+      # product claims to bring its own runtime, and ubuntu:22.04 is the oldest
+      # distro the glibc floor says is supported. If this job ever needs libicu,
+      # openssl or libespeak-ng added to it, that is a FINDING ABOUT THE ARCHIVE
+      # and belongs in INSTALL.txt — it is not a fix to this file.
+      - name: Extract
+        run: |
+          mkdir -p /tmp/release
+          tar -xzf dist/VibeSuperTonic-*.tar.gz -C /tmp/release
+          ls -la /tmp/release/VibeSuperTonic | head
+
+      # NO BASHISMS IN THIS JOB. A container job runs its steps with `sh -e`, not
+      # `bash -e` — so `set -o pipefail` here failed with "Illegal option" under
+      # dash before the script was ever reached. Redirect and re-read rather than
+      # pipe through tee: it needs no pipefail, and it does not assume the shell
+      # wrapping the step is the same one that runs the script.
+      - name: Smoke test
+        run: |
+          if bash build/smoke-test.sh /tmp/release/VibeSuperTonic > /tmp/smoke.log 2>&1; then
+            cat /tmp/smoke.log
+          else
+            cat /tmp/smoke.log
+            exit 1
+          fi
+
+      # Same reasoning as the linux job's: the smoke script says exactly which
+      # check failed and why, and that text is unreadable without admin rights
+      # unless it is put in the step summary.
+      - name: What the smoke test said
+        if: failure()
+        run: |
+          echo '## Smoke test failed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -60 /tmp/smoke.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------- snap
+  #
+  # THE SNAP, BUILT FROM THE SAME TARBALL. pack-snap.sh publishes nothing: it
+  # repackages the tree pack-tar.sh composed, so the eleven assertions of the
+  # pack job are the snap's too, and it adds its own: strict confinement, all
+  # five apps present, the hotkey app free of any launcher wrapper, the daemon's
+  # native libraries staged, and the module answering INIT from inside the
+  # finished snap.
+  #
+  # The tarball is extracted to where pack-tar.sh would have left the tree, so
+  # this job does not need .NET or espeak-ng. --destructive-mode because this
+  # runner IS the core24 base (Ubuntu 24.04) and has no LXD to spare. sudo
+  # because destructive mode installs the GNOME extension's build snaps through
+  # snapd.
+  snap:
+    runs-on: ubuntu-24.04
+    # linux and speechd too, because this job can publish: the snap ships
+    # sandbox-setup.sh (checked in linux) and speechd-install.sh (restore-
+    # tested in speechd), and a snap whose installer failed its restore test
+    # must not reach the store. Both run beside pack, so this costs no time.
+    needs: [pack, linux, speechd]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      - name: Extract it as the composed tree
+        run: |
+          mkdir -p dist/release-linux
+          tar -xzf dist/VibeSuperTonic-*.tar.gz -C dist/release-linux
+
+      - name: Install snapcraft
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt-get install -y squashfs-tools appstream desktop-file-utils
+          # For --test-install's check that speech-dispatcher can load the
+          # snap's module, beside the distro's own module as on a desktop.
+          sudo apt-get install -y speech-dispatcher speech-dispatcher-espeak-ng
+          # For --test-install's check that the daemon can open the window.
+          sudo apt-get install -y xvfb
+          # A systemd user manager for this user, as a desktop session has. A
+          # desktop's speech-dispatcher is socket-activated by it, and that is
+          # the path check-snap-speechd.sh's second half takes.
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 50); do [ -S "/run/user/$(id -u)/systemd/private" ] && break; sleep 0.2; done
+          ls -l "/run/user/$(id -u)/" || true
+
+      # --test-install: this runner has snapd, AppArmor and seccomp, so the snap
+      # is installed and its daemon started the way a hotkey starts it. Every
+      # other check runs the snap's files outside confinement, which is how
+      # revision 1 reached the store with a daemon seccomp killed on every press.
+      - name: Pack the snap, with its assertions, and test it under snapd
+        # inputs.snap_grade is empty on a push, hence the default.
+        run: sudo bash build/pack-snap.sh --destructive-mode --test-install --grade "${{ inputs.snap_grade || 'devel' }}"
+
+      - name: Upload the snap
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-snap
+          path: dist/*.snap
+          retention-days: 7
+
+      # TO THE STORE'S EDGE CHANNEL, and only a snap that passed --test-install
+      # above, since a failed step ends the job before this one. On a push to
+      # main, or a manual run with publish_edge ticked; never a pull request.
+      # The credential is `snapcraft export-login --snaps=vibesupertonic
+      # --channels=edge ...`, so it cannot reach beta, candidate or stable
+      # whatever this step is changed to say. CI builds are grade devel, which
+      # the store also keeps off candidate and stable, unless a manual run asked
+      # for snap_grade stable; that one is promoted by hand, never from here.
+      #
+      # Asked for and no credential is a failure, not a skip: a green run that
+      # silently published nothing is how somebody waits for a revision that is
+      # never coming. On main without one, it says so and passes.
+      - name: Publish to the edge channel
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          || (github.event_name == 'workflow_dispatch' && inputs.publish_edge)
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          ASKED: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [[ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]]; then
+            msg="no SNAPCRAFT_STORE_CREDENTIALS secret, so nothing was published"
+            if [[ "$ASKED" == true ]]; then echo "::error::$msg"; exit 1; fi
+            echo "::notice::$msg"; exit 0
+          fi
+          snaps=(dist/VibeSuperTonic-*.snap)
+          [[ ${#snaps[@]} -eq 1 && -f "${snaps[0]}" ]] || { echo "::error::expected one snap in dist/, found: ${snaps[*]}"; exit 1; }
+          snapcraft upload --release=edge "${snaps[0]}"
+
+  # ---------------------------------------------------------------- flatpak
+  #
+  # THE FLATPAK, BUILT FROM THE SAME TARBALL, then INSTALLED and checked as a
+  # real deployment (--test-install). What that proves is what fails silently
+  # otherwise: the store lands in ~/.var/app rather than the read-only /app;
+  # the Speech Dispatcher module answers INIT inside the sandbox; and the
+  # host-side vst-ctl, run from the deployment's `active` path exactly as a
+  # hotkey runs it, looks for the daemon in the app's shared runtime directory.
+  # If that last one were wrong, every press would start a second daemon that
+  # nobody talks to, and nothing would report an error.
+  #
+  # Flathub's own build image, so the runtime and flatpak-builder are the ones
+  # Flathub's servers use. --privileged because bubblewrap needs namespaces.
+  flatpak:
+    runs-on: ubuntu-latest
+    needs: pack
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+
+      - name: Pack the Flatpak and test the installed deployment
+        run: |
+          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          bash build/pack-flatpak.sh --test-install
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: dist/*.flatpak
+          retention-days: 7

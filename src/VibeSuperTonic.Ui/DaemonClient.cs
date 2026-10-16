@@ -1,0 +1,353 @@
+using System.Diagnostics;
+using System.Net.Sockets;
+using System.Text;
+using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Session;
+
+namespace VibeSuperTonic.Ui;
+
+/// <summary>
+/// The window's entire relationship with the daemon: one long-lived subscription
+/// for what is happening, and one short connection per verb for making something
+/// happen.
+///
+/// <para><b>R-1, enforced rather than intended.</b> Everything here goes over the
+/// same socket, in the same JSON, as <c>vst-ctl</c>. There is no privileged path
+/// and no shared object — the UI cannot read pipeline state even if a later
+/// change would find it convenient, because the pipeline is in another
+/// process.</para>
+///
+/// <para><b>It starts a daemon exactly once</b>, when the window opens, and never
+/// again. Opening the window is a person asking for the product; a reconnect is
+/// not. Without that distinction the tray's "stop the engine" item would be
+/// undone a second later by this loop, and the one verb whose whole job is to
+/// release 830 MB would do nothing while a window was open.</para>
+/// </summary>
+public sealed class DaemonClient
+{
+    /// <summary>How long to wait before looking for a daemon again.</summary>
+    private const int RetryMs = 1000;
+
+    /// <summary>
+    /// Fired for every line of the event stream, on a background thread. The
+    /// caller marshals — the daemon is not made to wait for a repaint.
+    /// </summary>
+    public event Action<SessionEvent>? Received;
+
+    /// <summary>The first line of a subscription: state, text and offset in one.</summary>
+    public event Action<StatusPayload>? Snapshotted;
+
+    /// <summary>Connected or not. The window stays open either way, and says which.</summary>
+    public event Action<bool>? ConnectedChanged;
+
+    public async Task RunAsync(CancellationToken token)
+    {
+        bool mayStartDaemon = true;
+
+        while (!token.IsCancellationRequested)
+        {
+            Socket? socket = Connect();
+
+            if (socket is null && mayStartDaemon)
+            {
+                // The one place this happens. See the class remarks.
+                if (TryStartDaemon(out string error))
+                {
+                    socket = await WaitForDaemonAsync(TimeSpan.FromSeconds(5), token);
+                }
+                else
+                {
+                    Console.Error.WriteLine($"could not start the daemon: {error}");
+                }
+            }
+
+            mayStartDaemon = false;
+
+            if (socket is null)
+            {
+                await Task.Delay(RetryMs, token).ConfigureAwait(false);
+                continue;
+            }
+
+            try
+            {
+                await SubscribeAsync(socket, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException)
+            {
+                // The daemon went away mid-stream. Not an error to show: the
+                // window reports it as disconnected and comes back by itself.
+            }
+            finally
+            {
+                socket.Dispose();
+                ConnectedChanged?.Invoke(false);
+            }
+
+            if (!token.IsCancellationRequested)
+                await Task.Delay(RetryMs, token).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SubscribeAsync(Socket socket, CancellationToken token)
+    {
+        await using var stream = new NetworkStream(socket, ownsSocket: false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        // hello, carried on the subscribe request itself — see Request.ClientKind.
+        await writer.WriteLineAsync(Protocol.Encode(new Request
+        {
+            Verb = RequestVerb.Subscribe,
+            ClientKind = Request.ClientKindUi,
+            ClientPid = Environment.ProcessId,
+        })).ConfigureAwait(false);
+
+        // The snapshot is the first line, not a second call. A client that
+        // called status and then subscribed would miss every event in between,
+        // which at three to four boundaries a second is a highlight that starts
+        // out wrong.
+        string? first = await reader.ReadLineAsync(token).ConfigureAwait(false);
+        if (first is null) return;
+
+        var response = Protocol.TryDecode<Response>(first);
+        if (response?.Status is { } snapshot)
+        {
+            ConnectedChanged?.Invoke(true);
+            Snapshotted?.Invoke(snapshot);
+        }
+
+        while (!token.IsCancellationRequested)
+        {
+            string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
+            if (line is null) return;                       // daemon went away
+
+            if (Protocol.TryDecode<SessionEvent>(line) is { } evt)
+                Received?.Invoke(evt);
+        }
+    }
+
+    /// <summary>
+    /// Send one verb and read one reply, on a connection of its own — the same
+    /// shape <c>vst-ctl</c> uses, for the same reason: a request is not a
+    /// session, and multiplexing it onto the subscription would put a reply in
+    /// the middle of the event stream.
+    /// </summary>
+    /// <returns>The daemon's reply, or null when there is no daemon to ask.</returns>
+    public async Task<Response?> SendAsync(Request request, CancellationToken token = default)
+    {
+        using Socket? socket = Connect();
+        if (socket is null) return null;
+
+        await using var stream = new NetworkStream(socket, ownsSocket: false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
+        string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
+
+        return line is null ? null : Protocol.TryDecode<Response>(line);
+    }
+
+    /// <summary>
+    /// Send one verb that answers more than once — <c>benchmark</c> and
+    /// <c>voice install</c> — reporting each intermediate reply and returning the
+    /// last.
+    ///
+    /// <para><b>Why this exists rather than a longer timeout on
+    /// <see cref="SendAsync"/>.</b> A sweep is about a minute of the daemon being
+    /// deliberately busy, and a control that goes grey for a minute is
+    /// indistinguishable from one that has hung. The progress replies are the
+    /// difference, and they are already on the wire — <c>vst-ctl benchmark</c>
+    /// reads exactly the same stream.</para>
+    ///
+    /// <para><paramref name="onReply"/> is invoked on a background thread; an
+    /// Avalonia caller must marshal it. Returns null when there is no daemon, or
+    /// when it closed the connection before answering.</para>
+    /// </summary>
+    public async Task<Response?> SendStreamingAsync(
+        Request request, Action<Response> onReply, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(onReply);
+
+        using Socket? socket = Connect();
+        if (socket is null) return null;
+
+        await using var stream = new NetworkStream(socket, ownsSocket: false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
+
+        while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+        {
+            if (Protocol.TryDecode<Response>(line) is not { } reply) continue;
+
+            // Progress replies carry a row, or a byte count, and nothing else;
+            // the final one carries the payload, or a failure. That is the shape
+            // vst-ctl relies on too, and it is what lets this loop end without a
+            // sentinel message. Both streaming verbs are listed here rather than
+            // testing "is any payload null", so that adding a third is a
+            // deliberate edit instead of an accident of field ordering.
+            if (reply.Progress is not null || reply.VoiceProgress is not null)
+            {
+                onReply(reply);
+                continue;
+            }
+
+            return reply;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Open a <c>render</c> and hand back the stream to read, or null when there
+    /// is no daemon. The caller reads lines with <see cref="RenderSession.ReadLine"/>
+    /// on its own thread and may <see cref="RenderSession.Abort"/> from another —
+    /// the read blocks, and aborting the socket is the only thing that wakes it.
+    /// </summary>
+    public RenderSession? OpenRender(Request request)
+    {
+        Socket? socket = Connect();
+        if (socket is null) return null;
+
+        try
+        {
+            var stream = new NetworkStream(socket, ownsSocket: false);
+            var reader = new StreamReader(stream, Encoding.UTF8);
+            var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+            writer.WriteLine(Protocol.Encode(request));
+            return new RenderSession(socket, stream, reader);
+        }
+        catch (IOException)
+        {
+            socket.Dispose();
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------- connecting
+
+    private static Socket? Connect()
+    {
+        string path = Protocol.SocketPath();
+        // An abstract name (a snap's) is not a file; a refused connect says the same thing.
+        if (!Protocol.IsAbstract(path) && !File.Exists(path)) return null;
+
+        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            socket.Connect(Protocol.EndPoint(path));
+            return socket;
+        }
+        catch (SocketException)
+        {
+            // Refused means the file outlived its daemon; anything else means
+            // busy. Neither is worth a message here — the window reports the
+            // state, and the retry loop is a second away.
+            socket.Dispose();
+            return null;
+        }
+    }
+
+    private static async Task<Socket?> WaitForDaemonAsync(TimeSpan budget, CancellationToken token)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < budget && !token.IsCancellationRequested)
+        {
+            if (Connect() is { } socket) return socket;
+            await Task.Delay(50, token).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Start the daemon beside this executable. Same rule as <c>vst-ctl</c>'s
+    /// auto-start, deliberately: the tarball ships both binaries in one
+    /// directory, so any other guess describes a layout this product does not
+    /// produce.
+    /// </summary>
+    /// <summary>
+    /// Start the daemon now, for the window's "Start it now". Null on success;
+    /// the run loop connects once the socket answers.
+    /// </summary>
+    public static string? StartDaemon() => TryStartDaemon(out string error) ? null : error;
+
+    private static bool TryStartDaemon(out string error)
+    {
+        string exe = Environment.GetEnvironmentVariable("VST_DAEMON")
+            ?? Path.Combine(AppContext.BaseDirectory, "vibesupertonicd");
+
+        if (!File.Exists(exe))
+        {
+            error = $"{exe} not found (set VST_DAEMON to override)";
+            return false;
+        }
+
+        // Inside a Flatpak a plain child dies with this window's sandbox, so the
+        // daemon has to be started as an instance of its own. See DaemonLaunch.
+        var (fileName, arguments) = Environment.GetEnvironmentVariable("VST_DAEMON") is not null
+            ? (exe, (IReadOnlyList<string>)[])
+            : DaemonLaunch.Plan(exe, [], FlatpakPeer.Current);
+
+        try
+        {
+            var psi = new ProcessStartInfo(fileName)
+            {
+                UseShellExecute = false,
+                // The daemon outlives this window. Its output is discarded
+                // rather than captured, because a reader that stopped reading
+                // would block the daemon's stderr once the pipe filled — a hang
+                // hours later with no apparent cause. It has its own log.
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            foreach (string argument in arguments) psi.ArgumentList.Add(argument);
+
+            var proc = Process.Start(psi);
+            if (proc is null) { error = "Process.Start returned null"; return false; }
+
+            proc.OutputDataReceived += (_, _) => { };
+            proc.ErrorDataReceived += (_, _) => { };
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+
+            error = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+    }
+}
+
+/// <summary>One render in flight: the socket, and the lines coming back on it.</summary>
+public sealed class RenderSession(Socket socket, NetworkStream stream, StreamReader reader) : IDisposable
+{
+    /// <summary>The next reply line, or null when the daemon went away or the session was aborted.</summary>
+    public string? ReadLine()
+    {
+        try { return reader.ReadLine(); }
+        catch (IOException) { return null; }
+        catch (ObjectDisposedException) { return null; }
+    }
+
+    /// <summary>Wakes a blocked <see cref="ReadLine"/>; the daemon sees the close and stops synthesising.</summary>
+    public void Abort()
+    {
+        try { socket.Shutdown(SocketShutdown.Both); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void Dispose()
+    {
+        reader.Dispose();
+        stream.Dispose();
+        socket.Dispose();
+    }
+}

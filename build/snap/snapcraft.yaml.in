@@ -1,0 +1,177 @@
+# The snap. A TEMPLATE: build/pack-snap.sh fills in @VERSION@ and @GRADE@,
+# lays the composed tree out as payload/ beside it, and runs snapcraft there.
+# Never run snapcraft against this file directly: the payload is what makes
+# pack-tar.sh's assertions apply to the snap, and only the packer composes it.
+#
+# FOUR DECISIONS THAT LOOK ODD AND ARE NOT.
+#
+# 1. The hotkey client, `ctl`, has NO extension. An extension wraps the command
+#    in a desktop-launch script, which on the hotkey path would be paid on every
+#    single press. vst-ctl needs libc and nothing else. pack-snap.sh asserts that
+#    the built snap's ctl command is still bare.
+#
+# 2. Every app that can START the daemon carries the daemon's plugs. A confined
+#    process's children keep its AppArmor profile, so a daemon that vst-ctl
+#    starts on the first hotkey press runs under ctl's profile, not daemon's. The
+#    same goes for the Speech Dispatcher module (which runs vst-ctl) and the
+#    window. Hence one plug list, used four times.
+#
+# 3. The daemon's native libraries (PulseAudio, X11, Wayland) are STAGED into
+#    lib/native, not taken from the GNOME extension, and found through a
+#    top-level LD_LIBRARY_PATH. The daemon is often started by ctl, which has no
+#    extension (decision 1), so it cannot rely on the extension's environment.
+#    Top-level environment is applied by snapd itself, at no startup cost.
+#
+# 4. The snap carries its own minimal ffmpeg (the `ffmpeg` part) for MP3, AAC
+#    and FLAC export, because confinement hides the host's. The tarball and the
+#    AppImage do not: they use the system's.
+#
+# No personal-files and no classic confinement. The two things that need the
+# desktop's own configuration (hotkeys, Speech Dispatcher) are done by
+# sandbox-setup.sh, which the user runs once on the host. See that file.
+
+name: vibesupertonic
+title: VibeSuperTonic
+base: core24
+version: '@VERSION@'
+grade: @GRADE@
+confinement: strict
+license: MIT AND GPL-3.0-or-later AND LGPL-2.1-or-later AND LGPL-2.0-or-later
+adopt-info: vibesupertonic
+icon: snap/gui/vibesupertonic.png
+website: https://github.com/Hananel-Hazan/VibeSuperTonic
+source-code: https://github.com/Hananel-Hazan/VibeSuperTonic
+issues: https://github.com/Hananel-Hazan/VibeSuperTonic/issues
+
+platforms:
+  amd64:
+
+environment:
+  LD_LIBRARY_PATH: $SNAP/lib/native:$SNAP/lib/native/pulseaudio
+  # The sound server. In a snap XDG_RUNTIME_DIR is /run/user/<uid>/snap.<name>,
+  # where libpulse finds no socket, so the daemon's playback failed with
+  # "Connection refused" on every hotkey press (revision 3, 2026-09-25). The
+  # GNOME extension's desktop-launch sets this for the window only; the daemon
+  # is started by the bare ctl, so it is set here, for every app, by snapd.
+  # audio-playback is what lets a confined app connect to it. PipeWire serves
+  # the same socket.
+  PULSE_SERVER: unix:/run/user/$SNAP_UID/pulse/native
+  # Invariant globalization is compiled in; this only keeps a stray ICU probe
+  # from looking for a libicu the snap does not carry.
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
+
+apps:
+  vibesupertonic:
+    command: vibesupertonic-ui
+    common-id: io.github.hananel_hazan.VibeSuperTonic
+    desktop: usr/share/applications/io.github.hananel_hazan.VibeSuperTonic.desktop
+    extensions: [gnome]
+    # One list, anchored here and reused below, because of decision 2.
+    # `network` is the first-run model download, `opengl` the GPU,
+    # `audio-playback` the voice.
+    #
+    # `network-bind` is the control socket, and nothing else grants it. snapd's
+    # default seccomp filter has bind() but not listen() or accept(); those come
+    # only with this plug, which is auto-connected and needs no store review.
+    # Without it the daemon's listen() fails with EACCES and it aborts, which is
+    # what revision 1 did: the kernel logged `type=1326 ... syscall=50` (seccomp,
+    # listen), and no AppArmor line at all. pack-snap.sh asserts every app on
+    # this list still carries it.
+    #
+    # `unity7` is the tray icon. Without it the daemon may not even connect to
+    # the session bus (revision 2 said "ConnectException: Permission denied");
+    # with it, snapd allows exactly what TrayIcon does: the name
+    # org.kde.StatusNotifierItem-<pid>-1, /StatusNotifierItem, /MenuBar and
+    # RegisterStatusNotifierItem. Auto-connected, no store review.
+    #
+    # `desktop`, `desktop-legacy` and `gsettings` are the GNOME extension's own
+    # plugs for the window, repeated here because the daemon opens the window
+    # from the tray (TrayIcon, SnapWindow) and it runs under the confinement of
+    # whatever started the daemon, usually the bare ctl. Revision 3's window
+    # aborted on every tray click for want of the extension's environment;
+    # pack-snap.sh now asserts every plug the window app has is on the other
+    # three apps too. All auto-connect.
+    plugs: &daemon-plugs
+      - network
+      - network-bind
+      - unity7
+      - desktop
+      - desktop-legacy
+      - gsettings
+      - audio-playback
+      - x11
+      - wayland
+      - opengl
+
+  # NO refresh-mode HERE, although the daemon and the module hold back every
+  # refresh while they run ("has running apps", Kubuntu 2026-09-25). The Store
+  # accepts refresh-mode only on services (`daemon:` apps), and these are not:
+  # upload of a snap carrying it failed schema validation on 2026-09-27, after
+  # local snapd had installed it without complaint. Instead the daemon notices a
+  # held update and asks the user (SnapUpdateWatch, UpdatePrompt).
+  #
+  # Each has a hidden (NoDisplay) desktop entry, for the same reason it has the
+  # window's plugs: the tray opens the window under its confinement, and the
+  # portal recognises an app only by its desktop entry. Without one, every file
+  # chosen in that window's save dialog is granted to an app called "." and the
+  # snap never sees it (pack-snap.sh, where the entries are written).
+  daemon:
+    command: vibesupertonicd
+    desktop: usr/share/applications/vibesupertonic-daemon.desktop
+    plugs: *daemon-plugs
+
+  ctl:
+    command: vst-ctl
+    desktop: usr/share/applications/vibesupertonic-ctl.desktop
+    plugs: *daemon-plugs
+
+  speechd:
+    command: vst-speechd
+    desktop: usr/share/applications/vibesupertonic-speechd.desktop
+    plugs: *daemon-plugs
+
+  setup:
+    command: sandbox-setup.sh
+
+parts:
+  vibesupertonic:
+    plugin: dump
+    source: payload
+    parse-info:
+      - usr/share/metainfo/io.github.hananel_hazan.VibeSuperTonic.metainfo.xml
+
+  # Moved out of usr/lib, and that is load-bearing. The GNOME extension's
+  # gpu-2404 cleanup deletes every library under usr/lib that its mesa content
+  # snap also carries, libX11 among them, because the extension's wrapper puts
+  # that content snap on the path. Only the window has the wrapper (decision 1),
+  # so for the daemon the library was simply gone. CI's first snap build found
+  # it: the build succeeded and pack-snap.sh's library check failed.
+  native-libs:
+    plugin: nil
+    stage-packages:
+      - libpulse0
+      - libx11-6
+      - libwayland-client0
+    organize:
+      'usr/lib/x86_64-linux-gnu/*': lib/native/
+
+  # THE EXPORT ENCODER: MP3, AAC and FLAC. A snap cannot see the host's ffmpeg,
+  # so it carries a minimal LGPL one, at $SNAP/ffmpeg/ffmpeg, which is where
+  # FfmpegDetector looks inside a snap. build/build-ffmpeg.sh is the one recipe
+  # for both store packages: it fetches ffmpeg at a pinned commit and LAME at a
+  # pinned SHA-256, verifies both, configures --disable-everything plus what an
+  # export uses, LGPL only, and writes LICENSE-FFMPEG.txt (the source offer)
+  # beside the binary. pack-snap.sh copies the script into ffmpeg-recipe/ and
+  # checks the result (check-ffmpeg-bundle.sh) on the finished snap and, with
+  # --test-install, under confinement. The tarball carries no ffmpeg.
+  ffmpeg:
+    plugin: nil
+    source: ffmpeg-recipe
+    build-packages:
+      - gcc
+      - make
+      - git
+      - curl
+      - ca-certificates
+    override-build: |
+      bash build-ffmpeg.sh --fetch --work "$CRAFT_PART_BUILD/work" --out "$CRAFT_PART_INSTALL/ffmpeg"

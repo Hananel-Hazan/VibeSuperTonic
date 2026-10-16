@@ -750,8 +750,20 @@ namespace Supertonic
         // TextToSpeech loading
         // ============================================================================
 
-        public static TextToSpeech LoadTextToSpeech(string onnxDir, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0)
+        /// <param name="gpuActive">
+        /// True only when the DirectML provider was actually appended.
+        ///
+        /// <para>Reported rather than assumed, added 2026-08-19 for the thread
+        /// sweep. <c>useGpu</c> is a request; this is the answer. The two differ
+        /// on any machine without a usable DX12 device, and the difference used to
+        /// exist only as a line on the console — so a "DirectML" benchmark row on
+        /// such a machine would have been a CPU row wearing the wrong label, which
+        /// is the one outcome that makes the GPU question look answered when it
+        /// was never asked.</para>
+        /// </param>
+        public static TextToSpeech LoadTextToSpeech(string onnxDir, out bool gpuActive, bool useGpu = false, int intraOpThreads = 0, int interOpThreads = 1, int directMLDevice = 0, Action<SessionOptions, int>? appendGpuProvider = null)
         {
+            gpuActive = false;
             // When useGpu is true, append the DirectML execution provider for the device.
             // DirectML uses optimization passes specific to the GPU graph, so it cannot
             // share the CPU-optimized cache — we bypass the disk cache when on GPU.
@@ -791,12 +803,14 @@ namespace Supertonic
 
             if (useGpu)
             {
+#if ORT_DIRECTML
                 // AppendExecutionProvider_DML takes priority — ops it can't run fall back to CPU.
                 // Throws if the DirectML provider can't initialize (e.g. no DX12 GPU). We let
                 // that bubble up so the caller can fall back to CPU + log the failure.
                 try
                 {
                     opts.AppendExecutionProvider_DML(directMLDevice);
+                    gpuActive = true;
                     Console.WriteLine($"DirectML provider appended (device {directMLDevice})");
                 }
                 catch (Exception ex)
@@ -804,6 +818,30 @@ namespace Supertonic
                     Console.WriteLine($"DirectML init failed, falling back to CPU: {ex.Message}");
                     // Continue without DML; opts has only the default CPU provider.
                 }
+#else
+                // Not DirectML: this build is the Linux GPU package, where the GPU is
+                // CUDA. directMLDevice carries the device ordinal for whichever provider
+                // the build has — the name is DirectML's because the Windows engine calls
+                // it by name and renaming a parameter across a shipping platform to
+                // improve a comment is not a trade worth making.
+                //
+                // DELIBERATELY NOT SWALLOWED, unlike the DML path above. A missing
+                // provider library (the 330 MB pack that does not ship), a driver too
+                // old, or no device at all all throw here, and the caller has to learn
+                // that so it can fall back to CPU *and say which of those happened*. A
+                // GPU path that dies quietly is worse than no GPU path: the symptom is a
+                // hotkey that stopped working, which is the exact shape of the
+                // audio-device loss that hid for five hours.
+                //
+                // appendGpuProvider is how the daemon says WHICH vendor's provider: a
+                // delegate rather than a name, because this file is also compiled by
+                // the spikes, which reference none of the daemon's types. Null keeps
+                // the original behaviour, CUDA. The Windows build never reaches this
+                // branch and ignores the parameter.
+                if (appendGpuProvider is not null) appendGpuProvider(opts, directMLDevice);
+                else opts.AppendExecutionProvider_CUDA(directMLDevice);
+                Console.WriteLine($"GPU provider appended (device {directMLDevice})");
+#endif
             }
             else if (!cacheHit)
             {

@@ -1,0 +1,1720 @@
+using System.Collections.Concurrent;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Channels;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Ipc;
+using VibeSuperTonic.Core.Session;
+using VibeSuperTonic.Core.Synthesis;
+using VibeSuperTonic.Core.Telemetry;
+using VibeSuperTonic.Daemon.Interop;
+
+namespace VibeSuperTonic.Daemon;
+
+/// <summary>
+/// The control socket, the state machine, and the one place a request from the
+/// hotkey, the tray or D-Bus is turned into an action.
+///
+/// <para><b>The state machine lives here, not in the client.</b> The client
+/// connects, writes one line and exits — it has nothing to remember, which is
+/// what lets it be a process that starts in a millisecond, and what makes the
+/// behaviour identical no matter which surface the request came from.</para>
+///
+/// <para><b>Events go out over <c>subscribe</c> and nowhere else</b> [R-1]. The
+/// tray and window will live in this process in Phase 6, which makes it trivial
+/// for them to read session state directly — and then splitting them out, or
+/// adding any external subscriber, becomes a rewrite. Building the stream first,
+/// with a client that only prints it, is the enforcement.</para>
+/// </summary>
+public sealed partial class DaemonServer : IDisposable
+{
+    private readonly DaemonOptions _options;
+    private readonly HostConfig _config;
+    private readonly ISelectionSource _selection;
+    private readonly ISynthesizer _synth;
+    private readonly SpeechSession _session;
+    private readonly LazyAudioSink? _sink;
+    private readonly ToggleGate _gate = new();
+    private readonly object _gateLock = new();
+
+    private readonly ConcurrentDictionary<Guid, Subscriber> _subscribers = new();
+    private volatile bool _modelLoaded;
+
+    private readonly Func<int, string, ISynthesizer>? _synthesizerFor;
+    private readonly ProviderSwitchingSynthesizer? _switch;
+
+    /// <summary>
+    /// Routes each utterance to the engine its voice belongs to, and is null in
+    /// tests that drive one synthesizer directly. When it is null every voice is
+    /// Supertonic's, which is exactly what those tests mean.
+    /// </summary>
+    private readonly EngineRoutingSynthesizer? _engines;
+
+    /// <summary>
+    /// What the startup check concluded about this install, computed once in
+    /// <c>Program</c> before the socket existed and reported by <c>config</c>.
+    ///
+    /// <para>Held rather than recomputed per request, because it is a statement
+    /// about a comparison that happened at startup: the fingerprint is rewritten
+    /// as soon as it is read, so asking again would compare now against now and
+    /// answer "nothing moved" no matter what.</para>
+    /// </summary>
+    private readonly VibeSuperTonic.Core.Install.InstallCheck? _installCheck;
+
+    /// <summary>
+    /// What this daemon has measured about its own speech, for
+    /// <see cref="RequestVerb.Diagnostics"/>. Fed from the session's events here
+    /// and from the render path by <see cref="DiagnosticSynthesizer"/>; never null,
+    /// so a test that builds a server without one still gets an honest, empty
+    /// answer rather than a NullReferenceException.
+    /// </summary>
+    private readonly DiagnosticsTracker _diagnostics;
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
+
+    /// <summary>
+    /// What is in force right now — asked of the switch rather than remembered,
+    /// because it changes between utterances as of Phase 8b. A field holding the
+    /// startup answer would report "CUDA" for the rest of the session to a user
+    /// who unplugged their laptop an hour ago.
+    /// </summary>
+    private ExecutionDecision Execution =>
+        _switch?.Decision ?? new ExecutionDecision(CpuBudget.Auto, "cpu", "not recorded", FromProfile: false);
+
+    // 0 idle, 1 sweeping. A second benchmark would measure the first one.
+    private int _benchmarking;
+
+    /// <summary>
+    /// Linked to the token <see cref="RunAsync"/> was given, so the daemon can
+    /// stop itself without <c>Program</c> having to hand its lifetime source into
+    /// the server. Cancelling it ends the accept loop exactly as a signal does,
+    /// which means <c>shutdown</c> and SIGTERM leave by the same door — and that
+    /// door is the one already known to stop speech and release the audio device
+    /// cleanly.
+    /// </summary>
+    private CancellationTokenSource? _stopping;
+
+    /// <summary>Bound by <see cref="Bind"/>, served by <see cref="RunAsync"/>, closed by Dispose.</summary>
+    private Socket? _listener;
+
+    /// <summary>True when the socket is an abstract name (a snap's) rather than a file.</summary>
+    private bool _abstractSocket;
+
+    /// <summary>
+    /// Raised, with the waiting revision, when snapd is holding an update back
+    /// because this snap is running. The tray asks the user. See
+    /// <see cref="SnapUpdateWatch"/>.
+    /// </summary>
+    public event Action<int>? UpdatePending;
+
+    /// <summary>The revision last reported through <see cref="UpdatePending"/>, or 0.</summary>
+    private int _pendingRevision;
+    /// <param name="sink">
+    /// The deferred audio device, so the speak path can open it and report a
+    /// failure to the caller. Null in tests that drive the session directly.
+    /// </param>
+    /// <param name="synthesizerFor">
+    /// Builds a synthesizer for a given intra-op thread count and provider, for
+    /// <see cref="RequestVerb.Benchmark"/>. Null disables the verb — which is the
+    /// right answer for a test that has no models, and the reason the failure is
+    /// a sentence rather than a NullReferenceException.
+    /// </param>
+    /// <param name="providerSwitch">
+    /// The synthesizer the session speaks through, which owns the provider and
+    /// thread count in force and can change them between utterances. Null in
+    /// tests that drive a fixed synthesizer directly, where "not recorded" is the
+    /// honest answer to <c>config</c>.
+    /// </param>
+    /// <param name="engines">
+    /// Routes each utterance to the engine its voice belongs to. Null in tests
+    /// that drive one synthesizer directly, which is what "every voice is
+    /// Supertonic's" means there.
+    /// </param>
+    public DaemonServer(DaemonOptions options, HostConfig config, ISynthesizer synth,
+        SpeechSession session, ISelectionSource? selection = null, LazyAudioSink? sink = null,
+        Func<int, string, ISynthesizer>? synthesizerFor = null,
+        ProviderSwitchingSynthesizer? providerSwitch = null,
+        EngineRoutingSynthesizer? engines = null,
+        VibeSuperTonic.Core.Install.InstallCheck? installCheck = null,
+        DiagnosticsTracker? diagnostics = null)
+    {
+        _diagnostics = diagnostics ?? new DiagnosticsTracker();
+        _options = options;
+        _config = config;
+        _synth = synth;
+        _session = session;
+        _selection = selection ?? new NullSelectionSource();
+        _sink = sink;
+        _synthesizerFor = synthesizerFor;
+        _switch = providerSwitch;
+        _engines = engines;
+        _installCheck = installCheck;
+
+        _session.Emitted += OnSessionEvent;
+    }
+
+    private sealed class Subscriber
+    {
+        /// <summary>
+        /// How many lines a subscriber may fall behind before it is dropped. At
+        /// three or four word boundaries a second that is minutes of slack, far
+        /// more than a GC pause or a busy window needs, and small enough that a
+        /// subscriber which has stopped reading costs a few hundred KB at most.
+        /// </summary>
+        public const int QueueLines = 1024;
+
+        public required StreamWriter Writer { get; init; }
+
+        /// <summary>
+        /// Lines waiting for <see cref="PumpAsync"/>. Events are raised on the
+        /// audio thread, so they are queued here and never written to the socket
+        /// from there: a subscriber that stops reading fills its socket buffer,
+        /// and a blocking write would freeze speech mid-word.
+        /// </summary>
+        public Channel<string> Queue { get; } = Channel.CreateBounded<string>(
+            new BoundedChannelOptions(QueueLines) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+
+        /// <summary>Ends this connection: the pump, and the read that parks it.</summary>
+        public required CancellationTokenSource Abort { get; init; }
+
+        /// <summary>What connected, from the subscribe request's hello. Null for
+        /// an anonymous subscriber, which is what `vst-ctl subscribe` is.</summary>
+        public string? Kind { get; init; }
+        public int? Pid { get; init; }
+
+        public object Lock { get; } = new();
+    }
+
+    /// <summary>
+    /// Is a window attached? The tray icon's answer — it shows a different state
+    /// when the Reader is open, and the daemon owns the icon while the UI comes
+    /// and goes.
+    /// </summary>
+    public bool UiAttached =>
+        _subscribers.Values.Any(s => s.Kind == Request.ClientKindUi);
+
+    /// <summary>Raised when that answer changes, so the tray icon can redraw.</summary>
+    public event Action? UiAttachedChanged;
+
+    /// <summary>
+    /// What the tray is doing, for <c>status</c>. A function rather than a value
+    /// because the tray is built after this server — it needs a way to invoke
+    /// verbs — and because the honest answer changes while the daemon runs.
+    ///
+    /// <para>It is reported at all because the alternative is the failure mode
+    /// the plan names: a daemon with no session bus presents as a tray that
+    /// silently never appears, with nothing anywhere saying why.</para>
+    /// </summary>
+    public Func<string>? TrayStatus { get; set; }
+
+    /// <summary>
+    /// Run a verb as though it had arrived on the socket. The tray's only way in
+    /// — it is a client that happens to share a process, and parity says its
+    /// menu rows call the same verbs <c>vst-ctl</c> does rather than reaching
+    /// past them into the session.
+    /// </summary>
+    public Response Invoke(Request request) => Handle(request);
+
+    /// <summary>
+    /// The session the socket's clients last reported, for the tray's window.
+    /// Fed only from the socket: <see cref="Invoke"/> is the tray, which is this
+    /// process, and carries the very environment this replaces.
+    /// </summary>
+    public ClientDisplay ClientDisplay { get; } = new();
+
+    // --------------------------------------------------------------- listening
+
+    /// <summary>
+    /// Bind and serve until <paramref name="token"/> fires.
+    /// </summary>
+    /// <exception cref="IOException">Another daemon holds the socket.</exception>
+    /// <summary>
+    /// Claim the control socket, and nothing else.
+    ///
+    /// <para><b>Separate from <see cref="RunAsync"/> so it can happen FIRST.</b>
+    /// Binding used to be the first thing the accept loop did, which put it
+    /// after the tray icon and after <c>--preload</c>. Both are wrong in the
+    /// same direction: a daemon that loses the race for the socket registers a
+    /// tray icon and then exits, so for a moment the user has two — and a
+    /// preloading daemon spends seconds loading the model set before it listens,
+    /// while <c>vst-ctl</c>'s autostart waits five seconds for an answer and then
+    /// reports that it started a daemon which never accepted a connection. The
+    /// second one is [R-5](LINUX-PORT-ARCHIVE.md#r-5) arriving through the door
+    /// R-5 opened.</para>
+    ///
+    /// <para>Idempotent: <see cref="RunAsync"/> calls it when nothing else has.</para>
+    /// </summary>
+    public void Bind()
+    {
+        if (_listener is not null) return;
+
+        string path = Protocol.SocketPath();
+
+        // An abstract name — a snap's, see SnapPeer — is not a file: there is no
+        // directory to make, no mode to set and no stale file to clear, and a
+        // second daemon is refused by bind() itself. What replaces the file
+        // mode is the peer check in RunAsync.
+        _abstractSocket = Protocol.IsAbstract(path);
+        if (!_abstractSocket)
+        {
+            string dir = Path.GetDirectoryName(path)!;
+
+            Directory.CreateDirectory(dir);
+            // Explicit rather than inherited. Under $XDG_RUNTIME_DIR the parent is
+            // already 0700, but the /tmp fallback is world-writable and the socket
+            // is a remote-control interface for the user's speakers.
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            ClearStaleSocket(path);
+        }
+
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            listener.Bind(Protocol.EndPoint(path));
+        }
+        catch (SocketException ex)
+        {
+            // Two daemons started at once and the other won the race between
+            // ClearStaleSocket and Bind.
+            throw new IOException($"could not bind {path}: {ex.Message}", ex);
+        }
+        catch (ArgumentException ex)
+        {
+            // A unix socket path is capped at 108 bytes by the kernel, and
+            // $XDG_RUNTIME_DIR is somebody else's variable — a container, a
+            // deeply nested scratch directory, or an su'd session can all make
+            // one long enough to break the cap. Constructing the endpoint throws
+            // ArgumentOutOfRangeException, which is NOT a SocketException, so it
+            // escaped as an unhandled exception: no log line, exit 134 and a core
+            // file, which is what journald and a systemd restart policy would
+            // read as a crash. Same class of failure as the audio device and the
+            // missing models, and the same fix — say what is wrong, in the place
+            // that is read.
+            throw new IOException(
+                $"cannot use {path} as a control socket: {ex.Message} " +
+                "Set $XDG_RUNTIME_DIR to a shorter directory.", ex);
+        }
+
+        if (!_abstractSocket)
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        // A unix socket whose accept queue is full fails connect() with EAGAIN
+        // immediately — it does not queue and it does not wait. At a backlog of
+        // 16, twenty threads issuing status calls lost 158 connections out of
+        // 400 under stress. Worse than the failure itself is what the client
+        // concluded from it: a failed connect used to read as "no daemon is
+        // listening", which is the trigger for auto-starting one (R-5).
+        listener.Listen(512);
+        _listener = listener;
+
+        Log($"listening on {path}");
+    }
+
+    public async Task RunAsync(CancellationToken token)
+    {
+        Bind();
+        var listener = _listener!;
+
+        // Everything below runs on the linked token rather than the caller's, so
+        // that the `shutdown` verb can end the loop from inside a connection.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _stopping = stopping;
+        var serving = stopping.Token;
+        _ = WatchForUpdateAsync(serving);
+
+        try
+        {
+            while (!serving.IsCancellationRequested)
+            {
+                Socket client;
+                try { client = await listener.AcceptAsync(serving); }
+                catch (OperationCanceledException) { break; }
+
+                // An abstract socket has no file mode, so anyone on the machine
+                // can connect to it. Only this user may drive these speakers.
+                if (_abstractSocket && !PeerCredentials.IsSameUser(client))
+                {
+                    Log($"refused a connection from uid {PeerCredentials.PeerUid(client)?.ToString() ?? "unknown"}: " +
+                        "only this daemon's own user may control it");
+                    client.Dispose();
+                    continue;
+                }
+
+                // Fire and forget: one misbehaving client must not stall accept.
+                _ = Task.Run(() => ServeAsync(client, serving), CancellationToken.None);
+            }
+        }
+        finally
+        {
+            _stopping = null;
+            listener.Close();
+            _listener = null;
+            // The socket file, not the listener: a leftover path is what the next
+            // daemon has to reason about in ClearStaleSocket, and leaving one
+            // behind on a clean exit makes that job harder for no reason.
+            if (!_abstractSocket)
+                try { File.Delete(Protocol.SocketPath()); } catch { /* going away anyway */ }
+        }
+    }
+
+    /// <summary>
+    /// End the accept loop, as if a signal had arrived. Safe to call more than
+    /// once and safe to call before <see cref="RunAsync"/> has started, which is
+    /// what the null check is for — a client cannot reach this before the socket
+    /// exists, but a test can.
+    /// </summary>
+    private void RequestShutdown()
+    {
+        try { _stopping?.Cancel(); }
+        catch (ObjectDisposedException) { /* already on the way out */ }
+    }
+
+    /// <summary>
+    /// Remove a socket file left behind by a daemon that died without cleaning
+    /// up — a crash, or a kill -9. Probing by connecting is the only reliable
+    /// test: the file's existence says nothing about whether anyone is
+    /// listening, and deleting a live daemon's socket would leave it running but
+    /// unreachable, which is far worse than refusing to start.
+    /// </summary>
+    private static void ClearStaleSocket(string path)
+    {
+        if (!File.Exists(path)) return;
+
+        try
+        {
+            using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            probe.Connect(new UnixDomainSocketEndPoint(path));
+            throw new IOException($"another vibesupertonicd is already listening on {path}");
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
+        {
+            // Nobody is listening: the file outlived its daemon. This is the
+            // only error that proves that, and therefore the only one that
+            // justifies deleting the file.
+            File.Delete(path);
+        }
+        catch (SocketException ex)
+        {
+            // Anything else — EAGAIN from a saturated accept queue being the
+            // realistic one — means the daemon may well be alive and merely
+            // busy. The old code deleted the socket for any SocketException at
+            // all, so a burst of load could make a second daemon unlink a live
+            // daemon's socket and bind its own: two processes, one holding the
+            // audio device and now unreachable by any client. This method's own
+            // comment already said that is far worse than refusing to start,
+            // and it is exactly what the code did.
+            throw new IOException(
+                $"could not determine whether a daemon is listening on {path} " +
+                $"({ex.SocketErrorCode}). Refusing to start rather than risk " +
+                "unlinking a live daemon's socket.", ex);
+        }
+    }
+
+    // ------------------------------------------------------------- connections
+
+    private async Task ServeAsync(Socket client, CancellationToken token)
+    {
+        Guid id = Guid.NewGuid();
+        try
+        {
+            using var _ = client;
+            await using var stream = new NetworkStream(client, ownsSocket: false);
+            // detectEncodingFromByteOrderMarks: false is load-bearing, not
+            // tidiness. It defaults to true, and the protocol is bytes from an
+            // arbitrary local client — so a request beginning 0xFF 0xFE is read
+            // as a UTF-16LE byte-order mark, silently switches this connection's
+            // decoder, and every subsequent byte is decoded as UTF-16. The
+            // newline that frames the protocol then never appears and the
+            // connection hangs until the client times out. Found by fuzzing:
+            // "raw binary" was the one malformed input that produced no reply
+            // at all rather than "unparseable request".
+            using var reader = new StreamReader(
+                stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
+            var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+            while (!token.IsCancellationRequested)
+            {
+                string? line = await reader.ReadLineAsync(token);
+                if (line is null) break;              // client hung up
+
+                var request = Protocol.TryDecode<Request>(line);
+                if (request is null)
+                {
+                    await WriteAsync(writer, Response.Fail("unparseable request"));
+                    continue;
+                }
+                ClientDisplay.Observe(request);
+
+                if (request.Verb == RequestVerb.Subscribe)
+                {
+                    // The snapshot rides on the subscribe reply rather than being
+                    // fetched separately, and that is the whole point: a client
+                    // that called status and then subscribed would miss every
+                    // event in between, which at 3-4 word boundaries a second is
+                    // a highlight that starts out wrong.
+                    //
+                    // Registering and snapshotting under the subscriber's own
+                    // lock is what closes the gap. Writing the reply first and
+                    // registering after — which is what this did — guaranteed
+                    // the snapshot was never NEWER than the first streamed
+                    // event, but left a window where an event fired between the
+                    // two reached nobody at all: the subscriber did not exist
+                    // yet, and the snapshot it had just been sent predated the
+                    // event. Phase 6's highlight would sit one word stale until
+                    // the next boundary arrived. Holding the lock makes any
+                    // concurrent event queue behind the snapshot instead, so the
+                    // stream is both ordered and gapless.
+                    using var abort = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    var subscriber = new Subscriber
+                    {
+                        Writer = writer,
+                        Kind = request.ClientKind,
+                        Pid = request.ClientPid,
+                        Abort = abort,
+                    };
+
+                    // Only identified clients are logged. An anonymous subscriber
+                    // is someone running `vst-ctl subscribe | jq`, and a line per
+                    // debugging session is noise in the file that exists to make
+                    // a silent press explainable.
+                    if (subscriber.Kind is { } kind)
+                    {
+                        Log($"{kind} attached (pid {subscriber.Pid?.ToString() ?? "unknown"})");
+                        if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
+                    }
+
+                    // The snapshot goes through the queue like every event after
+                    // it, so the ordering argument above still holds: anything
+                    // raised concurrently queues behind it.
+                    lock (subscriber.Lock)
+                    {
+                        _subscribers[id] = subscriber;
+                        subscriber.Queue.Writer.TryWrite(Protocol.Encode(
+                            new Response { Ok = true, Status = Snapshot() }));
+                    }
+
+                    // The connection now belongs to the event stream. Park here
+                    // until the client goes away, or until it is dropped for
+                    // falling behind; anything it sends afterwards is ignored,
+                    // because a subscription is not a session.
+                    var pump = PumpAsync(subscriber);
+                    try { await reader.ReadToEndAsync(abort.Token); }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                    finally
+                    {
+                        _subscribers.TryRemove(new KeyValuePair<Guid, Subscriber>(id, subscriber));
+                        abort.Cancel();
+                        await pump;
+                    }
+                    break;
+                }
+
+                if (request.Verb == RequestVerb.Benchmark)
+                {
+                    // The only verb that answers more than once. It writes a row
+                    // per configuration and then a terminal reply, so it owns the
+                    // writer for the duration rather than returning a Response.
+                    await BenchmarkAsync(writer, request, token);
+                    continue;
+                }
+
+                if (request.Verb == RequestVerb.Render)
+                {
+                    // The third multi-reply verb. Same contract: replies until
+                    // one carries Audio.Final, and the writer belongs to it for
+                    // the duration.
+                    //
+                    // A render comes from the Speech Dispatcher module, so the screen
+                    // reader is on this voice again: the note saying otherwise goes.
+                    if (SteppedAsidePath() is { } note && File.Exists(note))
+                    {
+                        try { File.Delete(note); Log("update: the screen reader is speaking through VibeSuperTonic again"); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                    }
+                    await RenderAsync(writer, request, token);
+                    continue;
+                }
+
+                if (request.Verb == RequestVerb.VoiceInstall)
+                {
+                    // The second multi-reply verb, and it follows the first's
+                    // contract exactly: progress lines, then one reply without
+                    // a progress field. It owns the writer for the duration.
+                    await VoiceInstallAsync(writer, request, token);
+                    continue;
+                }
+
+                if (request.Verb == RequestVerb.Shutdown)
+                {
+                    // Answer BEFORE tearing anything down. Cancelling first would
+                    // race the listener's close against this write, and the client
+                    // would see "the daemon closed the connection without
+                    // replying" — a success that reads as a failure, on the one
+                    // verb whose whole job is to end the process.
+                    await WriteAsync(writer, Response.Success());
+                    Log("shutdown requested");
+                    RequestShutdown();
+                    break;
+                }
+
+                await WriteAsync(writer, Handle(request));
+            }
+        }
+        catch (IOException) { /* client vanished mid-write */ }
+        catch (OperationCanceledException) { /* shutting down */ }
+        catch (Exception ex) { Log($"connection error: {ex.GetType().Name}: {ex.Message}"); }
+        finally
+        {
+            if (_subscribers.TryRemove(id, out var gone) && gone.Kind is { } kind)
+            {
+                Log($"{kind} detached (pid {gone.Pid?.ToString() ?? "unknown"})");
+                if (kind == Request.ClientKindUi) UiAttachedChanged?.Invoke();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Capture the selection in the session the latest client reported, not the
+    /// one this daemon started in. A press's own <c>$DISPLAY</c> wins; the tray's
+    /// requests carry none and take the latest report. On X11 the cookie file
+    /// follows too; see <see cref="NativeXAuthority"/>.
+    /// </summary>
+    private SelectionResult CaptureSelection(Request request)
+    {
+        var session = ClientDisplay.ForWindow(File.Exists);
+        string? display = !string.IsNullOrWhiteSpace(request.Display)
+            ? request.Display
+            : session.GetValueOrDefault("DISPLAY");
+        if (_selection is X11SelectionSource && NativeXAuthority.Apply(session) is { } changed) Log(changed);
+        return _selection.Capture(display);
+    }
+
+    /// <summary>
+    /// Inside a snap only: look for an update snapd is holding back, and report
+    /// each new one once. Never acts on it; see <see cref="SnapUpdateWatch"/>.
+    /// Runs on the serving token, so it ends with the accept loop.
+    /// </summary>
+    private async Task WatchForUpdateAsync(CancellationToken token)
+    {
+        // Validated, not just "$SNAP is set": a tarball daemon started from a
+        // snap's terminal inherits $SNAP and must not act on it.
+        if (SnapPeer.Current is null) return;
+        string? snap = Environment.GetEnvironmentVariable("SNAP");
+        string? instance = Environment.GetEnvironmentVariable("SNAP_INSTANCE_NAME");
+        string? own = SnapUpdateWatch.OwnRevision(snap);
+        if (own is null || instance is null) return;
+        ClearStaleUpdateMarker(own);
+
+        try
+        {
+            // Once at start as well: a daemon started while an update already
+            // waits should say so on the first look, not five minutes later.
+            do
+            {
+                int? pending = SnapUpdateWatch.Pending(instance, own, SnapUpdateWatch.CurrentRevision(snap), File.Exists);
+                if (pending is { } rev && rev != _pendingRevision)
+                {
+                    _pendingRevision = rev;
+                    Log($"update: revision {rev} is waiting to replace revision {own}; asking the user");
+                    UpdatePending?.Invoke(rev);
+                }
+            }
+            while (await WaitAsync(SnapUpdateWatch.Interval, token));
+        }
+        catch (OperationCanceledException) { /* shutting down anyway */ }
+        catch (Exception ex) { Log($"update watch stopped: {ex.GetType().Name}: {ex.Message}"); }
+
+        static async Task<bool> WaitAsync(TimeSpan delay, CancellationToken token)
+        {
+            await Task.Delay(delay, token);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The user chose to update now. Close everything of ours that holds the
+    /// update back, and snapd applies it once the last one is gone: the window
+    /// (told through its event stream), the Speech Dispatcher module (through
+    /// the marker file it watches), and this daemon.
+    /// </summary>
+    public void ApplyUpdate()
+    {
+        string? own = SnapUpdateWatch.OwnRevision(Environment.GetEnvironmentVariable("SNAP"));
+        string? common = Environment.GetEnvironmentVariable("SNAP_USER_COMMON");
+        if (SnapPeer.Current is null || own is null || string.IsNullOrEmpty(common)) return;
+
+        try { File.WriteAllText(Path.Combine(common, SnapUpdateMarker.FileName), own); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"update: could not tell the Speech Dispatcher module to step aside: {ex.Message}");
+        }
+
+        Log($"update: the user chose to update now; closing revision {own}");
+        _session.Stop();
+        OnSessionEvent(new SessionEvent { Kind = SessionEventKind.UpdateStarting });
+        // A moment for the event to reach the window before the socket closes.
+        _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(_ => RequestShutdown(), TaskScheduler.Default);
+    }
+
+    /// <summary>A marker naming another revision was for a module that is gone by now.</summary>
+    private static void ClearStaleUpdateMarker(string own)
+    {
+        string? common = Environment.GetEnvironmentVariable("SNAP_USER_COMMON");
+        if (string.IsNullOrEmpty(common)) return;
+        string path = Path.Combine(common, SnapUpdateMarker.FileName);
+        try
+        {
+            if (File.Exists(path) && File.ReadAllText(path).Trim() != own) File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* harmless */ }
+    }
+
+    private static async Task WriteAsync(StreamWriter writer, Response response) =>
+        await writer.WriteLineAsync(Protocol.Encode(response));
+
+    // ---------------------------------------------------------------- dispatch
+
+    private Response Handle(Request request)
+    {
+        switch (request.Verb)
+        {
+            case RequestVerb.Toggle:
+                return Toggle(request);
+
+            case RequestVerb.Speak:
+                if (string.IsNullOrWhiteSpace(request.Text))
+                    return Response.Fail("speak needs text");
+                return StartSpeaking(request.Text, request);
+
+            case RequestVerb.Read:
+                return ReadSelection(request);
+
+            case RequestVerb.Seek:
+                return Seek(request);
+
+            case RequestVerb.Stop:
+                lock (_gateLock) _gate.NoteState(SpeechState.Stopping);
+                _session.Stop();
+                return Response.Success();
+
+            case RequestVerb.Pause:
+                _session.Pause();
+                return Response.Success();
+
+            case RequestVerb.Resume:
+                _session.Resume();
+                return Response.Success();
+
+            case RequestVerb.Status:
+                return new Response { Ok = true, Status = Snapshot() };
+
+            case RequestVerb.Reload:
+                RefreshConfig(force: true);
+                return new Response
+                {
+                    Ok = true,
+                    Notice = _config.Notes.Count > 0 ? string.Join(" ", _config.Notes) : null,
+                };
+
+            case RequestVerb.Config:
+                RefreshConfig(force: false);
+                return new Response { Ok = true, Config = ConfigSnapshot() };
+
+            case RequestVerb.Diagnostics:
+                return new Response
+                {
+                    Ok = true,
+                    Diagnostics = DiagnosticsSnapshot(
+                        includeSnippet: request.Text == Protocol.DiagnosticsSnippet),
+                };
+
+            case RequestVerb.Voices:
+                return Voices();
+
+            case RequestVerb.VoiceRemove:
+                return VoiceRemove(request);
+
+            case RequestVerb.Render:
+                return Response.Fail("render streams audio and must be sent over a connection");
+
+            case RequestVerb.VoiceInstall:
+                // Handled in the connection loop, which owns the writer for the
+                // duration. Same shape as Shutdown below: reaching here means a
+                // direct call, and answering honestly beats "unsupported verb"
+                // about a verb that exists.
+                return Response.Fail("voice install streams progress and must be sent over a connection");
+
+            case RequestVerb.Shutdown:
+                // Handled in the connection loop, which owns the ordering between
+                // the reply and the teardown. Reaching here means someone called
+                // Handle directly, and answering honestly beats falling through
+                // to "unsupported verb" — which would be a lie about a verb that
+                // exists.
+                RequestShutdown();
+                return Response.Success();
+
+            default:
+                return Response.Fail($"unsupported verb {request.Verb}");
+        }
+    }
+
+    /// <summary>
+    /// Everything a client needs to render the current moment without having
+    /// watched the whole utterance.
+    /// </summary>
+    /// <summary>
+    /// argv beats the file, and a per-request value beats both. An explicit ask
+    /// is always more specific than a stored preference — while the file
+    /// winning by default is what makes a portable folder resume with the voice
+    /// it was last used with.
+    /// </summary>
+    /// <summary>
+    /// The voice the next press would use, as configured — possibly
+    /// engine-qualified. <c>ConfiguredVoice</c> resolves the two settings keys;
+    /// a --voice override on the command line still wins over both.
+    /// </summary>
+    private string EffectiveVoice => _options.VoiceOverride ?? _config.ConfiguredVoice;
+    private string EffectiveLanguage => _options.LanguageOverride ?? _config.Settings.Language;
+
+    /// <summary>
+    /// Two notices, or whichever of them exists. The capture path already has
+    /// something to say often enough that dropping one for the other would hide
+    /// whichever came second.
+    /// </summary>
+    private static string? Combine(string? first, string? second) =>
+        first is null ? second
+        : second is null ? first
+        : $"{first} {second}";
+
+    /// <summary>
+    /// Everything one utterance needs, and the moment the engine may change.
+    ///
+    /// <para><b>Three things happen here and their order is load-bearing.</b>
+    /// The engine is selected from the voice, then the sink is re-tuned to
+    /// whatever that engine renders at, and only then are the session's DSP
+    /// options set. All three are between utterances by construction — the
+    /// session is idle at every call site — for the reason the audio-device
+    /// reconnect and the provider switch already document, plus one that is
+    /// specific to this layer: the engines do not share a sample rate, so a
+    /// change inside an utterance would play the remainder at the wrong speed
+    /// as well as putting every boundary permanently wrong.</para>
+    ///
+    /// <para>The stretch factor is per UTTERANCE rather than per reload now,
+    /// because it depends on which engine speaks: Supertonic splits the
+    /// requested rate with the DSP stage, and Piper gives all of it to
+    /// <c>length_scale</c> until the model saturates just under 2x.</para>
+    /// </summary>
+    /// <param name="interrupting">
+    /// True for the verbs that replace whatever is playing — <c>read</c> and
+    /// <c>seek</c>. An engine change needs an idle session, and on those paths
+    /// the session is about to be stopped anyway, so it is stopped HERE rather
+    /// than refused: without this, pressing the read key while a Supertonic
+    /// utterance plays would refuse to switch to a Piper voice, which is the
+    /// single most ordinary thing a user can do with two engines installed.
+    /// </param>
+    /// <returns>The options to speak with, or null when <paramref name="refusal"/> says why not.</returns>
+    private SynthesisOptions? PlanUtterance(
+        string? voice, string? language, bool interrupting, out Response? refusal, out string? note)
+    {
+        var plan = _config.Utterance(
+            voice ?? _options.VoiceOverride,
+            language ?? _options.LanguageOverride);
+        note = plan.Note;
+        refusal = null;
+
+        if (_engines is { } engines)
+        {
+            var selection = engines.Select(plan.Synthesis.VoiceId);
+
+            if (selection.NeedsIdle && interrupting)
+            {
+                // The same stop Restart is about to perform, brought forward so
+                // the engine can move before the new utterance is planned. Bounded
+                // the way Restart bounds it, and for the same reason: a wedged
+                // worker must not hold the client's request open forever.
+                _session.Stop();
+                try { _session.Completion.Wait(3000); } catch { /* faulted or cancelled; it is done */ }
+                selection = engines.Select(plan.Synthesis.VoiceId);
+            }
+
+            if (selection.NeedsIdle)
+            {
+                refusal = Refuse($"busy ({_session.State})");
+                return null;
+            }
+
+            if (selection.Error is { } error)
+            {
+                refusal = Response.Fail(error);
+                return null;
+            }
+
+            // The sink follows the model. Nothing in this product resamples, so
+            // this is what makes a 22050 Hz voice play at its own speed rather
+            // than 2x fast on a device opened for Supertonic.
+            if (_sink is { } sink && sink.Retune(selection.SampleRate))
+                Log($"audio: re-tuned to {selection.SampleRate} Hz for {plan.Engine}");
+        }
+
+        // Scoped to the voice about to speak, not to the file's globals: chunk
+        // sizes, volume trim and inter-chunk silence are as much "how this voice
+        // sounds" as its rate is, so they follow the same PerEngine/PerVoice
+        // rules. Identical to SessionOptions — the same object — when nothing is
+        // overridden, which is every install that has not used the scope
+        // selector.
+        // The SAME expression the plan was built from, override included: asking
+        // for one voice's plan and another's chunking is a bug that would only
+        // show as slightly wrong pacing on a --voice request.
+        _session.Options = _config.SessionOptionsFor(voice ?? _options.VoiceOverride)
+            with { StretchFactor = plan.StretchFactor };
+        return plan.Synthesis;
+    }
+
+    /// <summary>
+    /// Pick up an edited settings.json / pronunciations.json and hand the result
+    /// to the session. Cheap: two stats, and a rebuild only when a timestamp
+    /// actually moved.
+    /// </summary>
+    private void RefreshConfig(bool force)
+    {
+        if (_config.Reload(force))
+            _session.Options = _config.SessionOptions;
+    }
+
+    private ConfigPayload ConfigSnapshot()
+    {
+        // The store's reason belongs with the other non-fatal explanations
+        // rather than in the field itself: FirstRunView writes 383 MB to this
+        // path, and a client that has to strip a parenthesis off it before
+        // calling Path.Combine is a client that will one day forget.
+        var notes = LinuxDataPaths.IsAppImage
+            ? _config.Notes
+                .Append($"running from {LinuxDataPaths.AppImageFile} — models and data are in " +
+                        $"{LinuxDataPaths.StoreRoot} ({LinuxDataPaths.Store.Reason}), " +
+                        "not beside the program, because an AppImage is read-only.")
+                .ToList()
+            : LinuxDataPaths.Sandbox is { } sandbox
+                ? _config.Notes
+                    .Append($"running as a {(sandbox.Kind == LinuxDataPaths.SandboxKind.Snap ? "snap" : "Flatpak")} " +
+                            $"({sandbox.Id}) — models and data are in {LinuxDataPaths.StoreRoot} " +
+                            $"({LinuxDataPaths.Store.Reason}), not beside the program, because the " +
+                            "program's own directory is read-only.")
+                    // The sandbox cannot bind the hotkeys or register with Speech
+                    // Dispatcher, so the window is where the user learns the command.
+                    .Append("hotkeys and the screen reader module are set up once, from a terminal: " +
+                            $"{LinuxDataPaths.SetupCommand(sandbox, "bind")} and " +
+                            $"{LinuxDataPaths.SetupCommand(sandbox, "speechd-install")}")
+                    .ToList()
+                : _config.Notes;
+
+        // The benchmark measured Supertonic, and it still governs the Supertonic
+        // session correctly — so this is a note rather than a staleness reason.
+        // What it is about is the OTHER session: Program builds a Piper session
+        // with the thread count this decision produced, and the two engines do
+        // not share a cost curve. P2 measured CUDA taking the Piper `high` tier
+        // 399 -> 116 ms and the `medium` tier only 72 -> 61, against a whole
+        // Supertonic pipeline; a count that is right for one is an extrapolation
+        // for the other. Saying so beats a number that looks measured and is not.
+        if (_engines is not null
+            && string.Equals(_config.Utterance(null, null).Engine, "piper", StringComparison.Ordinal)
+            && BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(_config.DataDir)) is { } measured
+            && measured.Machine.Engine is not "piper")
+        {
+            notes = notes.Append(
+                $"the stored benchmark was measured on {(measured.Machine.Engine is { Length: > 0 } e ? e : "supertonic")} " +
+                "and this daemon is speaking through piper. It still applies to the Supertonic " +
+                "session; the Piper session inherits its thread count, which was measured against " +
+                "a different cost curve.")
+                .ToList();
+        }
+
+        if (LinuxDataPaths.PortableHome is { } portable)
+            notes = notes.Append(
+                $"a portable home is in use ({portable}), so $HOME points inside it. " +
+                "Binding writes the desktop's shortcut configuration to your real home; " +
+                "the rest of this install stays self-contained.")
+                .ToList();
+
+        return new ConfigPayload(
+        LinuxDataPaths.BaseDir,
+        _config.DataDir,
+        _config.ModelsRoot,
+        _config.Writable,
+        File.Exists(_config.SettingsPath),
+        File.Exists(_config.PronunciationsPath),
+        _config.Pronunciations.Rules.Count,
+        _config.Pronunciations.Enabled,
+        EffectiveVoice,
+        EffectiveLanguage,
+        // The steps the EFFECTIVE VOICE runs at, not the file's top level: a
+        // Status tab that reports a number no utterance uses is worse than one
+        // that reports nothing.
+        _config.TotalStepFor(EffectiveVoice),
+        _config.Settings.MaxChunkChars,
+        _config.Settings.MinChunkChars,
+        _config.Settings.InterChunkSilenceMs,
+        notes,
+        Execution.Provider,
+        Execution.Threads,
+        Execution.Reason,
+        BenchmarkSnapshot(),
+        LinuxDataPaths.StoreRoot,
+        _installCheck,
+        File.Exists(SteppedAsidePath() ?? ""));
+    }
+
+    /// <summary>The module's "I stepped aside" note, or null outside a snap. See <see cref="SnapUpdateMarker"/>.</summary>
+    private static string? SteppedAsidePath() =>
+        SnapPeer.Current is null
+            ? null
+            : SnapUpdateMarker.PathIn(Environment.GetEnvironmentVariable("SNAP_USER_COMMON")) is { } marker
+                ? Path.Combine(Path.GetDirectoryName(marker)!, SnapUpdateMarker.SteppedAsideFileName)
+                : null;
+
+    /// <summary>
+    /// The stored profile as reported, re-tested against the machine as it is
+    /// now rather than as it was at startup.
+    ///
+    /// <para>Re-testing matters: <c>TotalStep</c> is a setting, so editing
+    /// <c>settings.json</c> can invalidate a profile without anything else
+    /// happening — and the moment a user asks <c>config</c> why their benchmark
+    /// stopped applying is exactly when the answer needs to be current.</para>
+    /// </summary>
+    private BenchmarkSummary? BenchmarkSnapshot()
+    {
+        var stored = BenchmarkStore.Load(LinuxDataPaths.BenchmarkFile(_config.DataDir));
+        if (stored is null) return null;
+
+        // THE VOICE THE SWEEP MEASURES, not the one that is speaking. The sweep
+        // is a Supertonic measurement, so comparing it against a Piper voice's
+        // step count reports a difference that means nothing and offers a
+        // re-measure that cannot run — see HostConfig.BenchmarkVoice.
+        string benchmarkVoice = _config.BenchmarkVoiceFor(EffectiveVoice);
+        var now = MachineFacts.Current(
+            _config.ModelsRoot, _config.TotalStepFor(benchmarkVoice), benchmarkVoice, EffectiveLanguage);
+
+        var staleness = stored.StalenessAgainst(now);
+
+        // "Applied" is about the session that is running, not only about
+        // staleness: a profile measured five minutes ago is perfectly valid and
+        // still not in force until the daemon restarts.
+        bool inForce = staleness.Count == 0
+                       && stored.Threads == Execution.Threads
+                       && string.Equals(stored.Provider, Execution.Provider, StringComparison.Ordinal);
+
+        var reasons = staleness.Count > 0
+            ? staleness
+            : inForce
+                ? Array.Empty<string>()
+                : new[] { "valid, but the daemon started before it was measured — restart to apply" };
+
+        return new BenchmarkSummary(
+            stored.MeasuredUtc, stored.Threads, stored.Provider, inForce, reasons);
+    }
+
+    // --------------------------------------------------------------- benchmark
+
+    /// <summary>
+    /// Sweep this machine and record the answer, reporting a row at a time.
+    ///
+    /// <para><b>Why the daemon runs it and not the client.</b> Sweeping means
+    /// building ONNX sessions, and <c>vst-ctl</c> is NativeAOT precisely so that
+    /// it carries nothing — putting ORT in it would trade 6 ms of process start
+    /// for ~100 ms on every hotkey press. The daemon is the process that already
+    /// has the model, so it is the one that can measure.</para>
+    ///
+    /// <para><b>What it costs while it runs.</b> One extra session at a time,
+    /// built and disposed per row, alongside whatever the daemon already holds.
+    /// Peak is therefore two sessions, not eight.</para>
+    /// </summary>
+    private async Task BenchmarkAsync(StreamWriter writer, Request request, CancellationToken token)
+    {
+        if (_synthesizerFor is null)
+        {
+            await WriteAsync(writer, Response.Fail("this daemon was built without a benchmark backend"));
+            return;
+        }
+
+        // Interlocked rather than a lock: the refusal has to be immediate and
+        // must never queue behind the sweep it is refusing to duplicate.
+        if (Interlocked.CompareExchange(ref _benchmarking, 1, 0) != 0)
+        {
+            await WriteAsync(writer, Response.Fail("a benchmark is already running"));
+            return;
+        }
+
+        try
+        {
+            RefreshConfig(force: false);
+
+            if (!Directory.Exists(Path.Combine(_config.ModelsRoot, "onnx")))
+            {
+                await WriteAsync(writer, Response.Fail(
+                    $"no onnx/ under {_config.ModelsRoot} — nothing to measure. " +
+                    "Download the models first."));
+                return;
+            }
+
+            // Speaking is the most obvious form of "this machine is busy", and it
+            // is also the one case where the load is ours: the sweep would both
+            // measure the utterance and stutter it.
+            if (_session.State != SpeechState.Idle)
+            {
+                await WriteAsync(writer, Response.Fail(
+                    "the daemon is speaking — stop it first, or the sweep measures the utterance"));
+                return;
+            }
+
+            var notes = new List<string>();
+            bool force = request.Force ?? false;
+
+            double load = await MachineFacts.IdleCpuPercentAsync(cancellationToken: token);
+            if (load >= LoadGuardPercent && !force)
+            {
+                await WriteAsync(writer, Response.Fail(
+                    $"this machine is {load:F0}% busy — a sweep run now measures whatever else is " +
+                    "running, and would be recorded with a timestamp as if it were sound. " +
+                    "Wait, or pass --force."));
+                return;
+            }
+
+            if (load >= LoadGuardPercent)
+                notes.Add($"measured with the machine {load:F0}% busy (--force): treat the table as indicative.");
+            else if (load < 0)
+                notes.Add("could not read /proc/stat, so the machine's load before the sweep is unknown.");
+
+            // Both from the SAME voice, and a Supertonic one. Reading the
+            // effective voice here asked for a Supertonic style named after a
+            // Piper voice — "Voice style not found for 'en_US-hfc_male-medium'",
+            // every row, on every sweep the reporting user ran.
+            string benchmarkVoice = _config.BenchmarkVoiceFor(EffectiveVoice);
+            var machine = MachineFacts.Current(
+                _config.ModelsRoot, _config.TotalStepFor(benchmarkVoice),
+                benchmarkVoice, EffectiveLanguage, Math.Max(load, 0));
+
+            var options = _config.Synthesis(benchmarkVoice, EffectiveLanguage);
+            var writeLock = new object();
+
+            Log($"benchmark: sweeping {BenchmarkSweep.Candidates(machine.LogicalProcessors).Count} " +
+                $"configurations on {machine.LogicalProcessors} logical processors");
+
+            // Off the connection's thread: the sweep is tens of seconds of
+            // blocking native work, and holding an async continuation on it would
+            // occupy a thread-pool thread for the duration.
+            var profile = await Task.Run(() => BenchmarkSweep.Run(
+                machine,
+                _synthesizerFor,
+                options,
+                candidates: null,
+                gpuProviders: _switch?.SweepableGpuProviders,
+                onProgress: p =>
+                {
+                    // Nothing else writes to this connection — it is not a
+                    // subscriber — so the lock is here to make that fact local
+                    // rather than something a reader has to go and verify.
+                    lock (writeLock)
+                    {
+                        writer.WriteLine(Protocol.Encode(new Response { Ok = true, Progress = p }));
+                    }
+                },
+                cancellationToken: token), token);
+
+            foreach (var failed in profile.Table.Where(r => r.Failed))
+                notes.Add($"{failed.Label} threads could not be measured: {failed.Error}");
+
+            string path = LinuxDataPaths.BenchmarkFile(_config.DataDir);
+            bool saved = BenchmarkStore.TrySave(path, profile, out string? saveError);
+            if (!saved)
+                notes.Add($"could not save the profile to {path}: {saveError}. " +
+                          "The measurement above is still correct; it just will not survive a restart.");
+
+            // Applied here rather than at the next start. The session has been
+            // idle since the guard above, and the switch rebuilds when the answer
+            // changes — so a sweep the user waited a minute for is in force by the
+            // time it prints, which is what everybody assumed it already did.
+            //
+            // It can still legitimately NOT be in force: the profile may have
+            // picked the GPU on a machine that has since been unplugged. Reporting
+            // the decision rather than the profile is what tells those apart.
+            bool rebuilt = _switch?.ReevaluateWhenIdle() ?? false;
+
+            bool appliesNow =
+                profile.Threads == Execution.Threads &&
+                string.Equals(profile.Provider, Execution.Provider, StringComparison.Ordinal);
+
+            if (appliesNow && rebuilt)
+                notes.Add("applied now: the daemon rebuilt its session on this profile, " +
+                          "so the next press uses it. No restart needed.");
+            else if (!appliesNow)
+                notes.Add(
+                    $"the daemon is running {Execution.Describe()} rather than what this sweep picked. " +
+                    "That is the settings and the power lead having their say — see `vst-ctl config`.");
+
+            Log($"benchmark: picked {profile.Provider} {Describe(profile.Threads)}" +
+                $"{(saved ? $", saved to {path}" : ", not saved")}");
+
+            await WriteAsync(writer, new Response
+            {
+                Ok = true,
+                Benchmark = new BenchmarkPayload(
+                    profile, saved, saved ? path : null, appliesNow, notes),
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down mid-sweep. The client's connection is going away with
+            // us, so there is nobody left to tell.
+        }
+        catch (Exception ex)
+        {
+            Log($"benchmark failed: {ex.GetType().Name}: {ex.Message}");
+            await WriteAsync(writer, Response.Fail($"benchmark failed: {ex.Message}"));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _benchmarking, 0);
+        }
+    }
+
+    /// <summary>
+    /// Busy-percentage at or above which a sweep refuses to run unaided.
+    ///
+    /// <para>15 rather than something tighter: a desktop with a browser open is
+    /// never at zero, and a guard that fires on an idle machine would be turned
+    /// off with <c>--force</c> permanently, which is worse than not having it.</para>
+    /// </summary>
+    private const double LoadGuardPercent = 15;
+
+    private static string Describe(int threads) =>
+        threads == CpuBudget.Auto ? "auto threads" : $"{threads} threads";
+
+    private long _lastCpuTicks;
+    private long _lastCpuWallMs;
+    private readonly object _cpuGate = new();
+
+    /// <summary>
+    /// The Windows engine's session snapshot, answered live: the tracker's half
+    /// (renders, latency, errors, text) with the process's half (memory, CPU,
+    /// provider, threads, underruns) added at the moment somebody asks.
+    ///
+    /// <para>Nothing here loads a model or touches the audio device — it is read
+    /// on a timer by an open window, and a probe that woke the GPU every second
+    /// would be the thing it was meant to diagnose.</para>
+    /// </summary>
+    private SessionSnapshot DiagnosticsSnapshot(bool includeSnippet)
+    {
+        var snap = _diagnostics.Snapshot(includeSnippet);
+        var decision = Execution;
+
+        snap.SchemaVersion = 1;
+        snap.Pid = Environment.ProcessId;
+        snap.ProcessName = "vibesupertonicd";
+        snap.VoiceId = EffectiveVoice;
+        snap.UnderrunCount = _session.UnderrunCount;
+        snap.UptimeSec = Math.Round((DateTime.UtcNow - _startedUtc).TotalSeconds, 1);
+        snap.Provider = _switch is null ? "" : decision.Provider;
+        snap.OnnxThreads = _switch is null ? 0 : decision.Threads;
+        snap.OnnxInterOpThreads = _switch?.InterOpThreads ?? 0;
+        snap.ProfileApplied = decision.FromProfile;
+
+        // The settings the NEXT utterance will speak with, resolved through the
+        // voice's own scope so a per-voice step count is what is reported.
+        var plan = _config.Utterance(null, null);
+        if (plan.Synthesis is SupertonicOptions st)
+        {
+            snap.TotalStep = st.TotalStep;
+            snap.EngineSpeed = st.Speed;
+        }
+        snap.DspRate = (float)plan.StretchFactor;
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            snap.EngineRssMb = Math.Round(process.WorkingSet64 / (1024.0 * 1024.0), 1);
+
+            // CPU share since the previous call, as the Windows writer does per
+            // tick. The first call after start has no previous sample and reports
+            // 0, which the window renders as "not yet" rather than as idle.
+            long nowMs = Environment.TickCount64;
+            long cpuTicks = process.TotalProcessorTime.Ticks;
+            lock (_cpuGate)
+            {
+                long wall = nowMs - _lastCpuWallMs;
+                if (_lastCpuWallMs != 0 && wall > 0)
+                    snap.EngineCpuPct = Math.Round(
+                        TimeSpan.FromTicks(cpuTicks - _lastCpuTicks).TotalMilliseconds / wall * 100.0, 1);
+                _lastCpuTicks = cpuTicks;
+                _lastCpuWallMs = nowMs;
+            }
+        }
+        catch
+        {
+            // A /proc that cannot be read is a blank row, not a failed verb.
+        }
+
+        return snap;
+    }
+
+    private StatusPayload Snapshot()
+    {
+        var at = _session.LastBoundary;
+        return new StatusPayload(
+            _session.State, _session.IsPaused, _modelLoaded,
+            EffectiveVoice, EffectiveLanguage, _options.Version,
+            _session.CurrentText, at?.SourceOffset, at?.SourceLength,
+            TrayStatus?.Invoke(),
+            // Asked of the switch every time rather than cached: it is the one
+            // status field that changes without anything being spoken, which is
+            // the whole point of the battery rule.
+            _switch is null ? null : Execution.Describe(),
+            // Which engine the CURRENT voice belongs to. Asked of the config
+            // rather than of the router, so it answers for the voice that would
+            // speak next rather than for the one that spoke last — those differ
+            // exactly when someone has edited settings.json since.
+            _engines is null ? null : _config.Utterance(null, null).Engine);
+    }
+
+    /// <summary>
+    /// The primary key: read what is selected now, interrupting whatever is
+    /// playing. Never means stop — <c>stop</c> has its own binding.
+    /// </summary>
+    private Response ReadSelection(Request request)
+    {
+        lock (_gateLock)
+        {
+            if (!_gate.PressToRead(Environment.TickCount64))
+            {
+                // Debounce. Logged like any other press that produces no speech —
+                // it is the expected outcome of a double tap, and it is also what
+                // a key repeating under a stuck modifier looks like.
+                Log($"press ignored: within the {ToggleGate.DefaultDebounceMs} ms debounce window");
+                return Response.Success(ToggleAction.Ignored);
+            }
+        }
+
+        string? text = request.Text;
+        string? notice = null;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            // BEFORE the stop, not after. Capturing first means a press with
+            // nothing selected leaves the current reading alone; capturing
+            // after would silence it and then fail, so a mis-press would cost
+            // the user their place with nothing to show for it.
+            var selection = CaptureSelection(request);
+            if (!selection.Ok) return Refuse(selection.Reason!);
+            text = selection.Text;
+            notice = selection.Notice;
+
+            // A capture that had to change what it read — truncated by R-9, or cut
+            // short by an owner that stopped sending. Both reach the user as a
+            // passage that ends early, which is exactly the shape nobody reports
+            // as a bug because it sounds like the selection was short.
+            if (notice is { Length: > 0 }) Log($"selection: {notice}");
+
+            // Already reading exactly this? Then the press means nothing and
+            // must do nothing.
+            //
+            // X11 has no "nothing is selected". PRIMARY keeps its owner after
+            // the user clicks away, so a press with nothing newly highlighted
+            // still captures the LAST selection — and restarting the passage
+            // the user is in the middle of hearing, from the top, is never what
+            // that press meant. Reported from real use, and it is the one case
+            // the capture-before-stop ordering could not cover on its own:
+            // the capture succeeds, it just succeeds with the same text.
+            //
+            // Only for a captured selection. An explicit `read <text>` is a
+            // caller asking for something by name, and re-reading it is a
+            // reasonable thing to have asked for.
+            if (_session.State != SpeechState.Idle &&
+                string.Equals(text, _session.CurrentText, StringComparison.Ordinal))
+            {
+                lock (_gateLock) _gate.NoteState(_session.State);
+                Log($"press ignored: already reading this selection ({text!.Length} chars, {_session.State})");
+                return Response.Success(ToggleAction.Ignored);
+            }
+        }
+
+        if (NotReadyToSpeak() is { } refusal) return refusal;
+
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: true,
+            out var engineRefusal, out var engineNote);
+        if (options is null) return engineRefusal!;
+        notice = Combine(notice, engineNote);
+
+        // The notice goes out on BOTH paths, and they are not redundant. The
+        // response answers this caller — vst-ctl, which prints to a stderr that
+        // in the hotkey path nobody is looking at. The Preparing event reaches
+        // every subscriber, which is where the tray and the Reader tab are, and
+        // is therefore the only one of the two a user actually sees.
+        if (!_session.Restart(text!, options, notice: notice))
+            return Refuse($"busy ({_session.State})");
+
+        _modelLoaded = true;
+        return new Response { Ok = true, Action = ToggleAction.Speak, Notice = notice };
+    }
+
+    /// <summary>
+    /// Jump to a character offset and read from there.
+    ///
+    /// <para>Deliberately <b>not</b> debounced, which is the one place this
+    /// departs from the other speaking verbs. The 150 ms window exists because a
+    /// finger on a key double-taps and the second tap means nothing; a click is
+    /// aimed at a specific word, so dropping it silently would leave the user
+    /// having clicked and heard nothing. Two clicks in 150 ms are two requests,
+    /// and the later one wins because it stops the earlier.</para>
+    ///
+    /// <para>The gate is still told the resulting state, or the next press of the
+    /// hotkey would be decided from a stale one.</para>
+    /// </summary>
+    private Response Seek(Request request)
+    {
+        if (request.Offset is not int offset)
+            return Response.Fail("seek needs an offset");
+        if (offset < 0)
+            return Response.Fail("offset cannot be negative");
+
+        // CurrentText while a reading is in progress, LastText after it ended.
+        // The second is the ordinary case rather than the exotic one: the reading
+        // finishes, the text is still on screen, and the user clicks a word in it.
+        string? text = request.Text ?? _session.CurrentText ?? _session.LastText;
+        if (string.IsNullOrEmpty(text))
+            return Response.Fail("nothing has been read yet, so there is nothing to seek in");
+
+        if (offset >= text.Length)
+            return Response.Fail($"offset {offset} is past the end of {text.Length} characters");
+
+        // Snapped in the daemon, not the client, so every client agrees about
+        // where a word starts -- and agrees with the boundary events that drew
+        // the highlight the user clicked on.
+        int start = BoundaryPlanner.SnapToWordStart(text, offset);
+
+        if (NotReadyToSpeak() is { } refusal) return refusal;
+
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: true,
+            out var engineRefusal, out _);
+        if (options is null) return engineRefusal!;
+
+        if (!_session.Restart(text, options, startOffset: start))
+            return Refuse($"busy ({_session.State})");
+
+        lock (_gateLock) _gate.NoteState(_session.State);
+        _modelLoaded = true;
+        return Response.Success(ToggleAction.Speak);
+    }
+
+    /// <summary>
+    /// One key does everything. The gate decides which thing, and it is held
+    /// under a lock so that two clients pressing at once cannot both be told
+    /// "you started it".
+    ///
+    /// <para>Kept alongside <see cref="ReadSelection"/> rather than replaced by
+    /// it: the tray menu's single Speak/Stop item is a toggle, and so is
+    /// anything scripted against the original contract.</para>
+    /// </summary>
+    private Response Toggle(Request request)
+    {
+        ToggleAction action;
+        lock (_gateLock)
+        {
+            _gate.NoteState(_session.State);
+            action = _gate.Press(Environment.TickCount64);
+        }
+
+        switch (action)
+        {
+            case ToggleAction.Speak:
+                if (!string.IsNullOrWhiteSpace(request.Text))
+                    return StartSpeaking(request.Text, request) with { Action = action };
+
+                var selection = CaptureSelection(request);
+                if (!selection.Ok)
+                {
+                    // Not a state change. An empty selection is a no-op with a
+                    // tray blip, so the gate must go back to Idle or the next
+                    // press would be read as a stop.
+                    lock (_gateLock) _gate.NoteState(_session.State);
+                    return Response.Fail(selection.Reason!);
+                }
+                // Notice rides along rather than replacing the outcome: a
+                // truncated selection (R-9) is speech that started, and the fact
+                // that it was cut is something to say afterwards, not instead.
+                // It is dropped if the speak itself failed, where it would only
+                // dilute the reason.
+                var started = StartSpeaking(selection.Text, request, selection.Notice)
+                    with { Action = action };
+                return started.Ok ? started with { Notice = selection.Notice } : started;
+
+            case ToggleAction.Stop:
+                _session.Stop();
+                return Response.Success(ToggleAction.Stop);
+
+            default:
+                // Debounced, or a press that arrived mid-teardown. Success, not
+                // an error: the request was understood and deliberately dropped,
+                // and a client that logged an error for every double-tap would
+                // be noise. Action says which, so the ambiguity is only in how
+                // loudly it is reported, never in whether it can be known.
+                return Response.Success(ToggleAction.Ignored);
+        }
+    }
+
+    /// <summary>
+    /// Everything that has to be true before speech can start, checked in one
+    /// place because three verbs need it and three copies is how they drift.
+    ///
+    /// <para><b>Per request, never once at startup.</b> Both conditions can
+    /// change under a running daemon — the app downloads the models into it, or
+    /// the audio server comes back — and the next press should then work without
+    /// a restart. Refusing at startup instead would take the control socket with
+    /// it, which is the failure <see cref="LazyAudioSink"/> exists to prevent:
+    /// the verbs that could explain the problem die with the daemon.</para>
+    ///
+    /// <para>Config is refreshed first, so an edit made since the last utterance
+    /// is in force for this one. Same behaviour as the Windows engine: one stat
+    /// per Speak, reparse only when the timestamp moved.</para>
+    /// </summary>
+    /// <returns>The refusal to send back, or null when speech may proceed.</returns>
+    private Response? NotReadyToSpeak()
+    {
+        RefreshConfig(force: false);
+
+        if (!Directory.Exists(Path.Combine(_config.ModelsRoot, "onnx")))
+            return Refuse(
+                $"no models under {_config.ModelsRoot}. Open VibeSuperTonic and " +
+                "accept the model licence to download them.");
+
+        // The message carries libpulse's own reason rather than a generic one:
+        // "Connection refused" and "No such entity" send the reader somewhere
+        // different, and this is the first thing a field report needs.
+        if (_sink is not null)
+        {
+            int before = _sink.Reconnects;
+            if (!_sink.TryOpen(out string? audioError))
+                return Refuse($"no audio device available: {audioError}");
+
+            // TryOpen verifies a cached device rather than trusting it, so this
+            // is where an audio-server restart is noticed — before the utterance
+            // that would otherwise have died on it. Logged because a daemon that
+            // silently healed is indistinguishable from one that never broke, and
+            // the difference is the whole content of a field report.
+            if (_sink.Reconnects != before)
+                Log($"audio device was lost ({_sink.LastLoss}) — reopened, " +
+                    $"{_sink.Reconnects} time(s) this run");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Decline, and put the gate back where the session actually is — a refusal
+    /// is not a state change, and leaving the optimistic Preparing behind would
+    /// make the next press read as a stop.
+    /// </summary>
+    /// <summary>
+    /// Decline a request, and <b>say so where somebody can find it</b>.
+    ///
+    /// <para><b>The logging is the point, and its absence cost a diagnosis.</b>
+    /// A refusal travels back to <c>vst-ctl</c>, which prints it to stderr — and
+    /// on the hotkey path there is no stderr: a desktop shortcut discards it. So
+    /// every refusal was invisible on both sides at once, and a press that did
+    /// nothing left no trace anywhere. Asked on 2026-09-06 why the key sometimes
+    /// does nothing, the honest answer was that the product had never recorded a
+    /// single instance of it.</para>
+    ///
+    /// <para>R-5 says a press must never be silent. A refused press is still a
+    /// press, and one line in the log is the difference between a user who can
+    /// report what happened and one who can only say "sometimes".</para>
+    /// </summary>
+    private Response Refuse(string message)
+    {
+        lock (_gateLock) _gate.NoteState(_session.State);
+        Log($"refused: {message}");
+        _diagnostics.RecordError($"refused: {message}");
+        return Response.Fail(message);
+    }
+
+    /// <param name="notice">
+    /// Carried out on the Preparing event so subscribers see it — see
+    /// <see cref="SessionEvent.Notice"/>. Null for a plain <c>speak</c>, where
+    /// the caller named the text and there is nothing to report about it.
+    /// </param>
+    private Response StartSpeaking(string text, Request request, string? notice = null)
+    {
+        if (NotReadyToSpeak() is { } refusal) return refusal;
+
+        // THE START OF AN UTTERANCE, which is the only moment a provider may
+        // change. The power lead may have moved, settings.json may have been
+        // edited, a benchmark may have been written — this is where all three are
+        // noticed, and it is a no-op that costs one file read when none of them
+        // has. It does nothing at all unless the session is idle, so the answer
+        // cannot change underneath a render already in flight.
+        //
+        // Before Speak rather than after: rebuilding takes about a second, and
+        // paying it after the session has begun scheduling boundaries would put
+        // the highlight a second behind the audio for the first chunk.
+        _switch?.ReevaluateWhenIdle();
+
+        var options = PlanUtterance(request.Voice, request.Language, interrupting: false,
+            out var engineRefusal, out var engineNote);
+        if (options is null) return engineRefusal!;
+        notice = Combine(notice, engineNote);
+
+        if (!_session.Speak(text, options, notice: notice))
+        {
+            lock (_gateLock) _gate.NoteState(_session.State);
+            return Response.Fail($"busy ({_session.State})");
+        }
+
+        _modelLoaded = true;   // the first Speak forces the load
+        return Response.Success();
+    }
+
+    // ------------------------------------------------------------------ events
+
+    private void OnSessionEvent(SessionEvent e)
+    {
+        lock (_gateLock)
+        {
+            if (e.Kind == SessionEventKind.StateChanged && e.State is { } state)
+                _gate.NoteState(state);
+        }
+
+        // An utterance that failed is the single most useful line this daemon can
+        // write, and until now it was written nowhere. It went to the event
+        // stream and stopped there — and nothing subscribes to that yet, so the
+        // one report of "the audio device died five hours ago" was delivered to
+        // an empty room. The dead-stream defect survived exactly that long
+        // because of this.
+        if (e.Kind == SessionEventKind.Error)
+        {
+            Log($"utterance failed: {e.Message}");
+            _diagnostics.RecordError(e.Message);
+        }
+
+        // The diagnostics tracker follows the same events a window does. Cheap and
+        // lock-light: this runs on the audio thread (see the note on Emitted).
+        switch (e.Kind)
+        {
+            case SessionEventKind.StateChanged when e.State == SpeechState.Preparing:
+                _diagnostics.UtteranceStarting(e.Text);
+                break;
+            case SessionEventKind.Started:
+                _diagnostics.FirstAudio();
+                break;
+            case SessionEventKind.Finished or SessionEventKind.Stopped:
+                _diagnostics.UtteranceEnded();
+                break;
+        }
+
+        if (_subscribers.IsEmpty) return;
+
+        string line = Protocol.Encode(e);
+        foreach (var (id, sub) in _subscribers)
+        {
+            // Queued, never written here: this is the audio thread, and a
+            // subscriber that has stopped reading would block it in the write.
+            // The lock orders this against the subscribe snapshot.
+            bool queued;
+            lock (sub.Lock) queued = sub.Queue.Writer.TryWrite(line);
+            if (queued) continue;
+
+            // A whole queue behind, or already gone. Either way it is let go
+            // rather than waited for: one stalled client must not stop the
+            // speech everyone else is listening to.
+            if (_subscribers.TryRemove(new KeyValuePair<Guid, Subscriber>(id, sub)))
+            {
+                if (sub.Kind is { } kind) Log($"{kind} dropped: {Subscriber.QueueLines} events behind");
+                try { sub.Abort.Cancel(); } catch (ObjectDisposedException) { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Write one subscriber's queued lines to its socket, in order, until the
+    /// connection ends. Never throws: a client that hangs up mid-line is routine.
+    /// </summary>
+    private static async Task PumpAsync(Subscriber sub)
+    {
+        var token = sub.Abort.Token;
+        try
+        {
+            await foreach (var line in sub.Queue.Reader.ReadAllAsync(token))
+                await sub.Writer.WriteLineAsync(line.AsMemory(), token);
+        }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            sub.Queue.Writer.TryComplete();
+            // A failed write means the client is gone; end the read that parks
+            // the connection too, rather than leave it to notice on its own.
+            try { sub.Abort.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
+
+    /// <summary>
+    /// Ask an open window to come to the front.
+    ///
+    /// <para>Goes out on the event stream because that is the only channel the
+    /// window listens on — it subscribes, it does not serve. Nothing happens if
+    /// no window is attached, which is the case the tray handles by launching
+    /// one instead.</para>
+    /// </summary>
+    public void RaiseWindow() =>
+        OnSessionEvent(new SessionEvent { Kind = SessionEventKind.WindowRequested });
+
+    /// <summary>Load the model now rather than on the first press.</summary>
+    public async Task PreloadAsync(CancellationToken token)
+    {
+        try
+        {
+            await _synth.PreloadAsync(token);
+            _modelLoaded = true;
+            Log("model preloaded");
+        }
+        catch (Exception ex)
+        {
+            // Not fatal. A daemon that refuses to start because a preload failed
+            // is worse than one that tries again on the first press and reports
+            // the error where the user is looking.
+            Log($"preload failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    // Stderr AND data/logs/daemon.log. A daemon started by a hotkey or a
+    // double-click has no terminal, and those are the runs a field report is
+    // written about — see DaemonLog.
+    private static void Log(string message) => DaemonLog.Write(message);
+
+    public void Dispose()
+    {
+        _session.Emitted -= OnSessionEvent;
+        _session.Dispose();
+
+        // The listener is no longer a `using` local of the accept loop, because
+        // binding happens before that loop exists. It is closed here instead, and
+        // closing it is what removes the socket file's usefulness to a client —
+        // ClearStaleSocket on the next start does the rest.
+        _listener?.Dispose();
+        _listener = null;
+    }
+}
+
+/// <param name="VoiceOverride">
+/// Voice from <c>--voice</c>, or null to take whatever <c>settings.json</c>
+/// says. A flag is an explicit instruction for this run and outranks the file.
+/// </param>
+/// <param name="LanguageOverride">Language from <c>--lang</c>, same precedence.</param>
+/// <param name="Version">
+/// Reported by <c>status</c> so a stale client is diagnosable. Supplied by
+/// <c>Program</c> from the assembly, which takes it from <c>&lt;VstVersion&gt;</c>
+/// in Directory.Build.props — the same element both packers read. The default
+/// here is deliberately not a version number: a stale literal that looks
+/// plausible is worse than one that says it does not know.
+/// </param>
+public sealed record DaemonOptions(
+    string? VoiceOverride = null,
+    string? LanguageOverride = null,
+    string Version = "unknown");

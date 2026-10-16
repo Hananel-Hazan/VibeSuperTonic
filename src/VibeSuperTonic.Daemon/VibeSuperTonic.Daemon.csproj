@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The daemon. One process, holding the warm model for the life of the login
+    session, so that a key press is a socket write rather than a 2-5 second
+    model load.
+
+    Self-contained, unlike the Windows engine. That is not a stylistic choice:
+    the engine is an in-process COM server and a self-contained publish with
+    EnableComHosting fails outright (NETSDK1128), which is why Windows needs four
+    separately-installed prerequisites. Nothing here is loaded into someone
+    else's process, so it can carry its own runtime and the Linux install is a
+    tarball.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vibesupertonicd</AssemblyName>
+    <RootNamespace>VibeSuperTonic.Daemon</RootNamespace>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+
+    <!--
+      For Interop/WaylandNative.cs. ext-data-control-v1 has no C ABI in
+      libwayland — the descriptor tables wayland-scanner would normally generate
+      are built here in unmanaged memory, and the event listeners are arrays of
+      function pointers, which needs `delegate* unmanaged`.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      No <Version> here. It comes from Directory.Build.props, which stamps
+      $(VstVersion) onto every assembly in the tree as of 2026-08-19 — this
+      project used to set it alone, with a comment explaining why the Windows
+      half was deliberately left out. That exemption is what shipped a 0.2.8
+      Control Panel reporting "1.0.0.0"; the props file records the reversal.
+
+      `status` still reports this assembly's version so a stale client is
+      diagnosable. It is now the same number the Windows engine reports, which is
+      what "one number produces both artifacts" was always supposed to mean.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The daemon's FIRST PackageReference, and it is allowed: the zero-packages
+      rule is R-13 and it binds Core, not the hosts. It buys the tray, which is
+      rung 1 of Phase 6's ladder — StatusNotifierItem is pure D-Bus, so a daemon
+      with no display can legitimately own a tray icon, and the alternative rungs
+      put GTK in this process instead.
+
+      0.21.3 is the version Avalonia.FreeDesktop already resolves, so the two
+      halves of the product share one D-Bus stack and one cached package. It is
+      also the AOT-friendly low-level API rather than the reflection-based
+      Tmds.DBus, which matters if this daemon is ever published NativeAOT.
+    -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      So VibeSuperTonic.Daemon.Tests can reach LinuxDataPaths, which is internal
+      and should stay that way: it is this process's own path policy (R-12), not
+      an API. The test project is Linux-only and lives in the Linux solution.
+    -->
+    <InternalsVisibleTo Include="VibeSuperTonic.Daemon.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VibeSuperTonic.Core\VibeSuperTonic.Core.csproj" />
+    <ProjectReference Include="..\VibeSuperTonic.Linux.Audio\VibeSuperTonic.Linux.Audio.csproj" />
+    <ProjectReference Include="..\VibeSuperTonic.Onnx.Ort\VibeSuperTonic.Onnx.Ort.csproj" />
+  </ItemGroup>
+
+</Project>

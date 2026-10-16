@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Engine.Settings;
 
@@ -27,7 +28,7 @@ internal sealed class EngineSettings
     /// with a language of its own. A fragment carrying an <c>xml:lang</c> (which
     /// reaches us as <c>SPVSTATE.LangID</c>) overrides this per fragment.
     /// </summary>
-    public string Language            { get; set; } = Shared.SupertonicLanguages.Default;
+    public string Language            { get; set; } = SupertonicLanguages.Default;
     public float  EngineSpeed         { get; set; } = 1.05f;
     public float  DspRate             { get; set; } = 1.0f;
     public string DefaultVoice        { get; set; } = "M1";
@@ -40,8 +41,32 @@ internal sealed class EngineSettings
     public int    OnnxThreads         { get; set; } = 0;
     public int    OnnxInterOpThreads  { get; set; } = 1;
     public bool   UseDirectML         { get; set; } = true;
+    /// <summary>
+    /// Keep DirectML on battery. Off by default: the CPU path runs several times
+    /// faster than real time, and a GPU on a laptop is the difference between an
+    /// afternoon and a lunch break. Global only — it is not a per-voice knob, so
+    /// <see cref="ResolveFor"/> does not carry it. Same key as the Linux daemon's.
+    /// </summary>
+    public bool   GpuOnBattery        { get; set; } = false;
     public int    DirectMLDeviceId    { get; set; } = 0;
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
+
+    /// <summary>
+    /// Keys this build does not know about, carried through a read/write cycle
+    /// unchanged.
+    ///
+    /// Without it, the deserializer drops unrecognised properties and whichever
+    /// host saves last erases everything the other one added — the data folder is
+    /// portable by design, so a USB stick, a dual-boot mount or a synced
+    /// directory puts the Windows Control Panel and the Linux daemon on the same
+    /// <c>settings.json</c>. It also protects a downgrade: an older build no
+    /// longer silently strips a newer one's settings.
+    ///
+    /// <see cref="PerVoice"/> nests this same type, so per-voice overrides
+    /// inherit the behaviour.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
 
     /// <summary>Per-voice resolution: <c>PerVoice[id].Knob</c> if set, else <c>this.Knob</c>.</summary>
     public EngineSettings ResolveFor(string voiceId)

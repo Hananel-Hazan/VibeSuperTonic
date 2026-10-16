@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Answers Phase 6's finding 5 before the Reader tab picks a control: what does
+    it cost to move a highlight through a document the size of the R-9 cap?
+
+    The plan states the hazard exactly — "a control that re-measures a 100 KB
+    document on every move will not keep up, while a 200-word test paragraph will
+    look perfect". So this measures at 102,338 characters, the truncation Phase 4
+    actually recorded in the field, and not at a size that flatters the answer.
+
+    Three strategies, because the choice is not obvious and the naive one is the
+    one a person writes first. See Program.cs.
+
+    Not VstPortable: a throwaway measurement that links a GUI toolkit.
+    References Core so the word rule under the highlight is the product's
+    (BoundaryPlanner.IsWordChar), not a second opinion invented here.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>bigtext</AssemblyName>
+    <VstPortable>false</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same pin as spike/avalonia-primary and, from Phase 6 on, the UI. -->
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/VibeSuperTonic.Core/VibeSuperTonic.Core.csproj" />
+  </ItemGroup>
+
+</Project>

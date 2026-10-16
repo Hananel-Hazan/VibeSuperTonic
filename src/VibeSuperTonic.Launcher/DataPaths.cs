@@ -37,6 +37,21 @@ internal static class DataPaths
     public static string SessionsDir => Path.Combine(DataDir, "sessions");
     public static string SettingsFilePath => Path.Combine(DataDir, "settings.json");
 
+    /// <summary>
+    /// What the thread sweep measured about this machine.
+    ///
+    /// <para>Beside <c>settings.json</c> and deliberately not inside it: that file
+    /// has exactly one writer by design — this process writes, the engine reads —
+    /// and it is the file that travels in a portable folder. A measurement is the
+    /// tool's own output, means nothing on another machine, and would put a second
+    /// writer on a user-edited file for no gain.</para>
+    ///
+    /// <para>The filename comes from <see cref="Core.Synthesis.BenchmarkStore"/>
+    /// because the Linux daemon writes the same file into the same folder.</para>
+    /// </summary>
+    public static string BenchmarkFilePath =>
+        Path.Combine(DataDir, Core.Synthesis.BenchmarkStore.FileName);
+
     /// <summary>The exact string the user typed (or null/empty if unset).</summary>
     public static string? RawDataDirOverride => ReadDataDirRegistryValue();
 

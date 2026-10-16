@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Drives X11SelectionSource directly, so the selection path can be exercised
+    without the daemon, the audio device or a model. `vst-ctl read` would speak
+    every case out loud and take ~600 ms of inference to tell us something the
+    capture already knew.
+
+    Not VstPortable: it references the daemon, which is Linux-only by
+    construction, so CA1416 has nothing to protect here.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>selcheck</AssemblyName>
+    <VstPortable>false</VstPortable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/VibeSuperTonic.Daemon/VibeSuperTonic.Daemon.csproj" />
+  </ItemGroup>
+
+</Project>

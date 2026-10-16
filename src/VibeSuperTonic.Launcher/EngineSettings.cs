@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Launcher;
 
@@ -24,7 +26,7 @@ internal sealed class EngineSettings
     /// text itself. Settable globally or per voice. A client that sends SSML
     /// <c>xml:lang</c> overrides it for the tagged fragment.
     /// </summary>
-    public string Language { get; set; } = Shared.SupertonicLanguages.Default;
+    public string Language { get; set; } = SupertonicLanguages.Default;
     public float VolumeTrimDb { get; set; } = 0f;
 
     public int MaxChunkChars { get; set; } = 200;
@@ -35,6 +37,12 @@ internal sealed class EngineSettings
     public int OnnxThreads { get; set; } = 0;
     public int OnnxInterOpThreads { get; set; } = 1;
     public bool UseDirectML { get; set; } = true;
+    /// <summary>
+    /// Keep DirectML on battery (default off). Global only: per-voice entries
+    /// ignore it, and <see cref="EngineSettingsRegistry.IsEffectivelyGlobal"/>
+    /// deliberately does not compare it. Same key as the Linux daemon's.
+    /// </summary>
+    public bool GpuOnBattery { get; set; } = false;
     public int DirectMLDeviceId { get; set; } = 0;
 
     /// <summary>
@@ -45,6 +53,23 @@ internal sealed class EngineSettings
     public int SchemaVersion { get; set; } = 0;
 
     public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
+
+    /// <summary>
+    /// Keys this build does not know about, carried through a read/write cycle
+    /// unchanged.
+    ///
+    /// This one matters more than the engine's copy of it, because the launcher
+    /// is the half that <em>writes</em>. Without it the deserializer drops
+    /// unrecognised properties and Save() then persists the object it parsed, so
+    /// every key the Linux daemon added is erased the next time the user touches
+    /// a slider. The data folder is portable by design — a USB stick, a dual-boot
+    /// mount, a synced directory — so the two hosts genuinely do share a file.
+    ///
+    /// <see cref="PerVoice"/> nests this same type, so per-voice overrides
+    /// inherit the behaviour.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
 
     public void ApplyPreset(QualityPreset p)
     {
@@ -63,6 +88,11 @@ internal sealed class EngineSettings
     {
         var c = (EngineSettings)MemberwiseClone();
         c.PerVoice = PerVoice.ToDictionary(kv => kv.Key, kv => kv.Value.Clone());
+        // Copied rather than shared: the UI clones settings to build an "edited"
+        // candidate it may discard, and a shared dictionary would let a discarded
+        // edit reach the live object. JsonElement itself is immutable, so a
+        // shallow copy of the dictionary is enough.
+        c.Extra = Extra is null ? null : new Dictionary<string, JsonElement>(Extra);
         return c;
     }
 }
@@ -135,6 +165,101 @@ internal static class EngineSettingsRegistry
                 File.Move(tmp, path);
             }
         }
+    }
+
+    // ------------------------------------------------ crash-tolerant restore
+    //
+    // Benchmark, Export and Tune all apply temporary settings, speak, and put the
+    // user's values back in a finally block. A finally block is not enough: the
+    // work happens in a child process, and if THIS process dies (or is killed, or
+    // the box loses power) mid-run, the restore never executes and the user is
+    // left synthesizing at whatever the dead run applied — silently, in every
+    // SAPI client on the machine, until they next open the Tune tab. That is
+    // exactly what a crashed Benchmark did in 0.2.7.5: it left settings pinned at
+    // Draft/TotalStep=4.
+    //
+    // So the snapshot is also written to disk before the change, and reconciled
+    // on the next launch. Belt and braces: the finally is the fast path, the
+    // sidecar is the one that survives a process that never gets to run code
+    // again.
+
+    private static string PendingRestorePath => Path.Combine(DataPaths.DataDir, "settings.restore.json");
+
+    /// <summary>
+    /// Begins a temporary settings change. Dispose restores the snapshot taken
+    /// here and clears the on-disk safety net. Always use with <c>using</c>.
+    /// </summary>
+    public static SettingsRestoreScope BeginTemporaryChange(IProgress<string>? log = null)
+    {
+        var snapshot = Load();
+        try { ArmRestore(snapshot); }
+        catch (Exception ex) { log?.Report($"WARNING: could not arm settings recovery: {ex.Message}"); }
+        return new SettingsRestoreScope(snapshot, log);
+    }
+
+    private static void ArmRestore(EngineSettings snapshot)
+    {
+        DataPaths.EnsureExists();
+        string path = PendingRestorePath;
+        string tmp = path + ".tmp";
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, EngineSettingsJsonContext.Default.EngineSettings);
+        lock (_writeGate)
+        {
+            File.WriteAllBytes(tmp, bytes);
+            try { File.Move(tmp, path, overwrite: true); }
+            catch
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                File.Move(tmp, path);
+            }
+        }
+    }
+
+    internal static void DisarmRestore()
+    {
+        try { File.Delete(PendingRestorePath); } catch { }
+    }
+
+    /// <summary>
+    /// Called once at launcher start. If a previous run died holding temporary
+    /// settings, puts the user's values back. Returns true (with a human-readable
+    /// <paramref name="detail"/>) when it actually recovered something.
+    /// </summary>
+    public static bool TryReconcilePendingRestore(out string? detail)
+    {
+        detail = null;
+        string path = PendingRestorePath;
+        if (!File.Exists(path)) return false;
+
+        EngineSettings? snapshot = null;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            snapshot = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
+        }
+        catch { /* unreadable — treated as nothing to recover, and cleaned up below */ }
+
+        if (snapshot is null) { DisarmRestore(); return false; }
+
+        var current = Load();
+        // Nothing to say if the finally already put things back; the sidecar is
+        // just stale in that case (a hard kill between Save and Delete).
+        bool changed = current.TotalStep != snapshot.TotalStep
+                    || current.Preset != snapshot.Preset
+                    || Math.Abs(current.DspRate - snapshot.DspRate) > 0.0001f
+                    || Math.Abs(current.EngineSpeed - snapshot.EngineSpeed) > 0.0001f
+                    || Math.Abs(current.VolumeTrimDb - snapshot.VolumeTrimDb) > 0.0001f
+                    || current.UseDirectML != snapshot.UseDirectML
+                    || current.DefaultVoice != snapshot.DefaultVoice;
+
+        try { Save(snapshot); }
+        catch (Exception ex) { detail = $"failed: {ex.Message}"; DisarmRestore(); return true; }
+        DisarmRestore();
+
+        if (!changed) return false;
+        detail = $"preset {current.Preset}/steps {current.TotalStep} → {snapshot.Preset}/steps {snapshot.TotalStep}";
+        return true;
     }
 
     /// <summary>
@@ -258,10 +383,10 @@ internal static class EngineSettingsRegistry
                     // instruction, and "typo'd de-DE quietly became English" is a
                     // worse outcome here than an error the caller can read.
                     string want = value.Trim().ToLowerInvariant();
-                    if (want != "na" && !Shared.SupertonicLanguages.All.Any(l => l.Code == want))
+                    if (want != "na" && !SupertonicLanguages.All.Any(l => l.Code == want))
                     {
                         error = $"Unknown language: {value}. Supported: " +
-                                string.Join(", ", Shared.SupertonicLanguages.All.Select(l => l.Code));
+                                string.Join(", ", SupertonicLanguages.All.Select(l => l.Code));
                         return false;
                     }
                     s.Language = want;
@@ -276,6 +401,7 @@ internal static class EngineSettingsRegistry
                 case "onnxthreads":         s.OnnxThreads = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "onnxinteropthreads":  s.OnnxInterOpThreads = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "usedirectml":         s.UseDirectML = bool.Parse(value); break;
+                case "gpuonbattery":        s.GpuOnBattery = bool.Parse(value); break;
                 case "directmldeviceid":    s.DirectMLDeviceId = int.Parse(value, CultureInfo.InvariantCulture); break;
                 default:               error = $"Unknown key: {key}"; return false;
             }
@@ -339,4 +465,41 @@ internal static class EngineSettingsRegistry
 
     private static float ParseFloat(string s, float fallback) =>
         float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fallback;
+}
+
+/// <summary>
+/// Lifetime of a temporary settings change — see
+/// <see cref="EngineSettingsRegistry.BeginTemporaryChange"/>. Restores the
+/// snapshot on dispose and clears the on-disk recovery record. Idempotent, so a
+/// caller that restores early can still dispose safely.
+/// </summary>
+internal sealed class SettingsRestoreScope : IDisposable
+{
+    private readonly IProgress<string>? _log;
+    private bool _done;
+
+    internal SettingsRestoreScope(EngineSettings snapshot, IProgress<string>? log)
+    {
+        Snapshot = snapshot;
+        _log = log;
+    }
+
+    /// <summary>The settings as they were before the temporary change.</summary>
+    public EngineSettings Snapshot { get; }
+
+    public void Dispose()
+    {
+        if (_done) return;
+        _done = true;
+        try
+        {
+            EngineSettingsRegistry.Save(Snapshot);
+            _log?.Report("Restored prior engine settings.");
+        }
+        catch (Exception ex)
+        {
+            _log?.Report($"WARNING: could not restore engine settings: {ex.Message}");
+        }
+        finally { EngineSettingsRegistry.DisarmRestore(); }
+    }
 }

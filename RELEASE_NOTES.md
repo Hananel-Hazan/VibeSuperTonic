@@ -1,3 +1,1301 @@
+# VibeSuperTonic v0.2.17
+
+*A snap and a Flatpak, so it can be installed from the Ubuntu App Center and from KDE Discover.*
+
+```
+VibeSuperTonic-0.2.17-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.17-amd64.snap           (built by CI)
+VibeSuperTonic-0.2.17-x86_64.flatpak       (built by CI)
+VibeSuperTonic-0.2.17-x86_64.AppImage
+```
+
+## Two new ways to install, and the AppImage moves to third
+
+Linux now offers four packages of the same build, in this order: the **snap**
+(what the Ubuntu App Center installs, and what Kubuntu's Discover lists), the
+**Flatpak** (Flathub, which Discover lists once Flatpak support is added), the
+**AppImage**, and the **tarball**. The tarball is still the one the other three
+are built from.
+
+Both new packages are sandboxed. That changed three things, all invisible when
+they work:
+
+- **Models and settings live in the sandbox's own directory**,
+  `~/snap/vibesupertonic/common` or
+  `~/.var/app/io.github.hananel_hazan.VibeSuperTonic/data/vibesupertonic`,
+  because the program's directory is read-only there. Both survive updates.
+- **An update does not claim the program moved.** snapd renames the program's
+  directory and `$HOME` on every refresh. The "re-bind your hotkeys" check now
+  compares the paths that stay the same, so snap users do not get a false warning
+  after each update.
+- **In the Flatpak, the window, the hotkey and the screen reader module all find
+  the same daemon**, and a daemon started by a hotkey press keeps running after
+  the press ends.
+
+**On Flathub, the Flatpak is built by Flathub, from source.** Flathub does not
+take prebuilt archives, so its build compiles this release's tag and espeak-ng
+there, offline, from pinned sources, and runs the same packer and the same
+checks as the tarball. It carries the .NET runtime that Flathub's SDK provides,
+10.0.12, the same as the other packages, and gets .NET fixes when Flathub
+updates that SDK. The listing appears once Flathub's
+review is done; until then, the `.flatpak` file on this page installs the same
+program.
+
+## Export works in the snap and the Flatpak
+
+A sandbox cannot see the system's ffmpeg, so both packages carry a small one of
+their own, built only for this: MP3, AAC and FLAC, LGPL, 1.9 MB, with its
+source offer in `LICENSE-FFMPEG.txt` beside it. The tarball and the AppImage
+still use the system's.
+
+- **Saving through the desktop's file dialog works** from a window the tray
+  opened, not only from one opened from the menu. The tray's window used to
+  get a file it was not allowed to write, and the export failed with "the
+  folder … does not exist".
+- **Export while VibeSuperTonic is reading aloud is refused, and says why
+  until the reading ends.** The message changes to "You can export now" when
+  it does, so you know when to try again. Before, the refusal was a bare
+  "busy (Speaking)", and in the snap it came out as an unrelated
+  `/proc/1/cmdline` error.
+
+## Hotkeys and the screen reader: one command in a terminal
+
+A sandbox cannot change the desktop's shortcut settings or Speech Dispatcher's
+configuration, and asking the stores for that access would need a manual review
+for something used once. So both packages carry `sandbox-setup.sh`, which you run
+on the host. The Status tab shows the exact command for your install:
+
+```bash
+bash /snap/vibesupertonic/current/sandbox-setup.sh bind              # snap
+bash /snap/vibesupertonic/current/sandbox-setup.sh speechd-install
+```
+
+It uses the same binding and Speech Dispatcher code as the tarball and the
+AppImage.
+
+## For everyone on Linux: the screen reader installer is safer
+
+These reach the tarball and the AppImage too, not only the store packages.
+
+- **`speechd-install` undoes itself if it silences anything.** It compares the
+  voices Speech Dispatcher offered before the install with the ones it offers
+  after. If any is missing, it restores the old configuration, restarts Speech
+  Dispatcher, checks again and exits with an error. Before, it printed a warning
+  and left the machine as it was, which could mean a screen reader with no voice.
+- **It no longer waits forever on a stuck Speech Dispatcher.** It waits on every
+  process it asked to stop, and after five seconds it stops them by force.
+- **`speechd-install --remove` works when our module is the only thing in the
+  configuration.** It used to exit silently at that point.
+
+## Fixed along the way to the store
+
+Nothing below reached a stable channel, but anyone who installed from `edge`
+before revision 5 met some of it:
+
+- The daemon could not start inside the snap (the sandbox refused to let it
+  listen for the hotkey), there was no tray icon, and there was no sound.
+- A click on the tray icon could not open the window, at first because the window
+  was started without its libraries, and then again after a logout, because a
+  daemon that outlived the session still pointed at the old one. The daemon now
+  takes the display from the latest program that talks to it.
+- **The window says when the engine is not running.** Stopped from the tray or
+  a terminal, the engine went away and the open window still looked as if it
+  worked. A bar across the top now says so, on every tab, with a Start it now
+  button, and goes away when the engine is back.
+- **On X11, the hotkey could stop working after you logged out and back in**,
+  with "could not open X display", if the background service had kept running
+  from the earlier session. It now uses the display login the key press
+  brings, as the tray's window already did.
+- **After a restart, the hotkey read nothing in Wayland applications** until the
+  window had been opened once. The daemon looked for the desktop's Wayland
+  connection inside the snap's private folder, where only the window's launcher
+  puts it, and when it was not there settled on X11 for as long as it ran. It now
+  makes that connection itself before it chooses. Found on Kubuntu on
+  2026-09-27, after a reboot.
+
+- **The Voices tab's Download buttons line up.** Each row put its licence text
+  first, and licences run from nothing to a long Creative Commons link, so every
+  button sat somewhere else. The button now comes first, the id and details are
+  fixed columns with the full text on hover, and a non-commercial licence says
+  so in three words, with the link on hover.
+
+- **`bind` no longer adds a second VibeSuperTonic to KDE's menu** in the snap and
+  the Flatpak. The entry that carries the hotkeys is now hidden, because the
+  package has its own. It looked like a duplicate, and deleting it deleted the
+  hotkeys too. `sandbox-setup.sh status` now says so if that has happened.
+
+Checked on Kubuntu (KDE Plasma 6, Wayland), up to revision 10: the hotkey reads
+the selection, also after a reboot before any window has opened; the tray opens
+the window after a logout and login; **Orca reads through the VibeSuperTonic
+voice**; and a held update is applied from the prompt, with the screen-reader
+voice running.
+
+## Three things to know about the snap
+
+- **KDE reads new shortcuts only when you log in.** After `sandbox-setup.sh bind`,
+  log out and back in once.
+- **You choose when an update happens.** snapd holds an update back while any
+  of a snap's programs runs, and the background service and the screen-reader
+  voice usually are. When one is waiting, VibeSuperTonic now says so in a
+  notification with **Update now** and **Later**, and the tray menu keeps an
+  "Update now" item until you use it. Update now closes the window, the service
+  and the screen-reader voice, and snapd installs the update straight away. The
+  next hotkey press takes a few seconds longer while the voice loads, and the
+  screen reader uses its default voice until you next log in, or until you run
+  `systemctl --user restart speech-dispatcher.service`; the notification and
+  the window both say so, and the window's note goes once the screen reader is
+  speaking through VibeSuperTonic again. Later changes nothing; snapd installs
+  the update by itself within 14 days.
+
+  **Once, to get here:** the revisions already on `edge` do not have this, so
+  the update that brings it still needs `vibesupertonic.ctl shutdown`,
+  `systemctl --user stop speech-dispatcher.service`, the window closed, and
+  `sudo snap refresh vibesupertonic`.
+
+- **A hotkey press in the snap costs about a tenth of a second more** than in the
+  other packages: 108 ms per press, measured on Kubuntu, all of it snapd
+  setting up the sandbox before our program starts. The tarball, the AppImage
+  and the Flatpak do not pay it.
+
+## On stock Ubuntu (GNOME on Wayland)
+
+The hotkey cannot read the selection there. GNOME does not offer the Wayland
+protocol that allows it, which is true of every package, not just these. The
+screen reader voices and the window work. The store listing says so.
+
+## Licence
+
+As since 0.2.11, the Linux packages bundle espeak-ng and are GPL-3.0-or-later as
+a whole. The source stays MIT.
+
+---
+
+# VibeSuperTonic v0.2.16
+
+*Four ways a press could do nothing, and nothing anywhere said so.*
+
+All four reported from daily use between 2026-09-01 and 2026-09-06. Every one is
+silent by construction: the product had never recorded a single instance of any
+of them.
+
+```
+VibeSuperTonic-0.2.16-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.16-x86_64.AppImage      56 MB
+```
+
+## The hotkey, if you use a non-Latin keyboard layout
+
+**Read the release note for this one even if nothing else applies to you.**
+
+`Ctrl+`` was dead in any window whose keyboard layout was not Latin. Plasma
+matches a **keysym**, and on a `us,il` machine the same physical key emits two
+different ones:
+
+```
+keycode 49 = grave asciitilde | semicolon asciitilde
+             └─ us ─┘           └─ il (Hebrew) ─┘
+```
+
+With KDE's per-window layout switching (`SwitchMode=Window`) it followed the
+application rather than the clock — dead in the browser the user typed Hebrew in,
+alive in a freshly opened Kate. **Stop kept working**, because `asciitilde` is the
+shifted keysym in both groups, which is why "I press stop and then read and it
+still will not read" read like a wedged daemon and was not one.
+
+Read is now bound to **both keysyms of the same physical key**, tab-separated, so
+the same finger movement works in either layout:
+
+```
+Read=Ctrl+`\tCtrl+;
+```
+
+A different key would have been the easy fix and would have cost everyone their
+muscle memory for a fault one keysym wide. The alternate is only written when it
+is itself unbound.
+
+**Existing installs must re-run `bind`** — `<AppImage> bind`, or `install.sh` for
+a tarball — **and then log out and back in.** kglobalaccel lives inside kwin on
+Plasma 6 and cannot be asked to re-read its configuration without risking the
+compositor.
+
+## A press the busy application swallowed
+
+Reading a selection is a round trip through the *owning* application's event
+loop. Both selection sources allowed **300 ms for the whole transfer**, so a
+browser or an Electron app mid-render, mid-GC or mid-extension-host lost the
+press. Measured by freezing an owner's event loop, a **0.5 s stall was already
+enough**:
+
+```
+                 before            after
+responsive        21 ms  speaks     25 ms  speaks
+stalled 0.5 s    322 ms  lost      528 ms  speaks
+stalled 1.5 s    322 ms  lost     1519 ms  speaks
+stalled 4.0 s    322 ms  lost     2024 ms  refused, naming a busy application
+```
+
+It now waits 2 s for the owner to say anything at all, then 1 s between chunks,
+under a 5 s ceiling — so a slow but working application completes and a wedged one
+still fails in bounded time. The message said the owner "may have closed", which
+was a diagnosis of a different failure.
+
+**And a timeout is no longer mistaken for an end of file.** One `break` covered
+both, so a transfer abandoned part way came back as a *complete success* — half a
+passage spoken with nothing reporting a fault. A short read is now spoken with a
+notice saying so.
+
+X11 had the identical bug; the number now lives in one place.
+
+## A press lost while the daemon was still starting
+
+`vst-ctl` waited a flat 5 s for a daemon it had started. Across 81 launches in one
+install's log the median was 0.85 s — but every morning's first start re-execs for
+the CUDA provider pack and took **4.07–4.67 s**, with nine landing inside a second
+of the budget. When it blew, the press was simply lost; the daemon then finished
+starting, so the *next* press worked.
+
+The client now waits **while the process is alive**, under a 30 s ceiling, and
+gives up early when it dies. A crashing daemon is reported in 1.5 s with its exit
+code instead of after 5 s blaming the clock.
+
+## A voice that installed and then went to the wrong engine
+
+```
+17:24:26  voice install: en_US-hfc_female-medium installed
+17:24:41  engine: piper -> supertonic
+17:24:41  utterance failed: Voice style not found for 'en_US-hfc_female-medium'
+```
+
+Five presses in a row. The store cached its list against the timestamp of
+`piper/`; an install creates `piper/<id>/`, which moves it, and then downloads the
+files *into* that directory, which does not. Anything that asked mid-download
+cached the set without the new voice and never looked again — until the daemon
+restarted. The tell is in the log: that install line is missing the
+"; calibrating" the voice before it has, because the calibration could not see it
+either.
+
+The cache key now folds in each voice directory's own timestamp, which also covers
+a voice copied in by hand.
+
+## A GPU turned off by a missing file
+
+Same incident, the next line:
+
+```
+inference: CUDA failed in use (FileNotFoundException: Voice style not found ...)
+inference: CUDA -> CPU (no GPU available — FileNotFoundException: Voice style not found)
+```
+
+"No GPU available — Voice style not found" is not a sentence about a GPU. The
+mid-render fallback caught bare `Exception`, so any fault latched CUDA off for the
+life of the process and the user ran on the CPU with that reported as the reason.
+
+Exceptions that cannot be a provider fault no longer trigger it — deliberately a
+deny-list, because the fallback exists to survive faults nobody predicted and
+naming what a GPU failure looks like would re-introduce the silence it was added
+for. And a net for the rest: **if the CPU retry fails the same way, the GPU was
+demonstrably not at fault**, so the latch comes off and the real error travels.
+
+## Speech Dispatcher finally has a speed control
+
+The one thing 0.2.15 listed as known and unfixed. The module forwarded
+`SET RATE` only to its espeak fallback and `vst-ctl render` had no way to carry
+one, so through Orca the rate slider did nothing to the voice you were listening
+to. `render` takes `--rate N`, −100…100, and it **adjusts** what `settings.json`
+asks for rather than replacing it. Rate 0 changes nothing and sends no flag, so a
+module talking to an older daemon is unaffected.
+
+Both voices read one map — espeak-ng's own 80/175/450 curve — so a fallback
+mid-session changes the timbre and not the pace.
+
+**`render` also stopped throwing away half its own plan**: it computed an
+utterance plan and streamed the raw model output, so the DSP half of the rate and
+your `VolumeTrimDb` reached the hotkey and never reached a screen reader.
+
+## And the silence itself
+
+A refused press left no trace on either side: the message goes to a stderr that a
+desktop shortcut discards, and the daemon did not log refusals at all. It does
+now, along with both paths that ignore a press and any capture that had to change
+what it read.
+
+## Worth knowing
+
+- **Supertonic caps at 0.5x and 2.0x** of your configured speed through a screen
+  reader, which is the honest range of its time-stretch. espeak reaches 2.57x, so
+  the fast end of Orca's slider is faster on the fallback voice. A Piper voice
+  gives the whole request to `length_scale` until the model saturates instead.
+- The selection capture can now block for up to 2 s when the owning application is
+  busy. That is deliberate: waiting out a busy application beats answering
+  instantly with nothing.
+
+---
+
+# VibeSuperTonic v0.2.15
+
+*A speed control that could not be heard, a warning that could not be cleared,
+and a word cut in half by the margin.*
+
+Three defects reported from the running install on 2026-09-06, all of them
+silent: every one saves correctly, reads back correctly, and is wrong only where
+a person is listening or looking.
+
+```
+VibeSuperTonic-0.2.15-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.15-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **"Piper does not obey the speed change."** The Tune tab wrote *every* field it
+  showed into whichever scope was selected, so one deliberate override pinned all
+  nine. The reporting install's `PerEngine.piper` was a complete snapshot of the
+  tab — `EngineSpeed`, `DspRate`, `VolumeTrimDb`, both chunk sizes,
+  `InterChunkSilenceMs` and a `TotalStep`. After that, editing "All voices" saved
+  correctly, read back correctly, and changed nothing anybody could hear, because
+  every value the global boxes set was shadowed by a copy of itself.
+
+  A scope now keeps only what it does not already inherit — a voice compared
+  against its engine, not against the file. Two consequences beyond the fix: an
+  override becomes undoable by typing the inherited value back, and an existing
+  file cleans itself on the next save in that scope.
+
+  The daemon's Piper rate arithmetic was never at fault. It plans a
+  `length_scale` off each voice's measured curve and always did.
+
+- **A greyed-out box is no longer treated as an answer.** The tab disables
+  Language and Model steps for a Piper voice — it has neither — and then saved
+  them anyway. That is how a Piper scope acquired a `TotalStep`, and it is the
+  first half of the warning below.
+
+- **"The recorded measurements no longer describe this machine", and the
+  Re-measure button could not clear it.** Three sweeps in the user's log ended
+  `no configuration could be measured: FileNotFoundException: Voice style not
+  found for 'en_US-hfc_male-medium'`.
+
+  The benchmark is a Supertonic measurement — every profile is stamped
+  `Engine: "supertonic"` and there is no Piper sweep — but it took its voice and
+  its step count from whatever voice was *in force*. With a Piper voice selected
+  it asked for a Supertonic style named after a Piper voice, so every row failed;
+  meanwhile the staleness guard compared the stored profile's `TotalStep` against
+  a Piper scope's, which is a number no Piper voice has ever run at. A warning
+  with an unusable remedy.
+
+  The sweep, what it records, what the guard re-tests and what the startup
+  decision is made from all now name a Supertonic voice. A Piper scope can no
+  longer shadow `TotalStep` or `Language` at all — filtered on the read, so this
+  takes effect on files that already carry the key, with nothing to re-save.
+
+- **The half 0.2.13 left behind.** That release changed what the sweep *records*
+  to the effective voice's step count and left what it *runs* reading the file's
+  top level, so on any install with a scoped `TotalStep` the rows measured one
+  configuration and the profile was stamped with another. Both halves come from
+  one place now.
+
+- **A word broken across a line is read as one word again.** Copying
+  "Alternative Ground-Truth Configu-\nrations" out of a paper was read as
+  "configyoo" and then "rations". Nothing in the pipeline joined them: the
+  chunker collapses the newline to a space, so the phonemiser was handed
+  `Configu-` and `rations` and said exactly that.
+
+  Every justified PDF, every two-column paper and every hard-wrapped mail
+  hyphenates at the margin, and reading those aloud is what this product is for.
+  The join is deliberately the conservative half — a lowercase letter after the
+  break is the tail of a split word, a capital is far more often a compound that
+  wrapped (`Ground-\nTruth`) or a new sentence, and a hyphen inside a line is a
+  real hyphen. Paragraph breaks are never joined.
+
+  U+00AD, the invisible soft hyphen, is dropped too. The sanitizer's ranges stop
+  at U+009F and never reached it, so a character nobody can see was turning one
+  spoken word into two with no line break to explain it.
+
+  It runs before the pronunciation rules, so a rule for a word still matches one
+  the margin had cut in half.
+
+## Known, and not fixed here
+
+- **Speech Dispatcher has no speed control.** The module never forwards
+  `SET RATE` for a neural voice — only the espeak fallback gets it — and the
+  `render` verb computes an utterance plan and then drops its stretch factor and
+  volume scale. Through Orca, the rate slider does nothing and `VolumeTrimDb`
+  never applies. Reported alongside the above and left for its own change.
+
+---
+
+# VibeSuperTonic v0.2.14
+
+*A word eaten in the middle of a sentence, once every 16 KB of selected text.*
+
+Reported from daily use as "SuperTonic is eating some words in the middle of the
+sentence". Found by measurement rather than by reading: the selection path was
+the last component still untested after synthesis, chunking, playback and the
+GPU had each been ruled out with numbers.
+
+```
+VibeSuperTonic-0.2.14-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.14-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **A Wayland selection longer than 16 KB could come back with a mangled word.**
+  The compositor hands the selection over a pipe, and `read(2)` returns whatever
+  bytes have arrived — it has no idea where characters begin. Each block was
+  decoded on its own, so a multi-byte character straddling a block boundary had
+  both halves turned into U+FFFD. The model has no id for those, so they render
+  as nothing: the word around them is heard as eaten, and no screen anywhere
+  reports a fault.
+
+  Measured on a 35,000-character selection: the words at byte 16384 and 32768
+  came back as `w2048<?><?>`. One decoder now carries the partial sequence
+  across reads, which is the whole fix.
+
+  **This is ordinary prose, not an exotic alphabet.** Curly quotes, en and em
+  dashes, ellipses and accented letters are all multi-byte, so anything pasted
+  from a browser or a word processor is exposed. Whether it bites depends on
+  where the boundary falls, which is why it survived from 0.2.10 — it passes for
+  every ASCII selection and for most others, and the deterministic way to see it
+  is to place a continuation byte at exactly 16384.
+
+  X11 sessions were never affected: that path receives the whole property as one
+  array and decodes it once. Speech Dispatcher and `vst-ctl speak` were never
+  affected either — neither reads the selection.
+
+## Checks
+
+Four tests, in `Utf8PipeDecoderTests`. The mechanism was extracted from the
+P/Invoke so that a test can chop a string at *every* offset rather than at a
+lucky one — the defect's whole character is that most offsets are fine.
+Reverting the decode to its per-block form fails two of the four, which is the
+rule this project keeps: a check that has never been observed failing is not
+evidence.
+
+1,431 tests pass.
+
+## Everything else
+
+Unchanged from 0.2.13, including the licence position: the Linux archive as a
+whole is GPL-3.0-or-later because it carries espeak-ng, this repository's source
+stays MIT, and nothing up to 0.2.10 is affected.
+
+## Windows
+
+Unchanged, as every release since 0.2.9 has been.
+
+---
+
+# VibeSuperTonic v0.2.13
+
+*Two numbers on screen that did not describe what the daemon was doing.*
+
+Both were reported from a running install rather than found by a test, and both
+had been true since scoped settings arrived in 0.2.11.
+
+```
+VibeSuperTonic-0.2.13-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.13-x86_64.AppImage      56 MB
+```
+
+## Fixed
+
+- **The benchmark measured a step count nothing was running.** If you set
+  `TotalStep` for one engine or one voice — the Tune tab's scope selector — the
+  file's top-level value stops being what your voice uses. Synthesis knew that.
+  Four things that only wanted the *number* did not: the Status tab, the
+  benchmark's record of the machine it measured, the staleness guard, and the
+  decision made at startup.
+
+  The visible symptom was a warning that could not be satisfied: *"the benchmark
+  was measured at TotalStep 6, this daemon runs 12"*, on an install where every
+  utterance ran at 6. The guard was comparing the global against the global, so
+  the one mismatch that existed was the one it could not see. It never reached
+  the audio — only the screens that claim to describe the audio.
+
+- **The re-measure button could not clear its own warning.** Pressing "Measure
+  this machine" ran the sweep, stored the profile and applied it — and the banner
+  stayed exactly as it was, because it is drawn once per window and nothing
+  redrew it. A warning that survives the fix it asked for teaches you that the
+  fix does not work. It now re-asks after a sweep it requested; a banner you
+  dismissed still stays dismissed across a daemon restart, which is what that
+  latch was there for.
+
+## Everything else
+
+Unchanged from 0.2.12, including the licence position: the Linux archive as a
+whole is GPL-3.0-or-later because it carries espeak-ng, this repository's source
+stays MIT, and nothing up to 0.2.10 is affected.
+
+## Windows
+
+Unchanged, as every release since 0.2.9 has been.
+
+---
+
+# VibeSuperTonic v0.2.12
+
+*Four things you can see, and a great deal you cannot.*
+
+The visible half is small and all in the window: the Tune tab's dropdowns were
+showing the debugger's view of their own contents, and the Pronunciations tab
+threw away unsaved rules when you switched tabs. The invisible half is the
+reason this release exists — the project's checks now cover what it ships, and
+every one of them has been watched failing.
+
+```
+VibeSuperTonic-0.2.12-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.12-x86_64.AppImage      56 MB
+```
+
+Same licence position as 0.2.11: the Linux archive as a whole is
+GPL-3.0-or-later because it carries espeak-ng, this repository's source stays
+MIT, and nothing up to 0.2.10 is affected.
+
+## Fixed
+
+- **The Tune tab's dropdowns were unreadable.** Every picker on that tab — the
+  scope, the engine, the language, the voice, the speaker — displayed
+  `PickerRow { Value = All, Label = All voices }` instead of the label it was
+  holding. A toolkit renders a list item through `ToString()` unless it is given
+  a template, and the type had never been asked what it should look like.
+- **The Pronunciations tab discarded unsaved rules on a tab switch.** These tabs
+  re-read on every visit, and selecting a different tab and coming back is a
+  visit — so writing three rules and glancing at the Voices tab lost all three,
+  with no warning and nothing to connect it to. It now keeps them and says on
+  screen that what you are looking at is unsaved.
+- **The scope selector showed a settings key.** "Only piper:en_GB-cori-high" is
+  what the file needs to write; it now says "Only cori-high", which is what the
+  voice is called two rows above it.
+- **`INSTALL.txt` promised something false** — that `vst-ctl` can do "anything
+  the window can do". It cannot choose a voice, and now says what each program
+  is actually for.
+
+## Under the floor
+
+None of this changes what the product does. All of it changes what happens when
+somebody breaks it.
+
+- **The archive has a size budget**, and so does the phonemiser payload, and so
+  does `vst-ctl`'s startup time — the last of which replaces a proxy, since
+  "the binary is native" is not the same claim as "the binary is fast".
+- **The 227 MB the optional GPU pack downloads is now hash-pinned**, to the
+  SHA-512 nuget.org itself publishes. It is `dlopen`ed into the speech daemon,
+  and it was the one download in the product that did not follow the product's
+  own rule.
+- **The daemon's socket is checked to be private to you** — 0600 in a 0700
+  directory, in both places the path can land.
+- **Phoneme parity with piper runs on every push**, negative control first: five
+  deliberate sabotages must all be caught before the 327-sentence result is
+  believed.
+- **A real speech-dispatcher is installed in CI** and asked whether espeak-ng
+  still answers after our installer has run, and after it has been removed.
+- **The daemon's memory was measured**: it plateaus. Supertonic peaks at 842 MB
+  by about the sixtieth utterance and does not move; Piper at 1087 MB by the two
+  hundredth. Neither leaks, and the harness that says so was checked against a
+  daemon deliberately made to leak.
+
+**A flaky packer bug was found on the way** and is worth naming, because it
+could have shipped a broken archive silently: a shell pipeline that ended in
+`head -c 4` killed the packer with no message at all, at random, depending on
+how fast the machine was that day.
+
+## Windows
+
+Unchanged, as 0.2.9 through 0.2.11 were. Everything here is Linux; the Windows
+ZIP ships from the same version number and the same source.
+
+---
+
+# VibeSuperTonic v0.2.11
+
+*Linux gets a second engine, a screen-reader voice, and — because of the first
+two — a different licence for the archive.*
+
+Piper joins Supertonic: 65 hash-pinned voices across 35 languages, downloaded on
+request from a Voices tab, phonemised by an espeak-ng built into the archive. And
+VibeSuperTonic now appears in Orca's list of synthesizers, because the archive
+carries a Speech Dispatcher module.
+
+```
+VibeSuperTonic-0.2.11-linux-x64.tar.gz     61 MB
+VibeSuperTonic-0.2.11-x86_64.AppImage      56 MB
+```
+
+**Read the licence note below before upgrading if you redistribute this.** The
+archive as a whole is GPL-3.0-or-later from this release onward. Nothing up to
+and including 0.2.10 is affected.
+
+## New
+
+- **Piper, as a second engine.** One voice per download, each trained for one
+  language, chosen in the Voices tab and used from the Tune tab. The catalog is
+  pinned to `rhasspy/piper-voices@v1.0.0` with a SHA-256 for every file, and the
+  licence a voice carries is on its row before you download it. Multi-speaker
+  voices — LibriTTS has 904 — pick a speaker per voice.
+- **A phonemiser in the archive.** espeak-ng, built for this project and pruned
+  to the 31 dictionaries the catalog needs, so a Piper voice works on a machine
+  that has never installed one. The packer refuses to ship a payload whose
+  revision does not match the script that builds it, and checks that every voice
+  the catalog names actually phonemises — a missing dictionary otherwise reaches
+  you as a voice that installs, selects, and then says nothing.
+- **A Speech Dispatcher module, so screen readers can use these voices.**
+  `speechd-install.sh` beside `install.sh` registers it; Orca and anything else
+  that speaks through speechd then lists VibeSuperTonic. It refuses to register
+  an install with no voices downloaded — a synthesizer that appears in the list
+  and cannot speak is worse than one that is absent — and it backs up and
+  restores the speech-dispatcher configuration it touches. On the AppImage the
+  same thing is `./VibeSuperTonic.AppImage speechd-install`.
+- **Settings that belong to all voices, to an engine, or to one voice.** A scope
+  selector above the Tune tab's fields: rate, volume, chunking and the rest can
+  be set once for everything, for every Piper voice, or for the one voice you are
+  listening to. The note under the selector says whether what you are looking at
+  is that scope's own value or inherited.
+- **A tray click raises a window that is already open** instead of reporting that
+  one exists — which is what you are clicking to find out.
+
+## Fixed
+
+- **The daemon could not start on a fresh install.** A routing decision read the
+  sample rate, which loads a model, from the startup path — on a machine whose
+  models had not downloaded yet, that was an unhandled exception before anything
+  worked. Found by a new CI job that extracts the tarball into a bare
+  `ubuntu:22.04` with no .NET, no display, no audio and no models.
+- **A GPU that reported itself healthy and then failed.** The CUDA provider can
+  load and still be unusable; the daemon now falls back to CPU with a sentence
+  saying so, rather than failing every utterance.
+- **A moved install now says so at startup.** Copying the folder elsewhere left
+  paths pointing at where it used to be.
+- **Three settings that would not stick.** A Piper speaker that snapped back to 0
+  after Use, a rate that reverted when Save landed on the same repaint as a
+  refresh, and — reported against this release — a volume trim that reverted to
+  the file's global value whenever a scope was selected, and then overwrote the
+  saved one on the next press. All three were the same defect: a second place
+  that filled the same boxes. The Tune tab no longer decides where a value comes
+  from.
+- **A saved setting that changes nothing audible now explains itself.** Setting a
+  value for "all voices" cannot reach a voice whose own scope overrides it; the
+  tab names those keys instead of leaving you to wonder.
+
+## Licence — read this if you redistribute
+
+**The archive as a whole is GPL-3.0-or-later from this release onward**, because
+it distributes espeak-ng. `LICENSE-PHONEMIZER.txt` in the archive carries the
+terms and the written offer for its source, and the exact source tarball is
+reproducible from `build/build-espeak.sh`.
+
+This repository's own source stays MIT — no `.cs` file changed licence, and MIT
+is GPL-compatible. **Releases up to and including 0.2.10 contain no espeak-ng and
+are entirely unaffected**; this is not retroactive.
+
+## Upgrading
+
+Stop the daemon before replacing the binaries — `install.sh` does it for you, and
+`INSTALL.txt` says to do it by hand before a manual untar. Linux lets you replace
+a running executable, and the result is a new binary on disk with the old one
+still answering every hotkey press.
+
+## Windows
+
+Unchanged by this release, as 0.2.9 and 0.2.10 were. Everything here is the Linux
+product; the Windows ZIP ships from the same version number and the same source.
+
+---
+
+# VibeSuperTonic v0.2.10
+
+*A portable AppImage install could not bind its hotkeys, and the sentence we
+printed about it could lose your models. Both are fixed.*
+
+An AppImage next to a directory named `<name>.AppImage.home` runs with `$HOME`
+pointed inside it. That is the standard portable arrangement — AppMan marks every
+app it installs this way — and until now VibeSuperTonic refused to bind hotkeys
+when it saw one.
+
+```
+VibeSuperTonic-0.2.10-x86_64.AppImage      48 MB
+VibeSuperTonic-0.2.10-linux-x64.tar.gz     52 MB
+```
+
+## Fixed
+
+- **Hotkeys bind under a portable home.** The desktop reads its shortcut
+  configuration from one fixed place and nowhere else, so under a redirected
+  `$HOME` everything `bind` wrote — `kglobalshortcutsrc` and the launcher
+  `.desktop` — landed where the desktop would never look: two shortcuts written,
+  no key doing anything. `bind` now recovers the real home from the passwd
+  database, which an AppImage cannot redirect, and writes those two files there
+  while the rest of the install stays self-contained. Cinnamon needed no
+  equivalent — `gsettings` already writes through the session's own service.
+- **The old advice could cost you your models, and it is gone.** Refusing to bind
+  told you to rename or remove the portable home. If your store lived inside it —
+  which is exactly where the portable arrangement puts it — following that
+  advice orphaned several hundred MB of models, and the next run started an empty
+  store and showed you the first-run screen. The daemon's log and the Status tab
+  now describe a portable home instead of warning about it.
+
+## Changed
+
+- **`--help` on the AppImage says where your files are and how to upgrade.** A
+  single file has no `INSTALL.txt` to put this in, so it names all three places a
+  store can resolve to — beside the image, inside a portable home, under
+  `~/.local/share` — points at `store` for which one won, and states the rule the
+  tarball has always stated: stop the daemon *before* replacing the file, or the
+  old one keeps serving every hotkey press while `status` truthfully reports the
+  old version.
+
+## Windows
+
+Unchanged by this release, as 0.2.9 was. Both fixes are in Linux packaging and
+the Linux hotkey path; the Windows ZIP continues to ship from the same version
+number.
+
+---
+
+# VibeSuperTonic v0.2.9
+
+*Linux gets a second front door: one file you download, make executable, and run.*
+
+The tarball is unchanged and is still the canonical Linux artifact — `install.sh`,
+the optional GPU pack and all six packer assertions are verified against it, and a
+headless or server install has no use for a single-file GUI bundle. The AppImage
+is for everyone else.
+
+```
+VibeSuperTonic-0.2.9-x86_64.AppImage      48 MB
+VibeSuperTonic-0.2.9-linux-x64.tar.gz     52 MB
+```
+
+## The AppImage
+
+- **One file, no .NET, no unpacking.** `chmod +x` and run it. The window opens;
+  `./VibeSuperTonic-0.2.9-x86_64.AppImage bind` sets up the two hotkeys.
+- **Models and data live beside the file**, in a `VibeSuperTonic/` folder. Keep
+  the two together — moving the AppImage on its own leaves the store behind, and
+  the next run starts a new one. If the directory is not writable (`/opt`, a
+  read-only medium), everything moves to `~/.local/share/vibesupertonic` instead
+  and the Status tab says so.
+- **The hotkeys do not go through the AppImage.** `bind` installs `vst-ctl` into
+  `~/.local/bin` and points the keys there, because reaching it through the image
+  costs a filesystem mount on every press — 20.0 ms against 5.3 measured, which
+  is inside budget and still not worth paying forever for a 4 MB copy. Both the
+  daemon and the window re-check that copy at startup and replace it when it is
+  out of date, so upgrading is still replacing one file.
+- **Runs on Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+** — glibc 2.34 and
+  above. Measured rather than assumed, and the packer now refuses to build an
+  archive whose floor has risen.
+- **The optional GPU pack works from the AppImage**:
+  `./VibeSuperTonic-0.2.9-x86_64.AppImage gpu-install`. It installs beside your
+  models rather than beside the program, which an AppImage cannot write to, and
+  `--remove` now takes the whole 3.1 GB away in one directory.
+- **Needs FUSE**, like every AppImage. Without it the image cannot be mounted and
+  nothing inside it runs; `vst-ctl` and `bind` both say so now, and name
+  `--appimage-extract-and-run` as the way through.
+
+## Fixed
+
+- **The engine kept its benchmark and its GPU after the first sentence.** A
+  daemon would start on CUDA, say so, and quietly drop to an unbenchmarked CPU
+  setting the moment anything was read — because the profile was being looked up
+  by directory rather than by file, which reads back as "this machine has never
+  been benchmarked". Anyone whose Status tab said CUDA while their reading
+  sounded like CPU was seeing this.
+
+## Also on Linux since 0.2.7.5
+
+These shipped in 0.2.7.6 and 0.2.8 and had no notes of their own.
+
+- **An NVIDIA GPU can do the inference.** Measured on an RTX A2000: the wait
+  before the first word goes from **802 ms to 77 ms**. It is not in the download —
+  `./install-gpu.sh` fetches about 3.1 GB on request — and **on battery the engine
+  stays on the CPU** unless you set `GpuOnBattery`, because a discrete GPU is the
+  difference between a laptop that lasts an afternoon and one that does not.
+- **The engine measures this machine and uses what it measured.** `vst-ctl
+  benchmark`, or the button on the Tune tab, tries every thread count worth
+  trying and keeps the whole table. It applies to the next thing you ask it to
+  read, with no restart — as does unplugging the power lead.
+- **A press is no longer silenced by the stop before it.** Reported twice from
+  daily use: the text appeared, the highlight never moved, nothing was spoken,
+  and the next press worked.
+- **KDE and Wayland are supported properly.** Hotkeys are bound the way Plasma
+  binds them, and the selection is read from the compositor rather than from X11 —
+  on a Wayland session the old path could see almost nothing.
+
+## Windows
+
+Unchanged by this release. The AppImage is a Linux artifact; the Windows ZIP
+continues to ship from the same version number.
+
+---
+
+# VibeSuperTonic v0.2.7.5
+
+*The harness found a bug on its first run. This is that bug.*
+
+0.2.7.4 shipped the verification harness. Step 8 failed immediately on the
+Windows VM — two of its five whitespace layouts reported word-boundary offsets
+that drifted one character per separator:
+
+```
+FAIL double space     events=10  off-word=7  max drift=2 chars
+    pos=21 len=6 -> " Secon"   <-- not a word start
+    pos=43 len=5 -> "  Thi"    <-- not a word start
+FAIL paragraph break  events=10  off-word=7  max drift=2 chars
+```
+
+Single space, newline and tab passed. That pattern is the diagnosis: `\n` and
+`\t` each collapse to one space, so nothing shifts, while `"  "` and `"\n\n"`
+lose a character each.
+
+---
+
+## Fixed
+
+- **Word-boundary offsets no longer drift when sentences are separated by more
+  than one whitespace character.** The R-14 fix in 0.2.7 corrected each chunk's
+  *start* position but not the whitespace the chunker collapses *inside* a chunk.
+  Callers then added an index-within-chunk to that start, which is correct only
+  while every separator happens to be exactly one character long.
+
+  `SentenceChunker` now returns a per-character map from chunk text back to its
+  input, and the engine composes it with the pronunciation/sanitizer map so a
+  chunk index resolves to a source position in one lookup. There are two rewrites
+  between what the model speaks and what the client holds, and both are now
+  undone rather than one.
+
+  Affects any client that highlights while reading, on text with double spaces
+  after full stops or blank lines between paragraphs — which is to say, most
+  pasted prose.
+
+## Verified
+
+Step 8 now passes all five layouts, plus a deliberately ragged sixth. Step 9 —
+offsets under a length-changing pronunciation rule — passed in 0.2.7.4 already
+and still does, including the check that a boundary on `kilograms` reports a
+length of **2**, the `kg` the user typed.
+
+Core.Tests is 187, up from 179. Eight of the new ones cover this directly,
+including the harness's failing input reduced to a unit test and a test that
+composes the chunk map with a pronunciation map in the same order the engine
+does.
+
+## Worth saying
+
+This bug was live in 0.2.7, 0.2.7.1, 0.2.7.2, 0.2.7.3 and 0.2.7.4 — every
+release that claimed R-14 was fixed. Nothing on the Linux side could see it: the
+Core tests passed because they tested the chunk map in isolation, and the
+end-to-end render sounds identical either way. It took a real SAPI client
+reporting real offsets, which is exactly what the harness was built for and why
+it ships in `tools\`.
+
+---
+
+# VibeSuperTonic v0.2.7.4
+
+*Ships the harness that proves the last two releases were right.*
+
+0.2.7 fixed two bugs about **where a word-boundary event says the spoken word
+is** — a highlight that drifts away from the voice. Working audio does not
+demonstrate either fix. Neither does a green build. The only evidence that
+counts is a client reporting offsets that land on the right characters, and
+until now there was no way to check that without watching a screen reader and
+squinting.
+
+Nothing in the engine changes behaviour in this release.
+
+---
+
+## Added
+
+- **`tools\VibeSuperTonic.TestHarness.exe`** — the System.Speech verification
+  suite, in the ZIP for the first time. It existed in the source tree and was
+  never packaged, so anyone without a build environment could not run the one
+  thing that tests the engine end to end through a real SAPI client.
+
+      tools\VibeSuperTonic.TestHarness.exe
+
+  Exit code 0 means everything passed. Run it after the voices are registered and
+  the models have downloaded. You will hear it speak — the word-boundary checks
+  need real audio timing to fire, so the output cannot be sent to a null device.
+
+- **Step 8 — word-boundary offsets land on real words.** Speaks the same three
+  sentences separated five different ways (single space, newline, double space,
+  paragraph break, tab) and checks every reported offset against the actual word
+  starts of the source text. The separator is the point: the chunker normalises
+  whitespace, and that is what made chunk positions unrecoverable by search
+  (R-14).
+
+- **Step 9 — the same with a length-changing pronunciation rule.** Installs a
+  `kg` → `kilograms` rule, speaks two sentences using it, and checks that
+  nothing drifts by the seven characters the substitution adds — and that a
+  boundary landing on `kilograms` reports a length of **2**, the source token the
+  user actually typed, not 9 (R-2). Your `pronunciations.json` is backed up and
+  restored, including if the step fails.
+
+  These two are not circular, though they look it. System.Speech builds
+  `SpeakProgress.Text` *by substringing your prompt at the offset the engine
+  reported*, so comparing those two always agrees and proves nothing. The ground
+  truth here is computed independently from the source string.
+
+## Under the hood
+
+- **`VibeSuperTonic.Core` grew to fourteen files** — the DSP (`Sonic`,
+  `TimeStretch`), the language table, log rotation, the model manifest and
+  downloader, and the telemetry DTO all moved in. Three duplicated types are gone
+  with them, including a twenty-property telemetry DTO that existed once in the
+  engine and once in the launcher with a "keep in sync" comment on each.
+- **`RenderSanity`** — decides whether a buffer is speech without ears: pauses at
+  phrase boundaries, and amplitude modulation in the 2–8 Hz syllable band. Phase 0
+  of the Linux port raised the objection that a fast render of garbage passes RTF,
+  peak, RMS and duration; this is the answer. 179 tests now, up from 90.
+- The harness ships **framework-dependent**, like RenderHost and for the same
+  reason: SAPI loads the engine into it, so ONNX Runtime ends up hosted there, and
+  a self-contained single-file host crashes it. A verification tool shaped
+  differently from a real SAPI client would not be verifying much.
+
+## Upgrading
+
+Drop the ZIP over your install. If you only want to run the checks, `tools\` is
+self-contained apart from the .NET 10 x64 runtime you already need.
+
+---
+
+# VibeSuperTonic v0.2.7.3
+
+*Voices listed, voices silent. The missing piece was never .NET.*
+
+A field report against 0.2.7.2: 32-bit readers now listed all ten voices, the
+user selected one, and nothing was ever heard — while the Control Panel spoke
+normally. `engine.log` had the answer and phrased it as badly as Windows knows
+how:
+
+```
+Unable to load DLL 'C:\...\engine\x86\onnxruntime.dll' or one of its
+dependencies: The specified module could not be found. (0x8007007E)
+```
+
+That file was present. `0x8007007E` is `ERROR_MOD_NOT_FOUND` and the load that
+failed was a **dependency** — the **Visual C++ runtime**, which ONNX Runtime's
+native library links against and which the message never names. The x64
+redistributable was installed (something else had brought it along); the x86 one
+was not. So the 64-bit Control Panel worked and every 32-bit reader was mute.
+
+---
+
+## Added
+
+- **The Status tab now checks the Visual C++ runtime**, x64 and x86, alongside
+  the .NET rows — and can install either for you, same as the .NET ones: confirm,
+  UAC, winget, verified by re-probing rather than by exit code.
+- **The "32-bit SAPI clients" row distinguishes listed from working.** With
+  registration complete but the C++ runtime missing it now reads *"voices are
+  listed but produce NO audio — Visual C++ runtime (x86) is missing"*. Reporting
+  "all 10 voices visible" there was true and useless.
+- **The startup warning covers both prerequisites** and names which one is
+  missing, because they fail in opposite ways:
+
+  | Missing | Symptom |
+  | --- | --- |
+  | .NET 10 runtime (x86) | reader lists **no** voices |
+  | Visual C++ runtime (x86) | voices **are** listed, and silent |
+
+## Fixed
+
+- **The engine no longer passes `0x8007007E` along unedited.** A native load
+  failure is caught at the ONNX Runtime load site and rethrown naming the likely
+  cause, the host's bitness, and the exact winget command. That text reaches you
+  in two places you would actually be looking: `engine.log`, and the Monitor
+  tab's **Last error** column.
+
+  The old message was worse than unhelpful — it named `onnxruntime.dll`, which is
+  present, so everyone who read it went and checked that file, found it, and
+  started hunting a corrupt download.
+
+## Documentation
+
+- README and `INSTALL.txt` now list **both** runtimes, in both architectures,
+  with a table of what each failure looks like. Previously they named only .NET —
+  correct as far as it went, and it did not go far enough.
+- Both now end with the step that is easy to miss: after installing anything,
+  press **Repair all** *and restart your reader*. A reader that was already
+  running keeps the old, failed engine loaded until it restarts.
+
+## Why this keeps happening
+
+The engine is a COM in-process server, so it runs inside somebody else's process
+and inherits that process's bitness and its runtime search. Every dependency it
+has must therefore exist twice, and the 32-bit half of the pair is the one no
+modern machine has by default. The engine cannot ship its own copies either —
+`dotnet publish --self-contained` with `EnableComHosting` fails outright with
+`NETSDK1128`.
+
+What is left is detection. Three releases in, the Status tab now checks all four
+prerequisites, states which is missing, describes the symptom it produces, and
+offers to install it.
+
+---
+
+# VibeSuperTonic v0.2.7.2
+
+*Fixes a warning that told you the opposite of the truth, and lets the app
+install the prerequisite itself.*
+
+0.2.7.1 added a startup warning for the case where 32-bit readers cannot see the
+voices. It fired too widely and then described the wrong cause — including,
+absurdly, telling a user who had just installed the 32-bit runtime that it was
+not installed, while the Status tab two inches away reported it present.
+
+---
+
+## Fixed
+
+- **The 32-bit warning no longer fires on a freshly extracted folder.** It was
+  triggered by "32-bit clients cannot see the voices", which is the ordinary
+  state of an install that has not been registered yet — so a normal first run
+  produced an alarming modal about a problem that pressing **Repair all** was
+  about to solve. It now fires only for the missing x86 runtime: the one cause
+  you cannot discover for yourself and cannot fix from inside the app's normal
+  flow.
+- **…and no longer states a cause it has not checked.** The text hardcoded "the
+  32-bit .NET 10 runtime is not installed" regardless of why 32-bit was not
+  working. A diagnostic that contradicts the evidence on screen is worse than no
+  diagnostic at all. It now reports what was actually detected, naming the
+  versions it found.
+
+## Added
+
+- **The Control Panel can install the .NET runtime for you.** If one is missing,
+  the launch warning offers to install it, and either runtime row on the Status
+  tab can be double-clicked to do the same. It runs `winget`, so the package is
+  verified against Microsoft's own manifest — the app never downloads an
+  executable itself and runs it elevated.
+  - **Never silent.** A machine-wide runtime install is always confirmed first,
+    with the exact command shown, and always raises UAC. "Repair all" skips it
+    unless you confirm, because registry writes and model downloads are what that
+    button promises and installing a system runtime is not. `--repair` on the
+    command line skips it too and prints the command instead.
+  - Success is judged by re-probing for the framework, not by winget's exit code:
+    winget returns non-zero for benign outcomes like "already installed", and a
+    zero exit does not prove the runtime landed where the engine will look.
+  - If winget is absent, it says so and points at the download page rather than
+    failing obscurely.
+
+## Documentation
+
+- **The README now leads with the prerequisite** instead of mentioning it in a
+  parenthetical. It explains why 32-bit matters even on 64-bit Windows, gives
+  both winget commands, and states plainly that skipping the x86 runtime means
+  32-bit readers show *no* entries at all while the Control Panel's own Test
+  button keeps working — the combination that reads as "the app is fine, my
+  reader is broken".
+- Corrected throughout: the engine needs the plain **.NET Runtime**, not the
+  **Desktop Runtime**. It targets `net10.0-windows` but uses neither WinForms nor
+  WPF, so its runtimeconfig asks only for `Microsoft.NETCore.App`.
+- The README now answers "why not just bundle the runtime?" with the actual
+  build error — `NETSDK1128: COM hosting does not support self-contained
+  deployments` — rather than leaving it as an obvious-looking omission.
+
+## A note on fresh installs
+
+A newly extracted folder legitimately shows several red rows: no voice tokens, no
+CLSID, no models. That is the pre-registration state, not damage. Press **Repair
+all** — it registers the voices (one UAC prompt) and downloads the models. The
+README now says so at the step where you will see it.
+
+---
+
+# VibeSuperTonic v0.2.7.1
+
+*Hotfix. The voices were fine; the Control Panel was lying about them.*
+
+If you installed 0.2.7, opened Balabolka or Lingoes, and found no VibeSuperTonic
+voices at all — while the Control Panel's own Test button spoke perfectly — this
+is the release that explains why, in words, the moment you open it.
+
+Nothing about speech changed. This is entirely about the product telling the
+truth when something is missing.
+
+---
+
+## The problem
+
+The engine is a COM in-process server: it loads *inside* your reader, so it needs
+the .NET 10 runtime **in the same bitness as that reader**. Most SAPI clients are
+still 32-bit — Balabolka, Lingoes, many NVDA setups — and the 32-bit runtime is a
+separate download that almost nobody has.
+
+Without it, the launcher registered nothing for 32-bit. Not a partial install —
+*nothing*, so those programs showed no VibeSuperTonic entries whatsoever. Then:
+
+- The Status tab reported **"all 10 voices registered"**, because it only
+  inspected the 32-bit registry view when it had already decided to populate it.
+- The x86 CLSID row rendered **"(skipped — no x86 engine or runtime)"** as a
+  green pass.
+- The one amber row that did mention it was truncated mid-sentence by the column
+  width.
+- And the Control Panel's own voices worked, because it is 64-bit and
+  self-contained.
+
+Eleven green ticks and working audio, on a machine where no reader could find a
+single voice. The natural conclusion is that the readers are broken, which is the
+most expensive possible way for this to fail.
+
+## Fixed
+
+- **The Status tab now says it plainly.** A new **32-bit SAPI clients** row states
+  the outcome rather than the steps: either "all 10 voices visible to 32-bit
+  hosts", or "NO voices — the 32-bit .NET 10 runtime is not installed". The voice
+  token row now names which bitnesses it actually found.
+- **The fix instructions are visible.** Every check has always carried a
+  `FixHint` — the exact winget command — and the Status grid had no column for it,
+  so it was computed and thrown away on every refresh. The log pane below the grid
+  now lists each failing check with its fix, and you can select and copy the
+  command straight out of it.
+- **A warning when you open the Control Panel**, if and only if 32-bit clients
+  cannot see the voices. It says so, gives the command, and offers to open the
+  download page. It also warns you not to read the working Test button as proof
+  that your reader will work — that inference is exactly the trap.
+- **Runtime detection actually checks the runtime.** It tested whether
+  `dotnet.exe` existed under Program Files, which any .NET install of any version
+  satisfies — including .NET 8, or an SDK. On such a machine the launcher would
+  have registered the 32-bit voices and let them **fail on first Speak**, which is
+  worse than not appearing: it sends you hunting an engine bug. It now looks for
+  an actual `Microsoft.NETCore.App` 10.x shared framework, per architecture, via
+  the location the .NET installer recorded.
+- **The prerequisite is named correctly.** The engine needs the plain **.NET 10
+  Runtime**, not the **Desktop** Runtime — it targets `net10.0-windows` but uses
+  neither WinForms nor WPF, so its runtimeconfig asks only for
+  `Microsoft.NETCore.App`. The old advice worked but sent you after a
+  substantially larger download than you need.
+- **INSTALL.txt leads with it.** It previously said "open any SAPI client
+  (Balabolka, NVDA, Narrator)" without ever mentioning a runtime — naming, as the
+  examples, the very programs that would fail.
+
+## Upgrading
+
+Drop the ZIP over your install and run `VibeSuperTonic.exe`. If 32-bit clients
+are affected you will be told immediately.
+
+To make 32-bit readers work:
+
+    winget install Microsoft.DotNet.Runtime.10 --architecture x86 --force
+
+then press **Repair all** on the Status tab. Installing both architectures is
+fine and is the safe default.
+
+## Not fixed, because it cannot be
+
+Shipping the runtime inside the ZIP would remove the prerequisite entirely, and
+it is not available to us: `dotnet publish --self-contained` on a project with
+`EnableComHosting` fails with **NETSDK1128 — COM hosting does not support
+self-contained deployments**. The runtime is a genuine prerequisite, so the
+product's job is to say so clearly and at the right moment. That is what this
+release does.
+
+## Known limit
+
+If you set `HKCU\SOFTWARE\VibeSuperTonic\SuppressX86Warning` to 1, the startup
+warning stops appearing. There is deliberately no checkbox in the dialog — the
+failure is total and silent, so the default has to be to keep saying it.
+
+---
+
+# VibeSuperTonic v0.2.7
+
+*The release that makes the underline stop lying.*
+
+Two of these fixes are the same bug wearing different hats: the engine knew which
+word it was speaking, and told your screen reader a slightly different number.
+The third is a setting that has had sliders, persistence, and per-voice overrides
+since the day it shipped, and has never once been read.
+
+Drop-in replacement for v0.2.5. No schema migration, no re-registration.
+
+---
+
+## Fixed
+
+- **Word-boundary offsets no longer drift under pronunciation rules.** This was
+  documented as a "Known quirk" in the v0.2.2 notes and is now simply gone. Rules
+  and the invisible-character sanitizer both change the length of the text before
+  it reaches the model, and the engine was reporting positions by adding an index
+  into the *rewritten* text to the *source* offset of the fragment. One `kg` →
+  `kilograms` rule shifted every following word in that sentence by seven
+  characters, and the error accumulated. Highlights now resolve through a proper
+  offset map.
+  - The highlight *length* is right too. `kilograms` is nine characters of spoken
+    text covering the two you typed, so the underline is two wide — not nine
+    characters of whatever came next.
+- **…and no longer drift on text with line breaks in it.** A second, independent
+  offset bug found while fixing the first, and the more common of the two: chunk
+  positions were recovered by searching for the chunk inside the sentence it came
+  from, but the chunker normalises whitespace as it works. Any text separated by
+  a newline, a tab, or two spaces — which is to say most prose — failed that
+  search and fell back to a running estimate that drifted by one character per
+  collapsed separator. Measured at 5 of 6 chunks wrong on newline-separated text.
+- **`Max chunk chars` and `Min chunk chars` now do something.** Both have been
+  sliders in **Advanced**, per-voice overrides in **Tune**, and saved to
+  `settings.json` — and the chunker has always ignored them in favour of two
+  hardcoded constants. They are now read. The defaults are unchanged (200 and
+  100, exactly what the constants were), so if you never moved these sliders you
+  will not hear any difference; a regression test pins that. **If you did move
+  them, your chunk boundaries will change**, which is audible at the seams. That
+  is the setting finally working, but it is worth knowing before you wonder why
+  a voice you had tuned sounds slightly re-paced.
+  - Values are now clamped to a sane range at the point of use. The two sliders'
+    ranges overlap, so a minimum above the maximum was always selectable, and the
+    settings-file import path never range-checked anything at all.
+- **`settings.json` keys the Control Panel doesn't recognise are no longer
+  deleted.** Settings are parsed through a source-generated serializer, which
+  discards unknown properties; the launcher then writes the whole object back, so
+  anything it hadn't heard of was quietly erased on the next save. Harmless while
+  only one program writes the file. It stops being harmless the moment two do —
+  and it already bites anyone who runs a newer build, goes back to an older one,
+  and loses their newer settings with no error anywhere.
+
+## Under the hood
+
+For the curious, and the people who scrolled this far on principle:
+
+- **`VibeSuperTonic.Core`.** A new platform-neutral assembly, shipped inside
+  `engine\x64` and `engine\x86`, holding the text pipeline: offset mapping, the
+  sanitizer, the pronunciation rule types, and the sentence chunker. It takes no
+  NuGet dependencies and never will.
+  - The launcher's hand-maintained *copy* of the pronunciation types is gone with
+    it. There were two `Apply` implementations that were only ever *intended* to
+    agree, and they compiled their regexes with different options — so the
+    Pronunciations tab's **Test** pane could and did disagree with what the engine
+    actually spoke. Both now run the same code.
+  - Also the reason those offset bugs were found at all. Moving the code turned
+    two silent arithmetic errors into 148 assertions.
+- **Offsets are mapped, not computed.** `TextOffsetMap` stores one source index
+  per rewritten character rather than a list of length deltas. Rules apply in
+  sequence, each rewriting the previous one's output, and composing delta lists
+  across passes is exactly where the subtle version of this bug lives. An array
+  is obviously correct, and it is allocated only when a rule actually fires — text
+  nothing touches, which is nearly all of it, allocates nothing.
+- **The chunker reports its own spans.** `SentenceChunker.ChunkWithOffsets`
+  returns each chunk with its position in the input, replacing the search that
+  whitespace normalisation defeated. It leans on one invariant — the three passes
+  only ever drop or substitute whitespace — which is pinned by a test over the
+  same corpus, so a future change that breaks it fails loudly rather than
+  mis-highlighting quietly.
+- **Chunk boundaries are pinned to the previous implementation** by a reference
+  oracle: a verbatim copy of the pre-move chunker, kept in the test project
+  precisely so it can never be tidied up, run against a twelve-input corpus plus
+  generated prose. Chunk seams are audible, so "it still chunks about the same"
+  was not good enough.
+
+## Upgrading
+
+1. Drop the new ZIP over your existing install.
+2. Run `VibeSuperTonic.exe` once if you want the registry's launcher path to
+   refresh.
+
+If you had customised **Max/Min chunk chars**, this is the release where those
+values start taking effect — set them back to 200 and 100 to keep the old
+pacing.
+
+---
+
 # VibeSuperTonic v0.2.2
 
 *Still cooking — more in the oven.*

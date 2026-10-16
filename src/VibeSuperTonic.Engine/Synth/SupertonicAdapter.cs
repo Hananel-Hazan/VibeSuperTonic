@@ -1,7 +1,9 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.Win32;
 using Supertonic;
+using VibeSuperTonic.Core.Audio;
 using VibeSuperTonic.Engine.Settings;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Engine.Synth;
 
@@ -173,27 +175,176 @@ internal sealed class SupertonicAdapter
         string onnxDir = Path.Combine(baseDir, "models", "onnx");
         if (!Directory.Exists(onnxDir))
             throw new FileNotFoundException($"Supertonic ONNX directory missing: {onnxDir}");
-        // Pull the user's tweaks from the registry-backed settings (cached by
-        // Settings\Version). The Control Panel surfaces all of these on the Advanced
-        // tab so users can experiment with their CPU/GPU.
+        // Pull the user's tweaks from the settings file (cached by mtime). The
+        // Control Panel surfaces all of these on the Advanced tab so users can
+        // experiment with their CPU/GPU.
         int intraOp = 0, interOp = 1, dmlDevice = 0;
-        bool useDml = false;
+        bool useDml = false, gpuOnBattery = false;
         try
         {
             var es = EngineSettingsCache.Resolve();
             intraOp = es.OnnxThreads;
             interOp = es.OnnxInterOpThreads;
             useDml = es.UseDirectML;
+            gpuOnBattery = es.GpuOnBattery;
             dmlDevice = es.DirectMLDeviceId;
         }
         catch { /* defaults */ }
+
+        // A measurement beats a default, and a decision beats a measurement.
+        //
+        // OnnxThreads = 0 has always meant "let ORT decide", which measured as the
+        // WORST configuration on the machine that motivated this work: ORT's own
+        // pick spent eleven times the cores to finish later than two threads. It
+        // now means "use what this machine measured about itself, and fall back to
+        // ORT's pick if it has never been measured" — so an install that has never
+        // run a sweep behaves exactly as it did before.
+        //
+        // A non-zero OnnxThreads is left alone on purpose. That is a person who
+        // opened the Advanced tab and typed a number, and a knob that silently
+        // loses to a measurement is a knob that generates bug reports.
+        //
+        // ...unless this process is MEASURING the engine rather than speaking.
+        // The thread sweep selects its "auto" candidate by writing OnnxThreads = 0
+        // — the same value that means "apply the profile" — so without this it
+        // measures the profile the last sweep saved instead of ORT's own pick.
+        // Self-referential, and silent: the thread read-back below exempts auto by
+        // design. Measured 2026-08-20, same machine twenty minutes apart: the
+        // contaminated row read 0.69 cores at RTF 0.25, the clean one 13.2 at 0.35.
+        bool noProfile = BenchSwitches.IsAuthorised(
+            Environment.GetEnvironmentVariable(BenchSwitches.NoProfileVariable), Environment.ProcessId);
+
+        // Cleared per session build, not once per process: a session rebuilt after
+        // a reset must not keep reporting the previous one's provenance.
+        ProfileApplied = false;
+        GpuSkippedForBattery = false;
+
+        // One decision, shared with the Control Panel's prediction of it
+        // (DirectMlPolicy). Three things can change the provider, in a fixed
+        // order: the checkbox is a veto (unticked means CPU whatever a profile
+        // says), a stored profile may then pick between what is left, and the
+        // battery rule can still knock DirectML out. Nothing can put it back.
+        // Power is read here, once per session build — never polled.
+        var applied = intraOp == CpuBudget.Auto && !noProfile
+            ? BenchmarkProfileCache.Applicable(baseDir, onnxDir)
+            : null;
+        // A process that is MEASURING the engine asked for a specific provider and
+        // must get it: a sweep's DirectML row run unplugged would otherwise be
+        // silently CPU, and a full table of numbers would all describe one
+        // configuration. So the battery rule is not consulted there.
+        var decision = DirectMlPolicy.Decide(
+            applied, useDml, noProfile ? PowerStates.Unknown : PowerSource.Read(), gpuOnBattery);
+        useDml = decision.Provider == ExecutionProviders.DirectMl;
+        GpuSkippedForBattery = decision.SkippedForBattery;
+        if (decision.FromProfile)
+        {
+            // Threads come from the rows that describe the provider in force, so
+            // a battery veto lands on a MEASURED CPU count when the sweep has one;
+            // when it has none the thread count stays ORT's own pick, as before.
+            intraOp = decision.Threads;
+            ProfileApplied = true;
+        }
+
         // Honor the in-process latch: repeated GPU device-loss in this process
         // means the DML path is unhealthy here; force CPU until process exit.
         if (_useDmlLatchedOff || forceCpu) useDml = false;
-        _sharedTts = Helper.LoadTextToSpeech(onnxDir, useGpu: useDml,
-            intraOpThreads: intraOp, interOpThreads: interOp, directMLDevice: dmlDevice);
+        try
+        {
+            _sharedTts = Helper.LoadTextToSpeech(onnxDir, out bool gpuActive, useGpu: useDml,
+                intraOpThreads: intraOp, interOpThreads: interOp, directMLDevice: dmlDevice);
+            EffectiveProvider = gpuActive ? "directml" : "cpu";
+        }
+        catch (Exception ex) when (IsNativeLoadFailure(ex))
+        {
+            throw new InvalidOperationException(NativeLoadDiagnostic(), ex);
+        }
+
+        // What the session was ACTUALLY built with, as opposed to what settings
+        // asked for. Telemetry publishes this, which is what lets a sweep verify
+        // that the thread count it requested reached ORT at all — without it, every
+        // way that request could fail produces one symptom: a full table of numbers
+        // that all describe the same configuration.
+        EffectiveIntraOpThreads = intraOp;
         _ttsOnnxDir = onnxDir;
         return _sharedTts;
+    }
+
+    /// <summary>
+    /// Intra-op threads the live shared session was built with, or -1 when there
+    /// is no session in this process yet.
+    ///
+    /// <para>Not the settings value: <c>0</c> in settings can mean ORT's pick or a
+    /// measured profile's count, and those are different numbers with the same
+    /// spelling.</para>
+    /// </summary>
+    internal static int EffectiveIntraOpThreads { get; private set; } = -1;
+
+    /// <summary>
+    /// Execution provider the live shared session actually got — "directml" only
+    /// when DirectML genuinely appended, never merely because it was requested.
+    /// </summary>
+    internal static string EffectiveProvider { get; private set; } = "";
+
+    /// <summary>
+    /// Whether the live shared session was built from a stored benchmark profile
+    /// rather than from the settings as written.
+    ///
+    /// <para>Published so a sweep can <em>verify</em> that its
+    /// <c>VIBESUPERTONIC_NO_PROFILE</c> request took effect, rather than trusting
+    /// that it did. This closes the one hole in the read-back guard: a numbered
+    /// candidate is checked by comparing the thread count it asked for against
+    /// the count the engine reports, but the <c>auto</c> candidate asks for 0 and
+    /// is therefore exempt — which is exactly the row a profile substitutes
+    /// itself into. Without this flag the sweep has no way to tell "ORT picked
+    /// this" from "the last sweep did".</para>
+    /// </summary>
+    internal static bool ProfileApplied { get; private set; }
+
+    /// <summary>
+    /// True when DirectML would have been used and the battery rule is the only
+    /// reason it was not. Published so the Status tab can say so instead of
+    /// leaving "why is my GPU idle" with three indistinguishable causes.
+    /// </summary>
+    internal static bool GpuSkippedForBattery { get; private set; }
+
+    /// <summary>
+    /// Is this ONNX Runtime's native DLL failing to load, in any of the shapes
+    /// that failure arrives in? The first touch of ORT runs a static constructor,
+    /// so the real cause is usually buried under a
+    /// <see cref="TypeInitializationException"/>.
+    /// </summary>
+    private static bool IsNativeLoadFailure(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            if (e is DllNotFoundException or BadImageFormatException) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Replace Windows' least helpful error message with the actual cause.
+    ///
+    /// A missing Visual C++ redistributable makes <c>onnxruntime.dll</c> fail to
+    /// load with "Unable to load DLL '…\onnxruntime.dll' or one of its
+    /// dependencies: The specified module could not be found. (0x8007007E)" —
+    /// which names the file that IS present and says nothing about the one that
+    /// is not. Every reader checks onnxruntime.dll, finds it, and starts hunting
+    /// a corrupt download.
+    ///
+    /// This message reaches the user twice: engine.log, and the Monitor tab's
+    /// LastError column via the Speak catch. Both are places someone lands while
+    /// wondering why a voice they can see makes no sound.
+    /// </summary>
+    private static string NativeLoadDiagnostic()
+    {
+        string bitness = IntPtr.Size == 8 ? "x64" : "x86";
+        string redist = IntPtr.Size == 8 ? "Microsoft.VCRedist.2015+.x64" : "Microsoft.VCRedist.2015+.x86";
+        return
+            $"ONNX Runtime's native library could not be loaded in this {bitness} host. " +
+            "The file itself ships with the engine, so the missing piece is one of its " +
+            $"dependencies — almost always the {bitness} Visual C++ runtime, which ONNX " +
+            "Runtime links against and which Windows does not name in its error. " +
+            $"Fix: winget install {redist}   " +
+            "(The Control Panel's Status tab checks this and can install it for you.)";
     }
 
     /// <summary>
@@ -227,6 +378,11 @@ internal sealed class SupertonicAdapter
         var dead = _sharedTts;
         _sharedTts = null;
         _ttsOnnxDir = null;
+        // No session, so nothing is in force. Reported rather than left stale:
+        // telemetry publishing the dead session's thread count would tell a sweep
+        // (or the Status tab) about a configuration that no longer exists.
+        EffectiveIntraOpThreads = -1;
+        EffectiveProvider = "";
         if (dead is null) return;
 
         // Backpressure: if multiple disposes are already pending, the DML
@@ -332,7 +488,7 @@ internal sealed class SupertonicAdapter
         // settings.json (user-editable) or a SAPI client's xml:lang (arbitrary
         // LCID). The SDK THROWS on an unknown code, and a thrown Speak is a
         // silent voice — degrade to English instead.
-        string langCode = Shared.SupertonicLanguages.Normalize(lang);
+        string langCode = SupertonicLanguages.Normalize(lang);
 
         // Honor cancellation before we do anything heavy. If the SAPI client
         // aborted the parent Speak before this prefetch task ran, we don't
@@ -472,120 +628,15 @@ internal sealed class SupertonicAdapter
             "DirectML device-loss recovery failed after one CPU retry.", firstLoss);
     }
 
-    private const int MaxChunkChars = 200;
-    private const int MinChunkChars = 100;
-    private const int MergeCeiling = MaxChunkChars + 80; // allow merging slightly above max
-
-    /// <summary>
-    /// Strips characters that have non-deterministically wedged synthesis in the field:
-    /// ASCII C0 controls (except \t \n \r), DEL, C1 controls, zero-width / bidi
-    /// format marks, BOM, and private-use-area codepoints (no phoneme mapping).
-    /// Idempotent. Done once on the SAPI fragment text before chunking so chunks
-    /// remain findable in the source text via IndexOf at the engine's word/sentence
-    /// boundary stage. Stripped characters are invisible, so the small drift in
-    /// SAPI word-boundary lParam offsets is not user-observable.
-    /// </summary>
-    public static string SanitizeForSynth(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return text;
-        var sb = new System.Text.StringBuilder(text.Length);
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
-            if (c == 0x7F) continue;
-            if (c >= 0x80 && c <= 0x9F) continue;
-            if (c >= 0x200B && c <= 0x200F) continue;
-            if (c >= 0x202A && c <= 0x202E) continue;
-            if (c >= 0x2060 && c <= 0x2064) continue;
-            if (c == 0xFEFF) continue;
-            if (c >= 0xE000 && c <= 0xF8FF) continue;
-            sb.Append(c);
-        }
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Three-pass chunker:
-    /// 1. Helper.ChunkText splits at sentence boundaries (merges short sentences ≤MaxChunkChars).
-    /// 2. SplitLongChunk breaks oversize sentences at internal punctuation/word boundaries.
-    /// 3. Merge tiny chunks (&lt;MinChunkChars) with neighbors so all chunks have similar
-    ///    synthesis cost — uniform sizes keep the pipeline flowing without gaps.
-    /// </summary>
-    public static List<string> ChunkText(string text)
-    {
-        var sentenceChunks = Helper.ChunkText(text, maxLen: MaxChunkChars);
-
-        // Pass 2: split oversize chunks
-        var split = new List<string>();
-        foreach (var chunk in sentenceChunks)
-        {
-            if (chunk.Length <= MaxChunkChars + 30) split.Add(chunk);
-            else split.AddRange(SplitLongChunk(chunk, MaxChunkChars));
-        }
-
-        // Pass 3: merge undersize chunks with neighbors
-        var merged = new List<string>();
-        foreach (var chunk in split)
-        {
-            if (merged.Count > 0)
-            {
-                int combinedLen = merged[^1].Length + 1 + chunk.Length;
-                bool tinyExists = merged[^1].Length < MinChunkChars || chunk.Length < MinChunkChars;
-                if (tinyExists && combinedLen <= MergeCeiling)
-                {
-                    merged[^1] = merged[^1] + " " + chunk;
-                    continue;
-                }
-            }
-            merged.Add(chunk);
-        }
-        return merged;
-    }
-
-    private static IEnumerable<string> SplitLongChunk(string text, int maxLen)
-    {
-        int pos = 0;
-        while (pos < text.Length)
-        {
-            int remaining = text.Length - pos;
-            if (remaining <= maxLen)
-            {
-                yield return text.Substring(pos).Trim();
-                yield break;
-            }
-            int hardEnd = pos + maxLen;
-            int boundary = FindSoftBoundary(text, pos, hardEnd);
-            yield return text.Substring(pos, boundary - pos).Trim();
-            pos = boundary;
-            // Skip leading whitespace
-            while (pos < text.Length && char.IsWhiteSpace(text[pos])) pos++;
-        }
-    }
-
-    private static int FindSoftBoundary(string text, int start, int end)
-    {
-        // Prefer punctuation breaks in the latter half of the window
-        int half = start + (end - start) / 2;
-        for (int i = end - 1; i > half; i--)
-        {
-            char c = text[i];
-            if (c == ',' || c == ';' || c == ':' || c == '—' /* em-dash */) return i + 1;
-        }
-        // Fall back to last whitespace anywhere in window (don't restrict to latter half —
-        // that risks hard-cutting mid-word when latter half has no spaces).
-        for (int i = end - 1; i > start; i--)
-        {
-            if (char.IsWhiteSpace(text[i])) return i + 1;
-        }
-        // Pathological: no whitespace in window. Walk forward to next whitespace rather
-        // than hard-cutting mid-word; chunk will be slightly oversize but words preserved.
-        for (int i = end; i < text.Length; i++)
-        {
-            if (char.IsWhiteSpace(text[i])) return i + 1;
-        }
-        return text.Length;
-    }
+    // SanitizeForSynth and the three-pass chunker moved to VibeSuperTonic.Core.Text
+    // (TextSanitizer, SentenceChunker). Both were pure text work in a class that is
+    // otherwise DirectML device-loss machinery, and the Linux daemon needs both
+    // while needing none of the rest — R-12. Callers use SentenceChunker.Chunk
+    // directly; a forwarding shim here would just be a second name for it.
+    //
+    // SanitizeForSynth's old doc comment claimed the offset drift from stripping
+    // was "not user-observable". That was true only because nothing highlighted
+    // words accurately enough to notice. TextOffsetMap tracks it now; see R-2.
 
     /// <summary>
     /// Kick off background ONNX model + style loading so the first Speak doesn't pay the cost.
@@ -612,18 +663,12 @@ internal sealed class SupertonicAdapter
         catch { /* swallow — first real Speak will report */ }
     });
 
-    private static short[] FloatToInt16(float[] wav)
-    {
-        short[] pcm = new short[wav.Length];
-        for (int i = 0; i < wav.Length; i++)
-        {
-            float s = wav[i];
-            if (s > 1f) s = 1f;
-            else if (s < -1f) s = -1f;
-            pcm[i] = (short)(s * 32767f);
-        }
-        return pcm;
-    }
+    // The local FloatToInt16 was a character-for-character duplicate of
+    // AudioBuffer.FloatToPcm16, which the Linux backend already calls. Two copies
+    // of the clamp-and-scale is exactly the drift Core exists to prevent: the two
+    // platforms would render the same model to subtly different PCM the first
+    // time one of them changed rounding or clipping.
+    private static short[] FloatToInt16(float[] wav) => AudioBuffer.FloatToPcm16(wav);
 
     public int SampleRate
     {

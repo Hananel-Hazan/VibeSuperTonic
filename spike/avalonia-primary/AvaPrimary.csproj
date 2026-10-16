@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Answers one question before Phase 6 builds anything for it: does an Avalonia
+    window claim the X11 PRIMARY selection?
+
+    R-6 says the Reader must not read our own window back to the user. The
+    daemon already implements a defence — X11SelectionSource.OwnerIsThisProcess,
+    comparing the owner's _NET_WM_PID against ours — and nobody on either side of
+    the argument had checked whether it is needed. Claiming PRIMARY on selection
+    is a toolkit decision, not an X11 requirement.
+
+    Half an hour here decides whether R-6 is code Phase 6 must design around or a
+    footnote in the port plan.
+
+    Not VstPortable: it is a throwaway measurement that links a GUI toolkit, and
+    CA1416 has nothing to protect.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>avaprimary</AssemblyName>
+    <VstPortable>false</VstPortable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      11.3.20 is what the local NuGet cache already holds, which is what makes
+      this restorable without asking the network. Phase 6 should pin the same
+      version rather than picking up whatever is current on the day.
+    -->
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+  </ItemGroup>
+
+</Project>

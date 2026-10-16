@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows.Forms;
 using VibeSuperTonic.Launcher.Telemetry;
 using VibeSuperTonic.Launcher.Integrity;
+using VibeSuperTonic.Core.Telemetry;
 
 namespace VibeSuperTonic.Launcher.Ui;
 
@@ -29,7 +30,7 @@ internal sealed class MonitorTab : UserControl
     private readonly Button _copyTextBtn;
     private readonly Button _copyErrorBtn;
 
-    private readonly List<TelemetrySnapshot> _currentSessions = new();
+    private readonly List<SessionSnapshot> _currentSessions = new();
     private int _selectedPid = -1;
 
     public MonitorTab()
@@ -197,7 +198,7 @@ internal sealed class MonitorTab : UserControl
         var sessions = TelemetryReader.ListLiveSessions();
         UpdateSessionsGrid(sessions);
 
-        TelemetrySnapshot? snap = ResolveSelectedSnapshot(sessions);
+        SessionSnapshot? snap = ResolveSelectedSnapshot(sessions);
         if (snap is null)
         {
             _state.Text = sessions.Count == 0
@@ -230,7 +231,7 @@ internal sealed class MonitorTab : UserControl
         UpdateHolders();
     }
 
-    private TelemetrySnapshot? ResolveSelectedSnapshot(List<TelemetrySnapshot> sessions)
+    private SessionSnapshot? ResolveSelectedSnapshot(List<SessionSnapshot> sessions)
     {
         if (sessions.Count == 0) { _selectedPid = -1; return null; }
         if (_selectedPid > 0)
@@ -242,7 +243,7 @@ internal sealed class MonitorTab : UserControl
         return sessions[0];
     }
 
-    private void UpdateSessionsGrid(List<TelemetrySnapshot> sessions)
+    private void UpdateSessionsGrid(List<SessionSnapshot> sessions)
     {
         // Detect changes by composing a simple signature; rebuild only when needed
         // so we don't flicker the selection at 5 Hz.
@@ -355,7 +356,7 @@ internal sealed class MonitorTab : UserControl
         catch { _holders.Text = "—"; }
     }
 
-    private static string DeviceLabel(TelemetrySnapshot s)
+    private static string DeviceLabel(SessionSnapshot s)
     {
         if (s.DmlLatchedOff) return "CPU (latch)";
         // We don't know the actual loaded backend without an extra field, but

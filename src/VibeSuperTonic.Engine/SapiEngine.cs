@@ -1,9 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using VibeSuperTonic.Core.Text;
 using VibeSuperTonic.Engine.Interop;
 using VibeSuperTonic.Engine.Settings;
 using VibeSuperTonic.Engine.Synth;
 using VibeSuperTonic.Engine.Telemetry;
+using VibeSuperTonic.Core.Audio;
+using VibeSuperTonic.Core.Diagnostics;
+using VibeSuperTonic.Core.Synthesis;
 
 namespace VibeSuperTonic.Engine;
 
@@ -179,6 +183,16 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         Trace("Speak", $"flags={dwSpeakFlags:X}, fragList={pTextFragList:X}, formatId={rguidFormatId}, pWfx={pWaveFormatEx:X}");
         _firstWriteTickMs = 0; // reset; StreamPcm will set on first successful Write
         _bytesWrittenThisSpeak = 0;
+        // Re-read per Speak rather than caching at type load. The value cannot
+        // change within a process, but the ORDER in which it is first read can:
+        // the benchmark helper sets the variable and then activates the COM
+        // engine, and a static initialiser that happened to run earlier — for
+        // any reason, in any future refactor — would cache "paced" and silently
+        // measure the thing this exists to stop measuring. A dictionary lookup
+        // per utterance is not worth defending against that.
+        UnpacedActive = BenchSwitches.IsAuthorised(
+            Environment.GetEnvironmentVariable(BenchSwitches.UnpacedVariable), Environment.ProcessId);
+        if (UnpacedActive) Trace("Speak", "real-time pacing and drain disabled for this process (benchmark)");
         if (pWaveFormatEx != IntPtr.Zero)
         {
             var wfx = Marshal.PtrToStructure<WAVEFORMATEX>(pWaveFormatEx);
@@ -217,12 +231,15 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             float volumeScale = Math.Clamp(siteVolumePct / 100f * volTrimLinear, 0f, 4f);
             uint interChunkSilenceMs = (uint)Math.Max(0, resolved.InterChunkSilenceMs);
 
-            string defaultLang = Shared.SupertonicLanguages.Normalize(resolved.Language);
+            string defaultLang = SupertonicLanguages.Normalize(resolved.Language);
             var planItems = BuildSpeakPlan(pTextFragList, defaultLang);
             Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
 
-            // Telemetry: announce we're starting work.
-            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, resolved.OnnxThreads, 0, ""); }
+            // Telemetry: announce we're starting work. BeginUtterance first, so
+            // the figures MarkIdle publishes at the end belong to THIS utterance
+            // and cannot be the previous one's left in a latch.
+            try { TelemetryWriter.BeginUtterance(); } catch { /* swallow */ }
+            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ""); }
             catch { /* swallow */ }
 
             if (planItems.Count == 0) return SapiConstants.S_OK;
@@ -239,14 +256,31 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             {
                 if (item is SpeakTextItem speakItem)
                 {
-                    var chunks = SupertonicAdapter.ChunkText(speakItem.Text);
-                    int offsetWithin = 0;
-                    foreach (var chunkText in chunks)
+                    // ChunkWithOffsets, not Chunk + IndexOf: the chunker
+                    // normalises whitespace, so a chunk built from text with a
+                    // newline or a double space between sentences is not a
+                    // substring of its input and IndexOf misses every time. The
+                    // old fallback then walked forward in rewritten coordinates
+                    // and drifted — the same class of defect as R-2.
+                    foreach (var chunk in SentenceChunker.ChunkWithOffsets(
+                                 speakItem.Text, resolved.MaxChunkChars, resolved.MinChunkChars))
                     {
-                        int idx = speakItem.Text.IndexOf(chunkText, offsetWithin, StringComparison.Ordinal);
-                        if (idx < 0) idx = offsetWithin;
-                        execPlan.Add(new SpeakChunkExec(chunkText, speakItem.SourceCharOffset + (uint)idx, speakItem.RateAdj, speakItem.Lang));
-                        offsetWithin = idx + chunkText.Length;
+                        // Two rewrites sit between a chunk index and the client's
+                        // text, and BOTH have to be undone:
+                        //   chunk index -> rewritten  (chunk.Map: the chunker
+                        //                              collapsed whitespace)
+                        //   rewritten   -> source     (speakItem.Offsets: rules
+                        //                              and the sanitizer, R-2)
+                        // Composing them once per chunk means the emit path is a
+                        // single lookup and cannot get the order wrong. Carrying
+                        // only chunk.Start instead was correct exactly while every
+                        // separator was one character long — so single spaces,
+                        // newlines and tabs looked right and double spaces and
+                        // paragraph breaks drifted one character per separator.
+                        execPlan.Add(new SpeakChunkExec(
+                            chunk.Text, speakItem.SourceCharOffset,
+                            TextOffsetMap.Chain(chunk.Map, speakItem.Offsets),
+                            speakItem.RateAdj, speakItem.Lang));
                     }
                 }
                 else
@@ -313,7 +347,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             Task<short[]> currentSynth = Task.Run(() =>
             {
                 var raw = adapter.Synthesize(firstChunkExec.Text, totalStep: totalStepResolved, speed: firstSynth, cancellationToken: speakToken, lang: firstChunkExec.Lang);
-                return TimeStretch.Stretch(raw, firstStretch);
+                return TimeStretch.Stretch(raw, firstStretch, SampleRate);
             }, speakToken);
             var firstSynthStartMs = Environment.TickCount64;
             double rollingRtf = double.NaN;
@@ -404,7 +438,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 {
                                     TelemetryWriter.Update(false, _voiceId, "",
                                         resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                        0, double.NaN, 0, 0, resolved.OnnxThreads, 0,
+                                        0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0,
                                         $"Synth hang > {SynthHardTimeoutMs / 1000}s — session reset queued");
                                 }
                                 catch { }
@@ -431,7 +465,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 // file backend has no such limit.)
                                 TelemetryWriter.Update(true, _voiceId, chunk.Text ?? "",
                                     resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                    firstByte, rollingRtf, 1, 0, resolved.OnnxThreads, 0, "");
+                                    firstByte, rollingRtf, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, "");
                             }
                             catch { /* swallow */ }
                         }
@@ -461,7 +495,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             Log("Speak.Synthesize",
                                 new Exception($"Failed chunk text (first 60 with escapes): [{codePoints}] " +
                                               $"| preview: \"{failPreview}\"", ex));
-                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, resolved.OnnxThreads, 0, ex.Message); } catch { }
+                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ex.Message); } catch { }
                             return SapiConstants.E_FAIL;
                         }
 
@@ -479,7 +513,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             currentSynth = Task.Run(() =>
                             {
                                 var raw = adapter.Synthesize(nextChunkExec.Text, totalStep: nextTotalStep, speed: nSynth, cancellationToken: speakToken, lang: nextChunkExec.Lang);
-                                return TimeStretch.Stretch(raw, nStretch);
+                                return TimeStretch.Stretch(raw, nStretch, SampleRate);
                             }, speakToken);
                             nextSynthIdx++;
                         }
@@ -554,6 +588,14 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             // Cap, don't skip: a pathological drainMs >= 60000 used to skip the drain
             // entirely, letting SAPI cut trailing audio. Clamp to the ceiling instead.
             if (drainMs > 60000) drainMs = 60000;
+            // The one legitimate reason to skip it: a benchmark render, where the
+            // sink is a file and there is no hardware buffer to wait for. This is
+            // the half that dominates. With the write pacing gone the writes
+            // finish in compute time, so elapsedSinceFirstWriteMs collapses to
+            // almost nothing and drainMs grows to very nearly the full audio
+            // duration — gating the pacing alone would just move the same six
+            // seconds from one loop to the other and change no measurement at all.
+            if (UnpacedActive) drainMs = 0;
             if (drainMs > 0)
             {
                 int sleptMs = 0;
@@ -584,7 +626,48 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         }
     }
 
-    private sealed record SpeakChunkExec(string Text, uint SourceCharOffset, int RateAdj, string Lang);
+    /// <summary>
+    /// One synthesis chunk, plus everything needed to say where it came from.
+    ///
+    /// <c>FragmentSourceOffset</c> is the SAPI fragment's offset in the client's
+    /// text. <c>Offsets</c> maps an index in THIS CHUNK all the way back to the
+    /// fragment's source text, having already composed the chunker's whitespace
+    /// normalisation with the pronunciation and sanitizer rewrites.
+    ///
+    /// The two live in different coordinate spaces and must never be added
+    /// together — doing exactly that was R-2. Go through
+    /// <see cref="SourceOffsetAt"/>, which crosses the spaces via the map.
+    /// </summary>
+    private sealed record SpeakChunkExec(
+        string Text,
+        uint FragmentSourceOffset,
+        TextOffsetMap Offsets,
+        int RateAdj,
+        string Lang)
+    {
+        /// <summary>Absolute offset in the client's text of a position within this chunk.</summary>
+        public uint SourceOffsetAt(int indexInChunk) =>
+            FragmentSourceOffset + (uint)Offsets.ToSource(indexInChunk);
+
+        /// <summary>
+        /// How many source characters a span of this chunk covers — the length a
+        /// client should highlight. "kilograms" is nine characters of spoken text
+        /// but covers the two the user typed.
+        /// </summary>
+        public int SourceLengthAt(int indexInChunk, int lengthInChunk)
+        {
+            int length = Offsets.SourceSpanLength(indexInChunk, lengthInChunk);
+            if (length > 0 || lengthInChunk <= 0) return length;
+
+            // The span sits entirely inside one substitution, so it covers no
+            // distinct source range of its own ("kg" → "kilo grams" splits into two
+            // spoken words over one source token). Report a single character at the
+            // right place rather than a zero-width selection that clients render as
+            // nothing at all.
+            int start = Offsets.ToSource(indexInChunk);
+            return start < Offsets.SourceLength ? 1 : 0;
+        }
+    }
 
     /// <summary>
     /// Returns true if <paramref name="ex"/> is (or wraps) an
@@ -647,7 +730,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             currentSynth = Task.Run(() =>
             {
                 var raw = adapter.Synthesize(nextExec.Text, totalStep: totalStepLocal, speed: nSynth, cancellationToken: speakToken, lang: nextExec.Lang);
-                return TimeStretch.Stretch(raw, nStretch);
+                return TimeStretch.Stretch(raw, nStretch, SampleRate);
             }, speakToken);
             nextSynthIdx = currentSynthIdx + 1;
             i = synthIndices[currentSynthIdx] - 1;
@@ -728,8 +811,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             elParamType = SapiConstants.SPET_LPARAM_IS_UNDEFINED,
             ulStreamNum = 0,
             ullAudioStreamOffset = streamOffsetBytes,
-            wParam = (IntPtr)chunk.Text.Length,
-            lParam = (IntPtr)(int)chunk.SourceCharOffset,
+            wParam = (IntPtr)chunk.SourceLengthAt(0, chunk.Text.Length),
+            lParam = (IntPtr)(int)chunk.SourceOffsetAt(0),
         };
         int hr = addEvents(sitePtr, &ev, 1);
         if (hr < 0) Trace("Speak", $"AddEvents(sentence) hr=0x{hr:X8}");
@@ -766,8 +849,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 elParamType = SapiConstants.SPET_LPARAM_IS_UNDEFINED,
                 ulStreamNum = 0,
                 ullAudioStreamOffset = wordAudioOffset,
-                wParam = (IntPtr)wordLen,
-                lParam = (IntPtr)(int)(chunk.SourceCharOffset + (uint)start),
+                wParam = (IntPtr)chunk.SourceLengthAt(start, wordLen),
+                lParam = (IntPtr)(int)chunk.SourceOffsetAt(start),
             });
         }
 
@@ -845,6 +928,26 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     private const int LookaheadMs = 100;
     private const int LookaheadBytes = (BytesPerSecond * LookaheadMs) / 1000;
 
+    /// <summary>
+    /// Whether this process is rendering for a benchmark and has asked for the
+    /// real-time pacing and the end-of-Speak drain to be skipped — see
+    /// <see cref="BenchSwitches"/> for the switch and for why it is pid-keyed.
+    ///
+    /// <para>Process-wide rather than per-instance because the thing it reflects
+    /// is a property of the process, not of a voice: the environment variable is
+    /// read from the process block and every engine instance in the process gets
+    /// the same answer. Concurrent Speaks therefore write the same value and
+    /// cannot race to a different one.</para>
+    ///
+    /// <para><b>False for every real SAPI host, always.</b> Nothing sets the
+    /// variable except the benchmark helper, and the helper can only set it for
+    /// itself. If this is ever observed true in Balabolka, NVDA or Lingoes then
+    /// the guard has failed and R-14 is back — which is why
+    /// <see cref="Telemetry.TelemetryWriter"/> publishes it rather than leaving
+    /// it to be inferred from a log line nobody reads.</para>
+    /// </summary>
+    internal static volatile bool UnpacedActive;
+
     private unsafe int StreamPcm(short[] pcm, IntPtr sitePtr,
         delegate* unmanaged[Stdcall]<IntPtr, uint> getActions,
         delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint*, int> write)
@@ -879,10 +982,15 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 // when Speak returns — losing the trailing word(s). With pacing,
                 // SAPI's buffer is at most LookaheadMs full at any time, so the
                 // device drains within a similar window of our last write.
+                //
+                // Skipped entirely for a benchmark render (UnpacedActive): there
+                // is no device pulling at 44.1 kHz on the other end, only a file,
+                // so every millisecond spent here is measurement time bought for
+                // nothing. See the drain below — both halves go together.
                 long elapsedMs = Environment.TickCount64 - _firstWriteTickMs;
                 long expectedBytes = (BytesPerSecond * elapsedMs) / 1000;
                 long aheadBytes = _bytesWrittenThisSpeak - expectedBytes;
-                if (aheadBytes > LookaheadBytes)
+                if (!UnpacedActive && aheadBytes > LookaheadBytes)
                 {
                     int sleepMs = (int)((aheadBytes - LookaheadBytes) * 1000 / BytesPerSecond);
                     if (sleepMs > 0)
@@ -911,7 +1019,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// &lt;prosody rate="..."&gt; tags affect only their own enclosed text.
     /// </summary>
     private abstract record SpeakItem;
-    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang) : SpeakItem;
+    /// <param name="SourceCharOffset">Where this fragment starts in the client's text.</param>
+    /// <param name="Offsets">Maps an index in <paramref name="Text"/> (rewritten) back into the fragment's source text.</param>
+    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang, TextOffsetMap Offsets) : SpeakItem;
     private sealed record SpeakSilenceItem(uint Milliseconds) : SpeakItem;
     private sealed record SpeakBookmarkItem(string Name, uint SourceCharOffset) : SpeakItem;
 
@@ -954,16 +1064,21 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         // wedged the synth in the field. Done before chunking so
                         // the chunker sees clean text and the engine's downstream
                         // IndexOf on the same string still finds chunks.
-                        string spoken = SupertonicAdapter.SanitizeForSynth(pron.Apply(text, pronCompiled));
+                        // Prepare returns the text the model will speak plus a map
+                        // from that text's indices back to the client's. Both stages
+                        // change length — rules substitute, the sanitizer strips —
+                        // so without the map every later boundary offset is wrong by
+                        // the accumulated delta (R-2).
+                        string spoken = SynthTextPipeline.Prepare(text, pron, pronCompiled, out var offsets);
                         if (!string.IsNullOrEmpty(spoken))
                         {
                             // FromLcid returns null both for "fragment carries no
                             // language" (LangID 0, the common case) and for "a
                             // language Supertonic doesn't speak" — both fall back
                             // to the user's configured language.
-                            string fragLang = Shared.SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
+                            string fragLang = SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
                             Trace("BuildSpeakPlan", $"frag LangID=0x{frag.State.LangID:X4} → lang={fragLang}");
-                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang));
+                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang, offsets));
                         }
                     }
                     break;
@@ -1023,7 +1138,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         {
             lock (_logLock)
             {
-                Shared.LogRotation.RollIfNeeded(LogPath);
+                LogRotation.RollIfNeeded(LogPath);
                 File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {where}: {msg}\n");
             }
         }
@@ -1046,7 +1161,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             sb.Append('\n');
             lock (_logLock)
             {
-                Shared.LogRotation.RollIfNeeded(LogPath);
+                LogRotation.RollIfNeeded(LogPath);
                 File.AppendAllText(LogPath, sb.ToString());
             }
         }

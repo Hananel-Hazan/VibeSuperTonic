@@ -2,15 +2,154 @@
 
 ## Shipping / building / releasing
 
-When the user asks for a build, a release, an executable to test, a zip to hand
-off — or you have changes you want to ship to the user — use the canonical
-packaging script:
+When the user asks for a build, a release, an executable to test, an archive to
+hand off — or you have changes you want to ship to the user — use the canonical
+packaging script **for the platform they mean**. Ask which one if it is not
+obvious; the project ships two products from one repository.
 
-**Script:** [build/pack-zip.ps1](build/pack-zip.ps1)
-**Output:** `dist/VibeSuperTonic-<version>-win.zip`
+| Target | Script | Output |
+| --- | --- | --- |
+| Windows | [build/pack-zip.ps1](build/pack-zip.ps1) | `dist/VibeSuperTonic-<version>-win.zip` |
+| Linux | [build/pack-tar.sh](build/pack-tar.sh) | `dist/VibeSuperTonic-<version>-linux-x64.tar.gz` |
+| Linux, AppImage | [build/pack-appimage.sh](build/pack-appimage.sh) | `dist/VibeSuperTonic-<version>-x86_64.AppImage` |
+| Linux, snap | [build/pack-snap.sh](build/pack-snap.sh) | `dist/VibeSuperTonic-<version>-amd64.snap` |
+| Linux, Flatpak | [build/pack-flatpak.sh](build/pack-flatpak.sh) | `dist/VibeSuperTonic-<version>-x86_64.flatpak` |
+
+**Linux ships two artifacts, and the tarball is the canonical one.** Decided
+2026-08-24. The AppImage is built *from the tree pack-tar.sh composed* — it
+publishes nothing itself — so all six of the tarball's assertions are inherited
+rather than copied. A run that produces both is:
+
+```bash
+bash build/pack-tar.sh -v <X.Y.Z> && bash build/pack-appimage.sh -v <X.Y.Z>
+```
+
+In that order, and a failed tarball means no AppImage. `pack-appimage.sh` refuses
+to run against a composed tree whose binaries report a different version, so the
+two artifacts of one release cannot come from two builds.
+
+**Since 0.2.17 (2026-09-25) Linux ships four, and the user-facing order is snap,
+Flatpak, AppImage, tarball.** The snap is what the Ubuntu App Center installs
+and Kubuntu's Discover lists; the Flatpak is Flathub, which Discover lists too.
+The AppImage is the third choice. **The tarball is still canonical**: the snap
+and the Flatpak are built from it exactly as the AppImage is, publish nothing,
+and re-ask its cheap assertions through
+[check-composed-tree.sh](build/check-composed-tree.sh). The Flatpak checks the
+tree *inside the tarball*, because on Flathub the tarball is its only source.
+
+```bash
+bash build/pack-tar.sh -v <X.Y.Z> && bash build/pack-snap.sh -v <X.Y.Z> --grade stable \
+  && bash build/pack-flatpak.sh -v <X.Y.Z> --test-install && bash build/pack-appimage.sh -v <X.Y.Z>
+```
+
+`pack-snap.sh` needs `snapcraft` (LXD by default, `--destructive-mode` on an
+Ubuntu 24.04 machine) and `pack-flatpak.sh` needs `flatpak-builder`. Neither
+store is reachable from a cloud session, so there both are built only by CI's
+`snap` and `flatpak` jobs. Submission steps, and the checklist that still needs a
+real Kubuntu and Ubuntu desktop, are in
+[docs/STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md).
+
+**Since S4 (2026-08-28) the archive also carries a Speech Dispatcher module** —
+`vst-speechd` and `speechd-install.sh` beside `install.sh` — which is what makes
+these voices reachable from Orca and anything else that speaks on Linux. The
+installer is a shipped file in [build/](build/speechd-install.sh) rather than a
+heredoc inside the packer, deliberately: it can be driven against a private
+speech-dispatcher that way, and
+[spike/speechd-s4-install/](spike/speechd-s4-install/README.md) is what does it.
+**Never test it against your own `~/.config/speech-dispatcher`** — a mistake
+there is somebody's screen reader going quiet, and the harness redirects
+`XDG_CONFIG_HOME` precisely so it does not have to.
+
+**Since P5 (2026-08-27) a Linux release needs one step before either**, because
+the archive now contains a phonemiser:
+
+```bash
+bash build/build-espeak.sh          # ~2 min, and only when the payload is stale
+```
+
+It clones espeak-ng at the commit piper pins, builds it with audio and
+time-stretch turned off, prunes 118 dictionaries to the ~31 the catalog and P1's
+corpus need, and composes `build/espeak-out/espeak` — the payload `pack-tar.sh`
+copies in. **The packer refuses to run without it** and refuses a payload whose
+recorded pin disagrees with the script's, so a stale build cannot ship. It is a
+separate script rather than a step inside the packer because it clones a
+repository and compiles dictionaries: two minutes and a network fetch that have
+nothing to do with a release run, and that only matter when the pin moves.
+
+**From that release onward the archive as a whole is GPL-3.0-or-later**, because
+it distributes espeak-ng. The repository's own source stays MIT — MIT is
+GPL-compatible and no `.cs` file changes — and `LICENSE-PHONEMIZER.txt`, written
+by the packer, is where the terms and the source offer live. Releases up to and
+including 0.2.10 — the newest one that was ever published — contain no espeak-ng
+and are unaffected; that is worth saying in 0.2.11's notes, because "the project
+became GPL" is what a reader will otherwise conclude retroactively.
+
+### What the tests defend, and what they do not
+
+[docs/TESTING-PLAN.md](docs/TESTING-PLAN.md), written 2026-08-27, audits the
+checks against four properties — **safe, slim, fast, valid** — and is worth
+reading before adding a test, because it says where a check belongs and why.
+
+**Since 2026-08-27 CI packs and smoke-tests, and since 2026-08-30 it also
+installs a real speech-dispatcher and re-runs P1's parity corpus**, which changes
+how a green run should be read. Four jobs were added to
+[build.yml](.github/workflows/build.yml):
+
+- **`pack`** builds espeak-ng (cached on the pin) and runs `pack-tar.sh`, so all
+  nine assertions run on every push rather than only when a human packs.
+- **`smoke`** extracts that tarball into a bare `ubuntu:22.04` container — the
+  oldest distro the glibc floor claims — and starts the daemon there with no
+  .NET, no display, no audio device, no models and no espeak-ng installed.
+  [build/smoke-test.sh](build/smoke-test.sh) is the same script you can run
+  locally against any extracted release.
+
+- **`speechd`** (S5, 2026-08-30) apt-installs `speech-dispatcher` and its
+  espeak-ng module and runs
+  [restore-test.sh](spike/speechd-s4-install/restore-test.sh) — 6 scenarios,
+  40 checks. The question it answers is not "does our module work" but **does
+  the user's screen reader still work after we install**, because trap 1 makes
+  "adding one module removed every other one" the default outcome of a naive
+  installer and the symptom is a blind user's desktop going quiet. No audio
+  device is involved: nothing is ever played.
+
+- **`parity`** (2026-08-30) re-runs [P1's corpus](spike/piper-phonemes/README.md)
+  — 327 sentences, 8 languages — against the payload the espeak cache holds. It
+  passes `--negative-control`, so five deliberate sabotages must all be caught
+  *before* the parity result is believed. What it defends is not a crash: it is
+  the same ids coming out slightly different, which reaches a user as a voice
+  that sounds subtly wrong with nothing anywhere reporting a fault. 2.7 seconds.
+
+**Nothing is installed into that container on purpose.** If the smoke job ever
+needs `libicu`, `openssl` or `libespeak-ng` added to it, that is a finding about
+the archive and belongs in `INSTALL.txt` — it is not a fix to the workflow.
+
+Its first run found that **the daemon could not start on a fresh install**: a
+routing decision read `SampleRate`, which loads the model, from the daemon's
+startup path with no models present. 0.2.10 was fine; the tree packed as the
+withdrawn `0.2.11` was not.
+
+The rule the existing checks are built on, and the one to keep: **a check that
+has never been observed failing is not evidence.** Every packer assertion was
+sabotaged on the day it was written. Do that for the next one too.
+
+**And one rule about the shell these checks are written in, learned the hard way
+on 2026-08-30: never put an early-exiting consumer in a pipeline.** `head -c 4`,
+`head -1`, `grep -q`, `awk '{... exit}'` — each of them closes the pipe while the
+producer is still writing, the producer takes SIGPIPE, `set -o pipefail` hands
+the assignment its 141, and `set -e` ends the script **with no message at all**.
+Whether it happens is a race, so the shape passes for a dozen releases and then
+fails under load: `pack-tar.sh` died twice in five runs at
+`espeak-ng --stdout | head -c 4`, printing nothing, in the middle of a phonemiser
+check that was working perfectly. Worse, `nm -D | grep -q` fails in the direction
+that *lies* — a successful match arriving as 141 reports the export as missing.
+
+Write it as a glob (`libs=(dir/lib*); lib="${libs[0]}"`), through a file, with
+`grep -c`, or with an awk that reads to the end (`/pat/ && !seen {…; seen=1}`).
+Every instance in `build/` was converted; the deterministic way to see the
+failure is to make the producer write more than a 64 KB pipe buffer.
 
 Do **not** use ad-hoc `dotnet build` or `dotnet publish` to produce shippable
-artifacts. The script is canonical because it:
+artifacts, on either platform. The Windows script is canonical because it:
 
 - Publishes Engine x64 + x86 (framework-dependent, COM in-proc) AND Launcher
   x64 (self-contained single-file). Skipping x86 silently breaks 32-bit SAPI
@@ -23,10 +162,286 @@ artifacts. The script is canonical because it:
 - Generates `LICENSE-MODELS.txt` (the OpenRAIL-M acceptance note the user
   agrees to when models download from Hugging Face) and `INSTALL.txt`.
 
+### The Linux packer — what it asserts, and why
+
+Written 2026-08-22. `bash build/pack-tar.sh [-v X.Y.Z]`. It publishes all three
+binaries into freshly emptied directories, composes the portable layout
+(binaries at the root, `models/` and `data/` beside them — no `engine/` split,
+because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
+`INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
+`install-gpu.sh` to the root, and archives it.
+
+Eleven assertions run against the **composed tree** — one of them, the budgets,
+against the finished tarball as well — and each exists because the failure it
+catches is silent:
+
+- **All three binaries report the same version**, asked of the shipped files via
+  `--version`. Guards a stale binary surviving in an output folder and a UI
+  shipping that disagrees with its daemon.
+- **The shipped `vst-ctl` is native, not a managed apphost.** `file` reports
+  *byte-identical* output for both — verified — so the check is the absence of a
+  companion `vst-ctl.dll` plus a size floor. A managed apphost is ~78 KB and
+  works perfectly while costing ~100 ms on every hotkey press; the AOT binary is
+  ~4 MB. A `grep ELF` check cannot tell them apart. CI checks the `.dll` too, but
+  not the size floor — and it checks its own publish output, never the composed
+  tree, which is the difference this assertion exists for.
+- **No models in the archive.** They download on first run behind the
+  OpenRAIL-M acceptance; shipping them would make that screen a lie.
+- **No `libonnxruntime_providers_cuda.so` in the archive** (Phase 8b). It is
+  330 MB against a 52 MB tarball and arrives by default with the GPU package the
+  backend links; `Directory.Build.targets` removes it at publish. The first
+  version of that removal lived in the backend csproj, looked correct and built
+  clean — a target in a project governs *that project's* output, not the publish
+  of the daemon referencing it — and this assertion is what caught the 330 MB.
+- **`install-gpu.sh` fetches the same ONNX Runtime version the daemon links, and
+  fetches it by hash.** The provider library and `libonnxruntime.so` are one
+  build split across two files; a drift between them fails on the user's machine
+  and nowhere else, and this is the only place both numbers are visible at once.
+  Since 2026-08-30 the assertion also checks the **SHA-512 pin** — 128 hex
+  characters, and pinned *for* the version being fetched, so a bump that forgets
+  to re-pin fails the pack instead of failing every user's install after a 227 MB
+  download. The pin is nuget.org's own published hash, re-derivable with one
+  `curl`; the recipe is in the script above the constant. The CUDA/cuDNN wheels
+  stay unpinned deliberately — `pip --require-hashes` is a maintenance surface
+  whose failure mode lands on the user.
+- **The glibc floor has not risen above 2.34** (Phase 9). Measured across every
+  ELF in the tree: `vst-ctl` needs `GLIBC_2.34` and nothing else needs above
+  2.27, because `vst-ctl` is the only binary compiled on the build machine — the
+  runtime, Skia and ONNX Runtime all arrive prebuilt from NuGet. So the floor
+  belongs to the toolchain rather than to this repository, it can rise under a
+  distro upgrade with every test still green, and the symptom is a user on a
+  supported distro told `GLIBC_2.39 not found` by a binary that ran yesterday.
+  2.34 is Ubuntu 22.04+, Debian 12+, RHEL 9+.
+
+- **The Piper voice catalog ships, and it is checked** (P4, 2026-08-25).
+  `piper-voices.json` is copied to the archive root beside `models-manifest.json`
+  — it is what the Voices tab reads, and without it an install can list the
+  voices it has and offer none. Assertion 3b runs
+  [check-piper-catalog.py](build/check-piper-catalog.py) over the shipped file
+  and refuses an unhashed voice (it would download unverified, because an empty
+  `sha256` means "nothing to check"), a non-https URL, a duplicate id, a filename
+  that does not match its voice id, an entry with no licence text (the download
+  gate would be empty), or a speaker count that disagrees with its names. It also
+  refuses a catalog over 1 MB, which is the shape a generator bug that inlined
+  weights would take — a stray `.onnx` is caught by assertion 3, and one enormous
+  JSON file is not. Regenerate with
+  `python3 build/gen-piper-catalog.py`; it is deterministic for a given revision
+  and policy, and **it must stay that way** — a catalog that moves when
+  regenerated is one whose per-voice `MODEL_CARD` review no longer describes what
+  shipped.
+
+- **The phonemiser is the one we built, and it works** (P5, 2026-08-27). Three
+  failures, all silent, all in `espeak/`. *The revision*: nothing rebuilds the
+  payload when the pin in [build-espeak.sh](build/build-espeak.sh) moves, so a
+  months-old `espeak-out/` composes in without complaint — the packer compares
+  the pin against the one the payload recorded. *The link line*: a build that
+  picked up `libsonic` or `libpcaudio` because they were installed on the build
+  machine produces an archive that works there and nowhere else, so the shipped
+  `.so` must declare exactly `libc` and `libm`, and must export
+  `espeak_TextToPhonemesWithTerminator` — which does not exist at the 1.52.0 tag
+  and whose absence is wrong prosody rather than a failure. *The data*: *a
+  missing dictionary makes espeak-ng exit 0, print one line to stderr that
+  nothing reads, and return no phonemes* — which reaches a user as a voice they
+  downloaded, accepted a licence for, installed and selected, and which then says
+  nothing. So that check is behavioural: every espeak voice the catalog names
+  phonemises a probe sentence against the **shipped** data, and exit code, stdout
+  and stderr all have to be right. Nothing maps between the three names involved,
+  because they disagree — `no_NO` is voice `nb` and reads `no_dict`, `es_MX` is
+  `es-419` and reads `es_dict`. The catalog carries each voice's `espeakVoice`,
+  taken from the model's own config, and `build-espeak.sh` discovers the
+  dictionaries by asking espeak which file it failed to open.
+
+- **The Speech Dispatcher module works, and its installer refuses a voiceless
+  archive** (S4, 2026-08-28). Assertion 3e runs
+  [check-speechd-payload.sh](build/check-speechd-payload.sh) over the composed
+  tree. `vst-speechd` is the one binary nobody ever runs by hand: speechd spawns
+  it, reads one line and **drops it on anything it does not like** — and a
+  dropped module reaches the user as VibeSuperTonic simply missing from their
+  screen reader's list, with no error on any screen they can reach. So the check
+  is behavioural: the shipped binary must answer `INIT` with `299` *in the
+  composed tree*, which is also the only way to prove `espeak/` landed where the
+  module looks for it. Then the installer, which is the piece that can silence a
+  machine: `--check` must pass and name the module in this tree, it must notice a
+  config whose path does not exist (a moved install — trap 13), and a real
+  install attempt must **refuse**, because the archive ships no voices and a
+  synthesizer with nothing to say is worse than one that is absent. All hermetic
+  — no speech-dispatcher, no display, no models — so it runs in CI's bare
+  container too. Sabotage it with
+  [payload-sabotage.sh](spike/speechd-s4-install/payload-sabotage.sh), which is
+  possible *because* the assertion is a script rather than a step inside a
+  four-minute pack.
+
+**The AppImage's two new assertions are about one mechanism.** speech-dispatcher
+execs a single absolute path with **no arguments** — measured: a binary field
+containing a space fails with `Exec of module ... error 2` while speechd still
+logs the module as loaded — so an AppImage install points it at a symlink,
+`~/.local/bin/vst-speechd`, and AppRun's `$ARGV0` case turns that into the
+module. Without that case the symlink falls through to AppRun's default branch
+and **opens the window, once per utterance**. `pack-appimage.sh` therefore builds
+such a symlink and asks it for both `--version` and `INIT`.
+
+- **The archive has a size budget, and so does `vst-ctl`'s startup** (S5,
+  2026-08-30). Assertion 6 runs [check-budgets.sh](build/check-budgets.sh):
+  75 MiB for the tarball against 60.7 measured, 18 MiB for `espeak/` against
+  13.2, and a startup budget of this machine's own fork/exec floor plus 35 ms.
+  The first two catch what assertions 3 and 4 cannot — those catch two *named*
+  files, and most size regressions are a package reference that dragged in a
+  native blob or a payload that quietly shipped `--full-data`. The third
+  replaces a proxy: assertion 2 proves `vst-ctl` is *native*, which is not the
+  same claim as *fast*, and a binary can stay native and acquire an ICU probe.
+  **A tarball that fails is deleted**, because an artifact that exists is one
+  somebody can ship. It is a separate script, like 3e, so that
+  [budget-sabotage.sh](build/budget-sabotage.sh) can break each budget in a
+  second instead of in a four-minute pack — which is how the 100 ms-slow-but-ELF
+  case was actually observed being caught.
+
+### The store packages — what they assert, and why
+
+Written 2026-09-25. Both sandboxes make the program's directory read-only, so
+three things in the code changed, each of which was silent when wrong:
+`LinuxDataPaths.DetectSandbox` moves the store to `$SNAP_USER_COMMON` or the
+Flatpak's `~/.var/app/<id>/data`; the install check records
+`/snap/<name>/current` and `$SNAP_REAL_HOME`, because snapd renames both the
+program's directory and `$HOME` on every refresh and the "program moved" banner
+would otherwise greet every snap user after every update; and in a Flatpak the
+socket moves to `$XDG_RUNTIME_DIR/app/<id>/` (every `flatpak run` has a private
+`/run/user/<uid>`) and the daemon is started through `flatpak-spawn` so it
+outlives its sandbox (`FlatpakPeer`, `DaemonLaunch` in Core).
+
+**The hotkeys and the Speech Dispatcher module are set up from the host**, by
+[sandbox-setup.sh](build/sandbox-setup.sh), which ships in both. That is a
+decision: it keeps the snap free of `personal-files` and classic confinement and
+the Flatpak free of home access, all of which need a manual store review. **Do
+not add those grants to make binding work from inside.** It reuses
+`keybindings.sh` and `speechd-install.sh` unchanged. Its own harness is
+[check-sandbox-setup.sh](build/check-sandbox-setup.sh), with negative controls,
+in CI's `linux` job.
+
+**In a snap the control socket is abstract, `@snap.<instance>.ctl-<uid>`, not a
+file** (`SnapPeer` in Core), and **every app that can start the daemon plugs
+`network-bind`**. snapd's default seccomp filter has `bind()` but not `listen()`,
+which only `network-bind` grants, whatever the address; so revision 1 on the
+store's edge channel aborted its daemon 1.7 s after every hotkey press, while
+every packer check passed: they all ran the snap's files outside confinement. It
+was first blamed on AppArmor, and the abstract socket was that wrong guess; the
+kernel's `type=1326 ... syscall=50` line is what named seccomp. An abstract
+socket has no file mode, so the daemon checks each peer's uid (`SO_PEERCRED`,
+`PeerCredentials`) and refuses other users. **`pack-snap.sh --test-install`**
+installs the snap under snapd and makes its daemon answer; CI's snap job runs it,
+and it was seen failing on the unfixed code before the fix went in. It also runs
+[check-snap-speechd.sh](build/check-snap-speechd.sh): a **private**
+speech-dispatcher, started once from a shell and once socket-activated through
+`systemd-run --user` as a desktop starts it, must load the snap's module and keep
+everything it offered before. A desktop with the snap installed can run the same
+script; it never touches the user's own speech-dispatcher. And it opens the
+window **the way the tray does**: `vibesupertonicd --window-command` (the daemon's
+own rule, `SnapWindow` in Core, which reads the window app's command chain from
+`meta/snap.yaml`) run inside `ctl`'s confinement on Xvfb must stay up, and the
+bare `$SNAP/vibesupertonic-ui` in the same place must not, or the check cannot
+tell them apart. Revision 3's window aborted on every tray click
+(`libfontconfig.so.1` missing) because the daemon ran the bare binary.
+
+**`speechd-install.sh` undoes itself** when a module that was offered before the
+install is missing after it: it restores the previous config, restarts
+speech-dispatcher, confirms the old modules answer, and exits non-zero. Until
+2026-09-25 it printed one warning line above "Done", and on the first snap install
+that left a hung speech-dispatcher for the user to find. It also SIGKILLs a
+speech-dispatcher that has not exited 5 s after SIGTERM: a socket-activated one
+that is still dying keeps its service active, so systemd starts no new one and
+every client queues forever.
+
+`pack-snap.sh` asserts, on the finished snap: the version; **strict**
+confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
+`setup`); `network-bind` (the control socket) and `unity7` (the tray's session
+bus) on the four that can start the daemon, and **every plug of the window app on
+`daemon`, `ctl` and `speechd` too**, because the daemon opens the window from the
+tray and a process runs under its starter's confinement; `PULSE_SERVER` pointing
+at `/run/user/$SNAP_UID/pulse/native` for every app, because inside a snap
+`XDG_RUNTIME_DIR` is private and a daemon started by the bare `ctl` otherwise
+finds no sound server;
+**no `command-chain` on `ctl`**, because an extension there wraps
+every hotkey press in a launcher script and nothing else would ever complain; no
+models and no CUDA provider; the daemon's three staged libraries (PulseAudio,
+X11, Wayland); and the module answering `INIT` with 299. `--check <file.snap>`
+runs only these, which is how all seven were seen failing. `pack-flatpak.sh
+--test-install` installs the bundle and asserts the store lands under
+`~/.var/app`, the module answers `INIT` inside the sandbox, and the host-side
+`vst-ctl`, run from the deployment's `active` path as a hotkey runs it, looks for
+the daemon in the shared runtime directory. If that were wrong, every press
+would start a second daemon nobody talks to.
+
+**Flathub gets a second manifest, built from source** (2026-09-27), because it
+refuses one that installs a prebuilt archive:
+[the .source.yml.in](build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in),
+with the `dotnet10` SDK extension, the NuGet packages pinned in
+[nuget-sources.json](build/flatpak/nuget-sources.json), espeak-ng at
+`build-espeak.sh`'s pin (and libsonic, which espeak-ng's CMake otherwise clones
+at configure time even though nothing links it: `build-espeak.sh --sonic-src`
+refuses any commit but the one espeak-ng names), and **`pack-tar.sh` run inside the build**, so it is
+still the one packer and its assertions still run. `pack-flatpak.sh
+--from-source` builds it and `--flathub TAG` writes the submission. The package
+list must be the one **the SDK's own dotnet** restores (runtime packs follow the
+SDK's version, not ours): regenerate it with
+`python3 build/flatpak/gen-nuget-sources.py --in-sdk 26.08`, and CI's
+[flathub workflow](.github/workflows/flathub.yml) refuses a stale one. When a
+`PackageReference` changes, that file changes with it.
+
+**The snap and the Flatpak carry a minimal ffmpeg for export; the tarball and
+the AppImage never do** (2026-10-03). A sandbox cannot see the host's ffmpeg, so
+MP3/AAC/FLAC were unavailable there. [build-ffmpeg.sh](build/build-ffmpeg.sh) is
+the one recipe for the snap's `ffmpeg` part and both Flatpak manifests: ffmpeg
+pinned by commit, LAME by SHA-256 (the pins live in the script; the manifests'
+copies are compared by [check-ffmpeg-pins.sh](build/check-ffmpeg-pins.sh)),
+LGPL only (no `--enable-gpl`/`--enable-nonfree`, so native `aac`, no fdk),
+`--disable-everything` plus exactly what `FfmpegTools.BuildArgs` uses, 1.9 MB. It
+lands at `$SNAP/ffmpeg/ffmpeg` and `/app/lib/vibesupertonic/ffmpeg/ffmpeg` with
+`LICENSE-FFMPEG.txt` (the source offer) beside it; `FfmpegDetector` looks there
+first inside a sandbox (`VST_FFMPEG`, bundled, `PATH`).
+[check-ffmpeg-bundle.sh](build/check-ffmpeg-bundle.sh) encodes a piped WAV with
+BuildArgs's exact arguments (ExportTests compares its copy, so **a new ffmpeg
+option in BuildArgs fails a unit test until the check, and maybe the recipe,
+follow**); the packers run it on the package and inside confinement, and
+`vst-ctl --export-formats` there must name the bundled one. Sabotage:
+[ffmpeg-bundle-sabotage.sh](build/ffmpeg-bundle-sabotage.sh), in CI's `linux`
+job. `check-composed-tree.sh` refuses an ffmpeg in the tarball's tree.
+`ExportRunner` falls back to a private temp file plus a copy when the target's
+folder refuses a sibling (the Flatpak document portal).
+
+**The WebGPU (Vulkan) pack is the vendor-neutral one, and its ORT is deliberately
+NOT the managed binding's minor** (2026-10-03). `build/install-webgpu.sh` fetches
+the `onnxruntime-webgpu` 1.27.0 wheel (Dawn linked statically; needs the system's
+`libvulkan.so.1`, which the installer refuses to go without; tagged
+`manylinux_2_27`, under the 2.34 floor) beside OpenVINO's shape: its own
+`libonnxruntime.so`, loaded by `OrtProviders.UseRuntimeFrom`, lowest precedence
+after CUDA and OpenVINO. It pairs a 1.27 runtime with the 1.22.1 binding —
+measured, not assumed: AppendExecutionProvider "WebGPU", session creation and Run
+all work against Mesa's software Vulkan, and "No supported adapters" is a clean
+exception with none. So `check-webgpu-pack.sh` (assertion 4c) asserts native
+**>=** managed and pins `MANAGED_VALIDATED`, instead of OpenVINO's same-minor
+rule; bumping the binding means repeating that measurement. It also *runs* the
+installer against stub `ldconfig` and `curl`. Sabotage:
+`build/webgpu-pack-sabotage.sh`. Never run on a physical GPU yet.
+
+**The optional GPU pack is not the packer's business.** `build/install-gpu.sh`
+ships in the archive and fetches ~3.1 GB on request — the CUDA provider from
+nuget.org, CUDA and cuDNN from PyPI — because a 52 MB download must not become a
+3 GB one for a machine that may have no NVIDIA GPU. Never bundle it. If it
+appears in the tree, assertion 4 is what will tell you.
+
+`install.sh` **stops a running daemon before doing anything**, found by
+`/proc/<pid>/exe` and never `pkill -f`, and `INSTALL.txt` says to do the same
+before a hand-untar. `vibesupertonicd` is long-lived by design, Linux lets you
+replace a running executable without complaint, and the result is a new binary
+on disk with the old one still serving every hotkey press — and `status`
+truthfully reporting the old version.
+
 ### Before you run it: settle the version
 
-The script defaults to `0.2.0`. Before invoking it, **ask the user** whether to
-bump the version, and propose a bump based on what changed:
+The script defaults to `<VstVersion>` in
+[Directory.Build.props](Directory.Build.props) — the last shipped version,
+shared with the Linux packer so one number produces both artifacts. Before
+invoking it, **ask the user** whether to bump the version, and propose a bump
+based on what changed:
 
 - **Patch** (`0.2.0` → `0.2.1`) — bug fixes, internal refactors, no
   user-visible behavior change.
@@ -38,6 +453,73 @@ bump the version, and propose a bump based on what changed:
 Check `dist/` for prior ZIPs to confirm the last shipped version. If the user
 has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
+
+**The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
+`0.2.17`, the snap and Flatpak release, **under development** since 2026-09-25.
+(This paragraph said `0.2.12` until then; 0.2.13 to 0.2.16 came and went without
+it being updated, and the table below does not list all of them.) `0.2.11` shipped on
+2026-08-30 and is tagged `v0.2.11`; the bump followed the same day, which is the
+rule below working rather than a coincidence.
+
+| Version | What it is | State |
+| --- | --- | --- |
+| `0.2.8` | The Linux tarball. Inherited the number Windows had already shipped — the shared-version rule working, not an accident | packed |
+| `0.2.9` | The AppImage, beside the tarball — [Phase 9](docs/LINUX-PORT-PLAN.md#phase-9) | **shipped 2026-08-24** |
+| `0.2.10` | A portable home that made the hotkeys unbindable, and a remedy for it that could orphan the store | **shipped 2026-08-25**, and the newest release that actually works |
+| `0.2.11` | The GPU fix, the fresh-install fix, all of P5, all of Piper P0–P5, a Speech Dispatcher module — [SPEECHD-PLAN.md](docs/SPEECHD-PLAN.md) — and the moved-install startup check | **shipped 2026-08-30**, tagged `v0.2.11` |
+| `0.2.12` | Skipped | never cut |
+| `0.2.13` | Two numbers that did not describe the daemon: a benchmark measuring a `TotalStep` no voice ran at, and a banner that could not clear its own warning. Both reported from the running install | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.13`, not published.** (It briefly carried this project's work on 2026-08-28 before being reclaimed to `0.2.11`; nothing was ever cut under it then) |
+| `0.2.12` | All ten of TESTING-PLAN's items, the ORT hash pin, and four window fixes — the Tune tab's unreadable dropdowns, the Pronunciations tab losing unsaved rules, the scope label, and a false claim in `INSTALL.txt` | **packed and installed on the user's machine 2026-08-30, tagged `v0.2.12`, not published.** It began as "checks only, accumulates until it carries something visible" — and then it did |
+| `0.2.17` | The snap and the Flatpak — [STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md) — and the sandbox-aware store, install check and socket they need. Chosen by the user as a patch release | **shipped 2026-10-16**, tagged `v0.2.17` (`ccc2da9`), on GitHub Releases with the Windows ZIP; snap revision 16 (stable grade) on `edge` |
+| `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
+
+**A first `0.2.11` was packed and then withdrawn the same day**, and the
+reasoning on both sides is worth keeping. (The number was later reclaimed by the
+current work — see below. Everything in this paragraph is about the *withdrawn*
+artifact, which no longer exists anywhere.) It was cut from `7ed7a67` on purpose: the GPU fix
+landed after 0.2.10's artifacts were packed, and by then P5 had put espeak-ng in
+the archive and moved the whole thing to GPL-3.0-or-later — which is not
+something a user should discover in a patch release. Then
+[the new smoke test](build/smoke-test.sh) found that **the daemon could not start
+on a fresh install** in that same tree, and the fix for it lives in a tree that
+also contains P5. Re-cutting a no-espeak patch release meant a second branch and
+a second pack run to ship something that had already been overtaken. Nothing was
+published, so it was deleted instead — which is exactly what left the number free
+to take again.
+
+**So `0.2.11` carries all of it**: the GPU fallback, the fresh-install fix, P5's
+phonemiser, and the Speech Dispatcher module. It is the release where
+GPL-3.0-or-later first applies — say so in its notes. Everything up to and
+including the shipped `0.2.10` contains no espeak-ng.
+
+**The number went back to `0.2.11` on 2026-08-28, and it was free to take.**
+This work carried `0.2.13` for a day. Nothing was ever published as `0.2.11`,
+`0.2.12` or `0.2.13` — the withdrawn `0.2.11` was deleted rather than released —
+so no artifact anywhere claims those numbers and reusing the first of them
+collides with nothing. What it does mean: **`dist/` may still hold a
+`0.2.13` tarball from before the renumber, and it is not a release.** Delete it
+rather than reasoning about it.
+
+`0.2.17` shipped on 2026-10-16. **Everything after it is a decision to ask
+about** — propose a bump from what changed, and use
+`AskUserQuestion`.
+
+**`<VstVersion>` names the version being built, not the last one shipped**, and
+that rule changed on 2026-08-27 when CI started packing. It was "the version just
+shipped", which was fine while the packer only ran by hand — but the `pack` job
+runs `pack-tar.sh` with no `-v` on every push, so the default is now a name
+applied to real artifacts continuously. Two things follow:
+
+- A default naming the *last shipped* version would have CI produce a tarball
+  named after a release that already exists, and a local run with no `-v` would
+  overwrite the genuine artifact in `dist/`.
+- Bumping it at the *start* of a version's work rather than after its pack means
+  every CI artifact is honestly named a pre-release build of the thing being
+  built.
+
+So: **bump `<VstVersion>` when a version's work begins**, and a release run still
+passes `-v` explicitly. `0.2.10` shipped under the older rule with the bump
+committed alongside the work, which is the same thing by accident.
 
 Use `AskUserQuestion` to confirm the version — do not silently pick one. The
 version is durable: it embeds in the ZIP filename and is what the user will
@@ -59,10 +541,34 @@ relevant `dotnet publish` output — don't paper over it.
 On success, report the final ZIP path and size to the user. The script prints
 both at the end; relay them verbatim.
 
+### Then tag it, in the same sitting
+
+**A release that is not tagged cannot be found again.** Tag the commit the
+artifacts were packed from, with that version's release notes as the message:
+
+```bash
+git tag -a v<X.Y.Z> -m "$(sed -n '/^# VibeSuperTonic v<X.Y.Z>$/,/^---$/p' RELEASE_NOTES.md)"
+# push it when the user asks — tags are theirs to publish
+```
+
+This rule exists because the first eight releases were **not** tagged, and on
+2026-08-28 they had to be reconstructed from artifact timestamps. Three of the
+six landed within a minute of a commit and are trustworthy; three are placed
+against gaps of hours to four days and say so in their own tag message. That is
+recoverable only because the artifacts were still on disk — the moment one is
+deleted, an untagged release becomes a tree nobody can identify. It nearly
+happened: a cleanup was about to remove the last two copies of 0.2.9 with no tag
+to rebuild from.
+
+So: **pack, verify, tag, in one sitting.** Do not push the tag — the user pushes.
+
 ### Do not bypass
 
-If the script appears broken, fix the script — don't run the underlying
+If a packaging script appears broken, fix the script — don't run the underlying
 `dotnet publish` calls manually as a workaround. The composition step
-(strip PDBs, generate license/install txt, zip) is part of what makes the
+(strip PDBs, generate license/install txt, archive) is part of what makes the
 output shippable. A manual `dotnet publish` produces a `bin/` tree that the
 user cannot drop on a fresh machine.
+
+The same applies to the script that does not exist yet: "there is no Linux
+packer" is a reason to write one, never a reason to hand-roll a tarball once.
