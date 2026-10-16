@@ -75,7 +75,11 @@ runtime="$root/dist/build-linux/runtime-x86_64"
 out="$root/dist/VibeSuperTonic-$version-x86_64.AppImage"
 
 RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
-RUNTIME_SHA256="1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf"
+# Re-pinned 2026-10-16: upstream rebuilt `continuous` on 2026-09-28 (commit
+# 8f39b89, 944632 bytes). The new hash equals the digest GitHub publishes for
+# the asset: gh api repos/AppImage/type2-runtime/releases/tags/continuous
+#   --jq '.assets[] | select(.name=="runtime-x86_64") | .digest'
+RUNTIME_SHA256="156f4bdbde9c52d01814600013e0a273f0118dc2de98975f3c8c63427ec79074"
 
 # --------------------------------------------------------------- preconditions
 step "Checking the composed tree…"
