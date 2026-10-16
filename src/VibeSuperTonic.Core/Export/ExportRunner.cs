@@ -196,6 +196,22 @@ public static class ExportRunner
                && path.AsSpan(slash).StartsWith("/doc/", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The document id in a portal path, <c>/run/user/&lt;uid&gt;/doc/&lt;id&gt;/&lt;name&gt;</c>,
+    /// or null for any other path. The snap's tray-opened window needs it to
+    /// pass a grant on (see the Ui's <c>SnapDocumentGrant</c>).
+    /// </summary>
+    public static string? DocumentId(string path)
+    {
+        if (!InDocumentPortal(path)) return null;
+        int doc = path.IndexOf("/doc/", "/run/user/".Length, StringComparison.Ordinal) + "/doc/".Length;
+        int end = path.IndexOf('/', doc);
+        if (end <= doc || end == path.Length - 1) return null;          // no id, or no file name after it
+        if (path.IndexOf('/', end + 1) >= 0) return null;               // a deeper path is not a document
+        string id = path[doc..end];
+        return id.All(char.IsAsciiLetterOrDigit) ? id : null;
+    }
+
     /// <summary>Create <paramref name="path"/>, new and empty, and say whether that worked.</summary>
     private static bool TryCreate(string path)
     {
