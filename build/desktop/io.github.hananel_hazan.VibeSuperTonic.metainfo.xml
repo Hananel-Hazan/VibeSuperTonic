@@ -114,7 +114,7 @@
       <description>
         <ul>
           <li>Pressing the read key on the text already being read now stops it, instead of seeming to do nothing</li>
-          <li>For programs that do not share what you highlight, the read key no longer repeats older text: the Tune tab has two optional switches, one that reads what you copied and one that presses Ctrl+C for you (Wayland only; copies go into the clipboard history)</li>
+          <li>For programs that do not share what you highlight, the read key no longer repeats older text: the Tune tab has two optional switches, one that reads what you copied and one that presses Ctrl+C for you (Wayland only). The copied text replaces what was on your clipboard, and it also appears in the clipboard history. Not yet tested inside the snap or the Flatpak</li>
           <li>AppImage: after binding the hotkeys and logging in again, KDE runs the AppImage, not an earlier snap</li>
         </ul>
       </description>

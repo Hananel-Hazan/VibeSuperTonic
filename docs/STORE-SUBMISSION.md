@@ -477,6 +477,13 @@ run 40131424757, build-repo 332398) with one linter warning,
 `finish-args-contains-both-x11-and-wayland`, which is the known one above.
 Neither screenshot exception was reported there.
 
+**State on 2026-11-01:** 0.2.19 is committed (`216d0b4`, `4792fac`) and packed
+(tarball, AppImage, Flatpak in `dist/`) but not tagged, not released, and not
+sent to any store; the user runs its AppImage. The portal that AutoCopy uses
+(XDG RemoteDesktop) has not been tried from inside the snap or the Flatpak, so
+those two packages may not offer AutoCopy. The Flathub pull request is still on
+`v0.2.18`.
+
 **Read before submitting (2026-10-16): `dist/flathub/` is not submittable.**
 Flathub's [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
 says manifests "must not contain AI-generated or AI-assisted content", and
