@@ -12,7 +12,7 @@
 pkgname=vibesupertonic-appimage
 pkgver=0.2.18
 pkgrel=1
-pkgdesc="Reads selected text aloud in a neural voice that runs on your computer; also a Speech Dispatcher voice for Orca"
+pkgdesc="Private, offline text to speech (TTS): reads selected text aloud; also a Speech Dispatcher voice for Orca and other screen readers"
 arch=('x86_64')
 url="https://github.com/Hananel-Hazan/VibeSuperTonic"
 license=('MIT' 'GPL-3.0-or-later')

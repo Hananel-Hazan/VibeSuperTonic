@@ -17,7 +17,7 @@
   <project_license>MIT AND GPL-3.0-or-later</project_license>
 
   <name>VibeSuperTonic</name>
-  <summary>Reads selected text aloud in a natural voice that runs on your computer</summary>
+  <summary>Private, offline text to speech (TTS): reads selected text aloud</summary>
 
   <developer id="io.github.hananel_hazan">
     <name>Hananel Hazan</name>
@@ -25,9 +25,22 @@
 
   <description>
     <p>
-      Select text in any application and press a key: VibeSuperTonic reads it
-      aloud in a neural voice. Speech is generated on your own machine, so
-      nothing you read is sent anywhere.
+      VibeSuperTonic is a text to speech (TTS) and accessibility tool. Select
+      text in any application and press a key: it reads it aloud in a neural
+      voice.
+    </p>
+    <p>
+      It is private and works offline. The voice engine runs on your own
+      computer, so the text you read is never sent anywhere. There is no
+      account, and nothing about how you use it is collected or sent. The only
+      time it connects to the internet is to download a voice you choose, or the
+      optional GPU add-on if you install it; after that it needs no connection
+      at all.
+    </p>
+    <p>
+      It is light on your computer and does not need a graphics card. On the
+      processor alone, a medium quality voice makes speech many times faster
+      than it is spoken.
     </p>
     <p>
       It is also a Speech Dispatcher voice, so Orca and other programs that
@@ -97,6 +110,15 @@
 
   <releases>
     <!-- The date is the day it is packed; docs/RELEASE-0.2.17.md step 3 sets it. -->
+    <release version="0.2.19" date="2026-10-18" type="stable">
+      <description>
+        <ul>
+          <li>Pressing the read key on the text already being read now stops it, instead of seeming to do nothing</li>
+          <li>For programs that do not share what you highlight, the read key no longer repeats older text: the Tune tab has two optional switches, one that reads what you copied and one that presses Ctrl+C for you (Wayland only; copies go into the clipboard history)</li>
+          <li>AppImage: after binding the hotkeys and logging in again, KDE runs the AppImage, not an earlier snap</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.18" date="2026-10-16" type="stable">
       <description>
         <p>Fixes found by the first test of the store packages on a desktop.</p>

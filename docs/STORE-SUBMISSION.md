@@ -23,8 +23,14 @@ a category, set by the listing:
   `Categories=` from the desktop entry. Both say `Accessibility;Utility`.
 - **The Snap Store** has a fixed category list that the publisher picks from in
   the dashboard. At the time of writing it had no Accessibility category; pick
-  *Utilities* (primary) and *Productivity*. Search is what finds it there, so the
-  summary and keywords say "screen reader" and "text to speech".
+  *Utilities* (primary) and *Productivity*. Search is what finds it there, and
+  **the Snap Store does not read AppStream `<keywords>`**: on 2026-10-22,
+  `snap find tts`, `snap find "text to speech"` and `snap find accessibility`
+  did not list the snap, whose summary then contained none of those words, while
+  every result for `tts` had it in its summary. So the summary itself must say
+  "Text to speech (TTS)", and the description's first sentence says
+  "accessibility". The App Center and Discover's snap backend search the same
+  index. Keep the summary at 78 characters or fewer (the snap limit).
 
 ## How the packages are built
 
@@ -140,6 +146,13 @@ The hotkey commands:
 | Flatpak | `<deployment>/active/files/lib/vibesupertonic/vst-ctl`, directly on the host | NativeAOT, needs only libc; `flatpak run` would add a sandbox setup to every press |
 
 ## Verified, and not yet
+
+**Not explained: the first `speechd-install` on the snap (2026-09-25) left
+speech-dispatcher offering no voices and hung.** The suspected cause, a stale
+speech-dispatcher that the installer waited on by the wrong process id, was
+never proven. The installer now kills a speech-dispatcher still alive 5 s after
+being asked to stop, and undoes the install if any voice offered before is
+missing after, so it is safe whatever the cause was.
 
 Verified in this repository:
 
@@ -395,7 +408,8 @@ and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
    --acls=package_access,package_push,package_update,package_release <file>`
    and paste the file's contents into the secret. It can reach `edge` only.
    Promotion to `stable` stays a person's decision, in the dashboard or with
-   `snapcraft release`.
+   `snapcraft release`. **Never have two publishing runs in flight**: whichever
+   finishes last takes `edge`, even when it carries the older code.
 3. In the dashboard: categories (Utilities, Productivity), screenshots, and the
    licence note that the models download separately under OpenRAIL-M.
 4. Automated review should pass, because nothing privileged is requested. Promote
@@ -422,6 +436,13 @@ packages pinned in `build/flatpak/nuget-sources.json`, builds espeak-ng at
 `build-espeak.sh`'s pin, and runs `pack-tar.sh` inside the build, so every packer
 assertion runs there too. The tree it installs is the one the tarball holds.
 
+**Two of the exceptions in
+[lint-exceptions.json](../build/flatpak/lint-exceptions.json) have never been
+seen firing**: `appstream-external-screenshot-url` and
+`appstream-screenshots-not-mirrored-in-ostree` concern screenshot mirroring,
+which only Flathub's own builders do. If the first build on Flathub shows either
+one not raised, remove it.
+
 - Rehearsed here: `pack-tar.sh` against a feed holding only the 34 packages
   then pinned, with a fresh package cache and NativeAOT forced onto gcc (the SDK has
   no clang), passes all its assertions.
@@ -445,6 +466,16 @@ opened by the user**: Flathub's template asks the submitter to confirm no AI
 tool or agent generated or automated the submission PR, to attach a video of
 the Flatpak running, and to disclose AI-generated material in the app.
 AppImageHub: AppImage/appimage.github.io#10295, opened 2026-10-16.
+
+**State on 2026-10-24:** the user opened flathub/flathub#10671 on 2026-10-17
+from `Hananel-Hazan/flathub` branch `add-vibesupertonic`, with a manifest of
+their own (86 lines, not `dist/flathub/`), building `v0.2.18` (`1e85f40`).
+Labels: `awaiting-review`, `leave-open`, `AI Slop`. A reviewer (barthalion,
+2026-10-21) objected to "vibe" in the name; the user replied the same day; no
+formal review yet. **Flathub's test build passed on 2026-10-24** (vorarbeiter
+run 40131424757, build-repo 332398) with one linter warning,
+`finish-args-contains-both-x11-and-wayland`, which is the known one above.
+Neither screenshot exception was reported there.
 
 **Read before submitting (2026-10-16): `dist/flathub/` is not submittable.**
 Flathub's [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
