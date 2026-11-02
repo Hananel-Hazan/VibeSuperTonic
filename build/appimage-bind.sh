@@ -132,13 +132,18 @@ fi
 
 # The desktop's registration goes to the real home; everything else stays where
 # $HOME points, so the client keeps living inside the portable home and keeps
-# repairing itself on upgrade. Only these two variables are needed:
-# keybindings.sh has exactly two $HOME-derived paths and both are XDG-guarded.
+# repairing itself on upgrade. keybindings.sh has three $HOME-derived paths, all
+# XDG-guarded: the shortcut file, the .desktop file, and the KDE service cache
+# kbuildsycoca6 writes. The third was missed until 2026-10-17: the rebuild went
+# to the portable home's ~/.cache, the session's cache kept the snap's Exec, and
+# kglobalaccel, which starts before kded refreshes the cache, ran
+# /snap/bin/vibesupertonic.ctl after a bind and a fresh login.
 # Cinnamon needs no equivalent — gsettings writes through the session's dconf
 # service, which already holds the real home.
 if [[ -n "$portable_home" ]]; then
     export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$real_home/.config}"
     export XDG_DATA_HOME="${XDG_DATA_HOME:-$real_home/.local/share}"
+    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$real_home/.cache}"
     info "portable home in use: $portable_home"
     info "the client stays there; the desktop's shortcut configuration goes to $real_home"
 fi

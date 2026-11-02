@@ -429,10 +429,16 @@ bool useWayland = forced switch
     "x11" => false,
     _ => WaylandNative.CanConnect(),
 };
+// AutoCopy presses Ctrl+C through the desktop's portal, so it exists on Wayland
+// only. Read once, like ClipboardFallback.
+ICopyKey? copyKey = useWayland && config.Settings.AutoCopy
+    ? new PortalCopyKey(config.DataDir, DaemonLog.Write)
+    : null;
 ISelectionSource selectionSource = useWayland
-    ? new WaylandSelectionSource(config.Settings.ClipboardFallback)
+    ? new WaylandSelectionSource(config.Settings.ClipboardFallback, copyKey)
     : new X11SelectionSource(config.Settings.ClipboardFallback);
 DaemonLog.Write($"selection source: {(useWayland ? "wayland (ext-data-control-v1)" : "x11 (PRIMARY)")}"
+    + (copyKey is null ? "" : ", AutoCopy on")
     + (forced is null ? "" : $", forced by VST_SELECTION={forced}"));
 
 using var server = new DaemonServer(

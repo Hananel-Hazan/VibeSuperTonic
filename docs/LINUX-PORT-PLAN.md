@@ -1291,9 +1291,14 @@ the reading the user was in the middle of restarted from the top. Ordering the
 capture before the stop could not cover this on its own, because nothing failed.
 
 So the rule the key actually implements is: *read what is selected now; if that
-is already what you are hearing, do nothing.* Restarting the same passage
-deliberately is then Ctrl+~ followed by Ctrl+`, which is two presses for
-something nobody does by accident. The guard applies only to a captured
+is already what you are hearing, stop.* It said "do nothing" until 2026-10-18,
+when real use found the case that rule made look like a dead key: the session
+holds one selection, so highlighting text in a second window takes it from the
+first, which keeps its highlight on screen but no longer publishes it. Select in
+two windows, read one, press in the other, and the capture returns the text
+already playing. The user chose stop over a notice; selecting again and
+pressing then reads the new text (`SameSelectionPressTests`). Restarting the
+same passage deliberately is press to stop, then press again. The guard applies only to a captured
 selection — an explicit `read <text>` is a caller asking for something by name,
 and re-reading it is a reasonable thing to have asked for.
 

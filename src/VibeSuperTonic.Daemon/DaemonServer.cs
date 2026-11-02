@@ -1312,16 +1312,21 @@ public sealed partial class DaemonServer : IDisposable
             // as a bug because it sounds like the selection was short.
             if (notice is { Length: > 0 }) Log($"selection: {notice}");
 
-            // Already reading exactly this? Then the press means nothing and
-            // must do nothing.
+            // Already reading exactly this? Then the press means stop.
             //
-            // X11 has no "nothing is selected". PRIMARY keeps its owner after
-            // the user clicks away, so a press with nothing newly highlighted
-            // still captures the LAST selection — and restarting the passage
-            // the user is in the middle of hearing, from the top, is never what
-            // that press meant. Reported from real use, and it is the one case
-            // the capture-before-stop ordering could not cover on its own:
-            // the capture succeeds, it just succeeds with the same text.
+            // X11 has no "nothing is selected", and neither does Wayland's
+            // data-control: the session holds one selection, and highlighting
+            // text in a second window takes it from the first. That window keeps
+            // its highlight on screen but no longer publishes it, so a press
+            // there with nothing newly highlighted still captures the LAST
+            // selection. Restarting the passage the user is in the middle of
+            // hearing, from the top, is never what that press meant.
+            //
+            // Until 2026-10-18 this press did nothing. Reported from real use:
+            // select in two windows, read the first, press in the second, and
+            // the key looks dead with nothing anywhere saying why. The user
+            // chose stop over a notice: the key then behaves as start/stop, and
+            // the next press after selecting again reads the new text.
             //
             // Only for a captured selection. An explicit `read <text>` is a
             // caller asking for something by name, and re-reading it is a
@@ -1329,9 +1334,10 @@ public sealed partial class DaemonServer : IDisposable
             if (_session.State != SpeechState.Idle &&
                 string.Equals(text, _session.CurrentText, StringComparison.Ordinal))
             {
-                lock (_gateLock) _gate.NoteState(_session.State);
-                Log($"press ignored: already reading this selection ({text!.Length} chars, {_session.State})");
-                return Response.Success(ToggleAction.Ignored);
+                lock (_gateLock) _gate.NoteState(SpeechState.Stopping);
+                Log($"press stops: already reading this selection ({text!.Length} chars, {_session.State})");
+                _session.Stop();
+                return Response.Success(ToggleAction.Stop);
             }
         }
 

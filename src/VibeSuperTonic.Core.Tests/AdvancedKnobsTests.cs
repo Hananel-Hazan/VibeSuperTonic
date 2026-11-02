@@ -113,7 +113,7 @@ public sealed class AdvancedKnobsTests
           "Language": "de", "TotalStep": 12, "EngineSpeed": 1.2, "DspRate": 1.1, "VolumeTrimDb": -2,
           "RateClampCeiling": 1.4, "SynthesisSilenceSec": 0.5, "MaxChunkChars": 150, "MinChunkChars": 50,
           "InterChunkSilenceMs": 100, "MaxCpuPercent": 50, "OnnxInterOpThreads": 3,
-          "Provider": "cpu", "ClipboardFallback": true, "GpuOnBattery": true,
+          "Provider": "cpu", "ClipboardFallback": true, "AutoCopy": true, "GpuOnBattery": true,
           "UseDirectML": true, "OnnxThreads": 6,
           "PerEngine": { "piper": { "EngineSpeed": 1.5 }, "supertonic": { "TotalStep": 4 } },
           "PerVoice": { "M1": { "VolumeTrimDb": 3 }, "M2": { "DspRate": 0.9 } }
