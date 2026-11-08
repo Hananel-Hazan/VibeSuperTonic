@@ -301,7 +301,7 @@ In both cases the Control Panel's own Test button keeps working, because the Con
 - **One platform-neutral core** (`VibeSuperTonic.Core`), with the text pipeline, DSP, model download and telemetry, and more than 1,300 tests.
 - **Linux:** `vibesupertonicd` owns the model and the audio device. `vst-ctl` is a NativeAOT client, so a hotkey press doesn't pay for starting .NET. `vibesupertonic-ui` is the Avalonia window. `vst-speechd` is the Speech Dispatcher module. Piper's ONNX graph runs on the ONNX Runtime already in the box, and it's checked for phoneme parity against Piper itself on every push (327 sentences, 8 languages, zero divergences).
 - **Windows:** a pure-C# COM in-process server (`ISpTTSEngine`) registered through .NET ComHosting, with an HKLM voice token written once and an HKCU CLSID that *Repair all* rewrites after the folder moves, without admin rights.
-- Design notes: [LINUX-PORT-PLAN](docs/LINUX-PORT-PLAN.md), [PIPER-PLAN](docs/PIPER-PLAN.md), [SPEECHD-PLAN](docs/SPEECHD-PLAN.md), [STORE-SUBMISSION](docs/STORE-SUBMISSION.md), [WINDOWS-PLAN](docs/WINDOWS-PLAN.md).
+- Design notes: [LINUX-PORT-PLAN](docs/LINUX-PORT-PLAN.md), [PIPER-PLAN](docs/PIPER-PLAN.md), [SPEECHD-PLAN](docs/SPEECHD-PLAN.md), [STORE-SUBMISSION](docs/STORE-SUBMISSION.md), [RELEASING](docs/RELEASING.md), [WINDOWS-PLAN](docs/WINDOWS-PLAN.md).
 
 ## Roadmap
 

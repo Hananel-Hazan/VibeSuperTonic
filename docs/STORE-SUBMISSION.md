@@ -1,7 +1,9 @@
-# Store submission: Snap Store and Flathub
+# Store submission and distribution
 
-Started 2026-09-25, for 0.2.17. The goal is to put VibeSuperTonic in front of
-Kubuntu and Ubuntu users where they look for software, **under Accessibility**.
+The goal is to put VibeSuperTonic in front of Kubuntu and Ubuntu users where
+they look for software, **under Accessibility**, and to keep every package a
+repackaging of one tarball so that one set of checks defends all of them. The
+steps of a release are in [RELEASING.md](RELEASING.md).
 
 ## Where the packages show up
 
@@ -12,84 +14,90 @@ Kubuntu and Ubuntu users where they look for software, **under Accessibility**.
 | AppImage | no | no | [build/pack-appimage.sh](../build/pack-appimage.sh) |
 | Tarball | no | no | [build/pack-tar.sh](../build/pack-tar.sh), the canonical artifact |
 
-That is also the order the README offers them in. The AppImage is the third
-choice and the tarball the last one, but the tarball is still what every other
-package is built from.
+That is the order the README offers them in. The AppImage is the third choice
+and the tarball the last, but the tarball is what every other package is built
+from.
 
 **Neither store has an accessibility submission programme.** "Accessibility" is
 a category, set by the listing:
 
-- **Discover and Flathub** read `<categories>` from the AppStream metainfo, and
+- **Discover and Flathub** read `<categories>` from the AppStream metainfo and
   `Categories=` from the desktop entry. Both say `Accessibility;Utility`.
 - **The Snap Store** has a fixed category list that the publisher picks from in
-  the dashboard. At the time of writing it had no Accessibility category; pick
-  *Utilities* (primary) and *Productivity*. Search is what finds it there, and
-  **the Snap Store does not read AppStream `<keywords>`**: on 2026-10-22,
-  `snap find tts`, `snap find "text to speech"` and `snap find accessibility`
-  did not list the snap, whose summary then contained none of those words, while
-  every result for `tts` had it in its summary. So the summary itself must say
-  "Text to speech (TTS)", and the description's first sentence says
-  "accessibility". The App Center and Discover's snap backend search the same
-  index. Keep the summary at 78 characters or fewer (the snap limit).
+  the dashboard, with no Accessibility category. The dashboard's categories are
+  *Education* and *Productivity* (read 2026-10-16); *Utilities* is the other
+  defensible choice. Search is what finds the snap there, and **the Snap Store
+  does not read AppStream `<keywords>`**: on 2026-10-22, `snap find tts`,
+  `snap find "text to speech"` and `snap find accessibility` did not list a snap
+  whose summary contained none of those words, while every result for `tts` had
+  it in its summary. So the summary says "Text to speech (TTS)", the
+  description's first sentence says "accessibility", and the summary stays at
+  78 characters or fewer (the snap limit). The App Center and Discover's snap
+  backend search the same index.
 
 ## How the packages are built
 
-Both are **repackagings of the tarball**, the same design as the AppImage. Neither
-compiles anything of ours (the one exception, an export ffmpeg, is below), so
-the tarball's eleven assertions apply to both, and each
-re-asks the cheap ones against the tree it actually packages
-([check-composed-tree.sh](../build/check-composed-tree.sh)). One listing,
-[build/desktop/](../build/desktop/), serves both stores and travels inside the
-tarball.
+The snap and the Flatpak are **repackagings of the tarball**, the same design as
+the AppImage. Neither compiles anything of ours (the one exception, an export
+ffmpeg, is below), so the tarball's eleven assertions apply to both, and each
+re-asks the cheap ones against the tree it packages
+([check-composed-tree.sh](../build/check-composed-tree.sh)). The Flatpak checks
+the tree inside the tarball, because on Flathub the tarball is its only source.
+One listing, [build/desktop/](../build/desktop/), serves both stores and travels
+inside the tarball.
 
 ```bash
 bash build/build-espeak.sh                    # only when the payload is stale
-bash build/pack-tar.sh -v 0.2.17
-bash build/pack-snap.sh -v 0.2.17 --grade stable
-bash build/pack-flatpak.sh -v 0.2.17 --test-install
-bash build/pack-appimage.sh -v 0.2.17
+bash build/pack-tar.sh -v X.Y.Z
+bash build/pack-snap.sh -v X.Y.Z --grade stable
+bash build/pack-flatpak.sh -v X.Y.Z --test-install
+bash build/pack-appimage.sh -v X.Y.Z
 ```
 
-CI runs the snap and Flatpak packers on every push (`snap` and `flatpak` jobs in
-[build.yml](../.github/workflows/build.yml)), from the tarball the `pack` job
-built.
+`pack-snap.sh` needs `snapcraft` (LXD by default, `--destructive-mode` on an
+Ubuntu 24.04 machine) and `pack-flatpak.sh` needs `flatpak-builder`. Neither
+store is reachable from a cloud session, so there both are built only by CI's
+`snap` and `flatpak` jobs ([build.yml](../.github/workflows/build.yml)), which
+run on every push from the tarball the `pack` job built.
 
-### The one thing they do compile: an export ffmpeg (2026-10-03)
+### The one thing they compile: an export ffmpeg
 
 MP3, AAC and FLAC export pipe the daemon's WAV into an `ffmpeg` found at runtime.
-The tarball and the AppImage use the system's; a snap or a Flatpak cannot see
-it, and the Flatpak runtime ships ffmpeg's *libraries* but not the `ffmpeg`
-program. So both store packages carry a minimal one, built by one recipe,
-[build-ffmpeg.sh](../build/build-ffmpeg.sh), used by the snap's `ffmpeg` part
-and by both Flatpak manifests:
+The tarball and the AppImage use the system's. A snap or a Flatpak cannot see it,
+and the Flatpak runtime ships ffmpeg's *libraries* but not the `ffmpeg` program.
+So both store packages carry a minimal one, built by one recipe,
+[build-ffmpeg.sh](../build/build-ffmpeg.sh), used by the snap's `ffmpeg` part and
+by both Flatpak manifests:
 
-- **Sources, pinned in the script**: ffmpeg `n8.1.3` by commit
-  (`1041abdc`, from GitHub; ffmpeg.org's tarball host was not reachable from the
-  session that wrote this) and LAME 3.100 by SHA-256 (SourceForge). The Flatpak
-  manifests repeat both pins, because flatpak-builder must fetch the sources
-  itself (Flathub builds offline); [check-ffmpeg-pins.sh](../build/check-ffmpeg-pins.sh)
-  refuses a manifest that disagrees, before any build.
+- **Sources, pinned in the script**: ffmpeg `n8.1.3` by commit (`1041abdc`, from
+  GitHub) and LAME 3.100 by SHA-256 (SourceForge). The Flatpak manifests repeat
+  both pins, because flatpak-builder must fetch the sources itself (Flathub builds
+  offline); [check-ffmpeg-pins.sh](../build/check-ffmpeg-pins.sh) refuses a
+  manifest that disagrees, before any build.
 - **LGPL only**: no `--enable-gpl`, no `--enable-nonfree`, so no `libfdk_aac`; AAC
   is ffmpeg's native encoder. The script refuses a configuration that comes out
   anything but "LGPL version 2.1 or later".
-- **`--disable-everything`, then exactly what export runs**: WAV/`pcm_s16le` in
-  on a pipe, encoders `libmp3lame`, `aac`, `flac`, muxers `mp3`, `ipod` (.m4a),
+- **`--disable-everything`, then exactly what export runs**: WAV/`pcm_s16le` in on
+  a pipe, encoders `libmp3lame`, `aac`, `flac`, muxers `mp3`, `ipod` (.m4a),
   `flac`, protocols `pipe` and `file`, filters `aresample`, `aformat`, `anull`
   (the daemon's interleaved s16 must become planar for both lossy encoders). No
   network, devices, hardware acceleration, ffprobe or ffplay; `--disable-x86asm`.
   ffmpeg's libraries and LAME are static; libc and libm come from the runtime.
-  **1.9 MB** stripped, measured.
+  **1.9 MB** stripped.
 - **Where**: `$SNAP/ffmpeg/ffmpeg` and `/app/lib/vibesupertonic/ffmpeg/ffmpeg`,
   which is where `FfmpegDetector.BundledPath` looks inside each sandbox (order:
   `VST_FFMPEG`, the bundled one, `PATH`). Beside it: `LICENSE-FFMPEG.txt` (both
-  versions, their sources: the source offer, as `LICENSE-PHONEMIZER.txt` is for
-  espeak-ng), `COPYING.LGPLv2.1`, `COPYING.LAME` and `BUILD-INFO`.
+  versions and their sources: the source offer, as `LICENSE-PHONEMIZER.txt` is
+  for espeak-ng), `COPYING.LGPLv2.1`, `COPYING.LAME` and `BUILD-INFO`. The
+  tarball and the AppImage never carry one; `check-composed-tree.sh` refuses an
+  ffmpeg in the tarball's tree.
 - **Checked**: [check-ffmpeg-bundle.sh](../build/check-ffmpeg-bundle.sh) asserts
-  the files, the version, no GPL/non-free configuration, the three encoders, and
-  a piped 0.1 s WAV encoding to all three formats with **exactly**
-  `FfmpegTools.BuildArgs`'s arguments (a unit test holds its copy of them to
-  BuildArgs). `pack-snap.sh` runs it on the finished snap (`--check` too) and,
-  with `--test-install`, inside `ctl`'s confinement; `pack-flatpak.sh
+  the files, the version, no GPL or non-free configuration, the three encoders,
+  and a piped 0.1 s WAV encoding to all three formats with **exactly**
+  `FfmpegTools.BuildArgs`'s arguments (a unit test holds the check's copy of them
+  to BuildArgs, so a new ffmpeg option fails that test until the check, and maybe
+  the recipe, follow). `pack-snap.sh` runs it on the finished snap (`--check`
+  too) and, with `--test-install`, inside `ctl`'s confinement; `pack-flatpak.sh
   --test-install` runs it inside the sandbox. Both also ask `vst-ctl
   --export-formats` under confinement, which must name the bundled ffmpeg.
   [ffmpeg-bundle-sabotage.sh](../build/ffmpeg-bundle-sabotage.sh) breaks every
@@ -102,489 +110,426 @@ and by both Flatpak manifests:
 folder refuses it, the temp file goes to `$XDG_CACHE_HOME/vibesupertonic/export`
 and only a complete, successful encode is **copied** over the target (a rename
 cannot cross filesystems). A failed copy removes a target this run created, and
-reports one it was replacing as possibly incomplete. The Export tab also stops
-"correcting" the extension of a portal path, since a renamed file there is one
-the portal never granted.
+reports one it was replacing as possibly incomplete. The Export tab does not
+"correct" the extension of a portal path, since a renamed file there is one the
+portal never granted. Export refuses while anything reads aloud, and the window
+keeps that message up until the reading ends (`ExportBusyGate`, asked before the
+save dialog opens).
 
-## What the sandbox changed in the code, and why
+## What the sandbox changes in the code, and why
 
-A snap and a Flatpak both make the program's own directory **read-only** and
-give it a private view of the home directory. Three things broke, each silently:
+A snap and a Flatpak both make the program's own directory **read-only** and give
+it a private view of the home directory. Each of the following breaks silently
+without the rule next to it.
 
 1. **The store.** The portable rule puts `models/` and `data/` beside the
    executable. Inside a sandbox it goes to the one directory each sandbox keeps
    for the app across updates: `$SNAP_USER_COMMON` (`~/snap/vibesupertonic/common`)
    or the Flatpak's `$XDG_DATA_HOME` (`~/.var/app/<id>/data`).
-   `LinuxDataPaths.DetectSandbox` decides this. It checks that the executable
+   `LinuxDataPaths.DetectSandbox` decides this, and checks that the executable
    really is inside the sandbox before believing the environment variables.
 2. **The install check.** snapd renames the program's directory *and* `$HOME` on
-   every refresh, so the "program moved" check would have shown every snap user
-   a false re-bind warning after every update, the same failure the AppImage's
-   mount directory once caused. The check now records `/snap/<name>/current` and
-   `$SNAP_REAL_HOME`. Verified by running revision x7 and then x8 against the
-   same store: no change reported.
-3. **The socket and the daemon's lifetime, Flatpak only.** Each `flatpak run` gets
-   a private `/run/user/<uid>` and its own PID namespace. The socket therefore
-   moves to `$XDG_RUNTIME_DIR/app/<id>/`, which every instance and the host
-   share. A daemon started from inside the sandbox goes through `flatpak-spawn`
-   so it survives its parent. See `FlatpakPeer` and `DaemonLaunch` in Core.
+   every refresh, so the "program moved" check would show every snap user a false
+   re-bind warning after every update. The check records `/snap/<name>/current`
+   and `$SNAP_REAL_HOME` instead. Running revision x7 and then x8 against the
+   same store reported no move.
+3. **The control socket.**
+   - **Snap:** the socket is abstract, `@snap.<instance>.ctl-<uid>` (`SnapPeer`),
+     and **every app that can start the daemon plugs `network-bind`**. snapd's
+     default seccomp filter has `bind()` but not `listen()`, which only
+     `network-bind` grants, whatever the address; without it the daemon aborted
+     1.7 s after every hotkey press while every packer check passed, because they
+     all ran the snap's files outside confinement. The kernel's `type=1326 ...
+     syscall=50` line named seccomp; AppArmor had been blamed first. An abstract
+     socket has no file mode, so the daemon checks each peer's uid
+     (`SO_PEERCRED`, `PeerCredentials`) and refuses other users.
+   - **Flatpak:** each `flatpak run` gets a private `/run/user/<uid>` and its own
+     PID namespace, so the socket lives in `$XDG_RUNTIME_DIR/app/<id>/`, which
+     every instance and the host share. A daemon started from inside the sandbox
+     goes through `flatpak-spawn` so it outlives its parent (`FlatpakPeer`,
+     `DaemonLaunch` in Core).
+4. **The tray and the window.**
+   - **Snap:** the tray opens the window under `ctl`'s confinement, and a process
+     runs under its starter's confinement, so the window app's every plug is also
+     on `daemon`, `ctl` and `speechd`, and the daemon opens the window by the
+     window app's own command chain read from `meta/snap.yaml` (`SnapWindow`).
+     Running the bare `$SNAP/vibesupertonic-ui` there aborts for want of
+     `libfontconfig.so.1`. `daemon`, `ctl` and `speechd` carry hidden desktop
+     entries in `meta/gui/`: without one, `snap routine portal-info` says
+     `DesktopFile=.` and the document portal grants a saved file to an app named
+     "." that the snap cannot see, so exporting a new file from a tray-opened
+     window failed. The portal can still grant to `snap.vibesupertonic.ctl` while
+     the snap sees only `snap.vibesupertonic`'s folder, so the window passes the
+     grant on with `Documents.GrantPermissions`.
+   - **Flatpak:** the window draws only through X11, and `fallback-x11` withholds
+     X11 whenever Wayland exists, so the manifest asks for `--socket=x11` and
+     `--socket=wayland` (X11 for the window, Wayland so the hotkey can read the
+     selection). Adding `--socket=x11` beside `fallback-x11` still gave no
+     display. `check-flatpak-sockets.sh` asserts it, and Flathub's linter reports
+     `finish-args-contains-both-x11-and-wayland` for it, a warning this app needs.
+     The proxy refuses `RequestName` for `org.kde.StatusNotifierItem-<pid>-1`, so
+     the tray icon registers under the unique bus name instead.
+5. **Everything in a snap needs sound and a Wayland socket it cannot see.**
+   `PULSE_SERVER` points at `/run/user/$SNAP_UID/pulse/native` for every app,
+   because `XDG_RUNTIME_DIR` is private and a daemon started by the bare `ctl`
+   would otherwise find no sound server. `SnapWaylandLink` links the Wayland
+   socket into the snap's runtime directory before the daemon chooses its
+   selection source; without it, the hotkey pressed after a reboot and before any
+   window had opened read nothing, because the probe looked for `wayland-0` in the
+   snap's private runtime directory and fell back to X11 PRIMARY for the daemon's
+   whole life. The daemon's own libraries (PulseAudio, X11, Wayland) live in
+   `lib/native`, because the GNOME extension's GPU cleanup deletes `libX11` from
+   `usr/lib`.
 
 **The hotkeys and Speech Dispatcher are set up from the host**, by
-[sandbox-setup.sh](../build/sandbox-setup.sh), which ships in both packages.
-Both are the desktop's configuration (`kglobalshortcutsrc`, `gsettings`,
+[sandbox-setup.sh](../build/sandbox-setup.sh), which ships in both packages. Both
+are the desktop's configuration (`kglobalshortcutsrc`, `gsettings`,
 `~/.config/speech-dispatcher`), and a sandbox cannot write it. The stores *can*
 grant that access (snap `personal-files`, Flatpak `--filesystem`), but only after
 a manual review, and the grant would sit on the package forever to be used once.
 With the script, the snap needs **no privileged interface and no classic
 confinement**, and the Flatpak needs **no home or host filesystem access**.
-
-The hotkey commands:
+**Do not add those grants to make binding work from inside.** The script reuses
+`keybindings.sh` and `speechd-install.sh` unchanged, and sets
+`VST_KB_KDE_NO_DISPLAY=1` so that the menu entry carrying the shortcuts is hidden
+in the snap and the Flatpak (it is the only entry in the tarball and the
+AppImage, so it stays visible there). Plasma's own "Add Command" shortcuts are
+NoDisplay entries too. `keybindings.sh status` warns when the shortcuts point at
+an entry that no longer exists, because deleting it in KDE's menu editor breaks
+them. Its harness is [check-sandbox-setup.sh](../build/check-sandbox-setup.sh),
+with negative controls, in CI's `linux` job.
 
 | | Hotkey runs | Why |
 | --- | --- | --- |
 | snap | `/snap/bin/vibesupertonic.ctl` | inside confinement, so it shares the daemon's runtime directory |
 | Flatpak | `<deployment>/active/files/lib/vibesupertonic/vst-ctl`, directly on the host | NativeAOT, needs only libc; `flatpak run` would add a sandbox setup to every press |
 
-## Verified, and not yet
+**`speechd-install.sh` undoes itself** when a module that was offered before the
+install is missing after it: it restores the previous config, restarts
+speech-dispatcher, confirms the old modules answer, and exits non-zero. It also
+SIGKILLs a speech-dispatcher that has not exited 5 s after SIGTERM, because a
+socket-activated one that is still dying keeps its service active, so systemd
+starts no new one and every client queues forever. The first `speechd-install` on
+the snap (2026-09-25) left speech-dispatcher offering no voices and hung; the
+cause was never proven (a stale speech-dispatcher waited on by the wrong process
+id is the suspect), and the installer is safe whatever it was.
 
-**Not explained: the first `speechd-install` on the snap (2026-09-25) left
-speech-dispatcher offering no voices and hung.** The suspected cause, a stale
-speech-dispatcher that the installer waited on by the wrong process id, was
-never proven. The installer now kills a speech-dispatcher still alive 5 s after
-being asked to stop, and undoes the install if any voice offered before is
-missing after, so it is safe whatever the cause was.
+### Refreshes
 
-Verified in this repository:
+snapd refuses a manual `snap refresh` while any VibeSuperTonic process runs
+("has running apps"): the Speech Dispatcher module (speech-dispatcher keeps it
+alive), the daemon, or a window the tray opened (which snapd counts as `ctl`);
+automatic refreshes wait instead. Three designs were ruled out:
+
+- **A module that exits when idle.** Measured with speech-dispatcher 0.12.1: a
+  module that exits is not restarted. speechd logs "Output module terminated
+  abnormally, probably crashed", routes every later request to the fallback
+  module, and still lists the dead one in `spd-say -O`, which would silently move
+  a screen-reader user to espeak.
+- **`refresh-mode: ignore-running`.** The Snap Store accepts it only on services
+  (`daemon:` apps), and none of ours is one; a local snapd installs it without
+  complaint, so `--test-install` passes. `pack-snap.sh` refuses `refresh-mode` on
+  any app that is not a service.
+- **Anything automatic.** The user ruled out a surprise restart or an unannounced
+  slow press.
+
+What is built instead lets the user choose. The daemon notices a held revision by
+the file snapd pre-downloads, `/var/lib/snapd/snaps/<instance>_<rev>.snap`, which
+every snap's AppArmor profile lets it stat (`snapctl refresh --pending` is
+refused to a non-root app, and the notices API needs a reviewed interface). It
+shows a notification with Update now / Later and a tray row (`SnapUpdateWatch`,
+`SnapUpdateMarker`, `UpdatePrompt`). Update now closes the window (the
+`UpdateStarting` event), the module (an `update-now` marker in
+`$SNAP_USER_COMMON`, honoured only if written after the module started) and the
+daemon; snapd applies a held refresh when the apps stop. The notification closes
+on either answer. Speech Dispatcher's module is left `<defunct>` (speechd never
+reaps it, and a zombie does not hold a refresh), after which speechd speaks
+through espeak-ng until it is restarted; the notification and the window say so.
+`SnapRefreshWatch` remains in the daemon but does nothing, since `current` cannot
+move while the daemon runs. The workaround for an unattended refresh is
+`vibesupertonic.ctl shutdown`, `systemctl --user stop speech-dispatcher.service`,
+and closing the window.
+
+## What a user needs to know
+
+- **Log out and back in after installing or re-binding** before the hotkey works
+  on KDE: kglobalaccel reads shortcuts only at login (by design; see
+  `keybindings.sh`). The listing says so.
+- **A snap hotkey press costs about 108 ms**, measured 2026-09-27 on Kubuntu, all
+  of it `snap run` setting up confinement (`snap run --shell
+  vibesupertonic.ctl -c true` costs the same), against a 100 ms budget for the
+  whole press. Accepted as the snap's cost. Running `vst-ctl` from the mount on the
+  host does not work around it: the confined daemon's AppArmor profile refuses a
+  connection from an unconfined peer (`DENIED operation="connect" ...
+  requested="send receive accept"`), seen in CI's `--test-install` and on the
+  desktop. A route would be a D-Bus call to the daemon, which needs its own design
+  and an autostart story. The tarball, AppImage and Flatpak do not pay this.
+- **GNOME on Wayland**, which is stock Ubuntu, has no `ext-data-control`, so the
+  hotkey cannot read the selection there. On the App Center's default desktop the
+  product is its screen-reader voice plus the window. The listing says so, and
+  its screenshots do not suggest otherwise.
+- **AutoCopy** (the Tune tab's "Press Ctrl+C for me") presses a key through the
+  desktop's RemoteDesktop portal. Whether that portal is reachable from inside
+  the snap or the Flatpak has not been checked, so those two packages may not
+  offer it.
+- **KDE's menu gains a second VibeSuperTonic entry** after `bind` in the tarball
+  and the AppImage (the one `keybindings.sh` writes); in the snap and the Flatpak
+  it is hidden.
+- **Not offered inside either sandbox:** the optional CUDA pack (`install-gpu.sh`)
+  and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
+
+## What has been verified, and what has not
+
+**Checked by this repository's own tests and packers:**
 
 - Unit tests for the sandbox rules, the socket path and the launch plan, each
-  sabotaged and seen failing.
-- The real published binaries, laid out as a snap: the store lands in `common/`,
+  sabotaged and seen failing; the same for `SnapWaylandLink`, `SnapUpdateWatch`
+  and `ExportBusyGate`.
+- The real published binaries laid out as a snap: the store lands in `common/`,
   `vst-ctl` auto-starts the daemon and talks to it, and a refresh from x7 to x8
   reports no move.
 - The real host-side `vst-ctl` in a Flatpak deployment layout looks for the
-  daemon in the shared runtime directory, and tries `flatpak run` to start it.
-- `sandbox-setup.sh` against a fake snap mount and a fake Flatpak installation
-  ([check-sandbox-setup.sh](../build/check-sandbox-setup.sh)), with three
-  negative controls.
-- The snap packer's post-build checks against a hand-built snap, and seven
-  sabotages of it (wrong version, classic confinement, a command-chain on `ctl`,
-  a missing app, a missing library, a model file, no espeak).
-- Only in CI, because this container cannot reach the Snap Store or Flathub:
-  the real `snapcraft` and `flatpak-builder` builds, and the installed-Flatpak
-  checks. The Flatpak passed all of them on its first run. The snap's library
-  check caught a real fault on its first run: the GNOME extension's GPU cleanup
-  had deleted `libX11` from `usr/lib`, where the daemon (which has no extension)
-  needed it. The daemon's libraries now live in `lib/native`.
+  daemon in the shared runtime directory.
+- `sandbox-setup.sh` against a fake snap mount and a fake Flatpak installation,
+  with three negative controls.
+- `pack-snap.sh` asserts, on the finished snap: the version; **strict**
+  confinement; all five apps (`vibesupertonic`, `daemon`, `ctl`, `speechd`,
+  `setup`); `network-bind` and `unity7` (the tray's session bus) on the four that
+  can start the daemon, and every plug of the window app on `daemon`, `ctl` and
+  `speechd`; the hidden desktop entries; `PULSE_SERVER` for every app; **no
+  `command-chain` on `ctl`**, because an extension there wraps every hotkey press
+  in a launcher script; no `refresh-mode` on a non-service; no models and no CUDA
+  provider; the daemon's three staged libraries; and the module answering `INIT`
+  with 299. `--check <file.snap>` runs only these; each was seen failing against
+  a sabotaged snap.
+- `pack-snap.sh --test-install` installs the snap under snapd and makes its
+  daemon answer; CI's snap job runs it. It also runs
+  [check-snap-speechd.sh](../build/check-snap-speechd.sh): a **private**
+  speech-dispatcher, started once from a shell and once socket-activated through
+  `systemd-run --user` as a desktop starts it, must load the snap's module and
+  keep everything it offered before (a desktop with the snap installed can run the
+  same script, which never touches the user's own speech-dispatcher). And it opens
+  the window the way the tray does: `vibesupertonicd --window-command` run inside
+  `ctl`'s confinement on Xvfb must stay up, and the bare
+  `$SNAP/vibesupertonic-ui` in the same place must not, or the check cannot tell
+  them apart.
+- `pack-flatpak.sh --test-install` installs the bundle and asserts the store lands
+  under `~/.var/app`, the module answers `INIT` inside the sandbox, and the
+  host-side `vst-ctl`, run from the deployment's `active` path as a hotkey runs
+  it, looks for the daemon in the shared runtime directory. If that were wrong,
+  every press would start a second daemon nobody talks to.
+- The export ffmpeg was built with the script's `--fetch` (as the snap part does)
+  and with `--ffmpeg-src/--lame-src` (as the Flatpak manifests do); it encodes
+  MP3, AAC and FLAC from a piped WAV, `ExportRunner`'s real-ffmpeg test passed
+  against it through `VST_FFMPEG`, and every sabotage in
+  `ffmpeg-bundle-sabotage.sh` was caught, a real rebuild without `aresample`
+  among them.
+- CI runs the real `snapcraft` and `flatpak-builder` builds and the installed
+  checks, which this development container cannot (it cannot reach the Snap Store
+  or Flathub).
 
-**What the first real install found.** Revision 1, on `edge`, could not start its
-daemon: seccomp refused `listen()` (the kernel logged `type=1326 ... syscall=50`),
-so the window said "not connected" and every hotkey press aborted a daemon.
-snapd's default filter has no `listen()`; the `network-bind` plug grants it, and
-now every app that can start the daemon carries it, which `pack-snap.sh` asserts.
-Nothing above had run the snap under snapd, so `pack-snap.sh --test-install`,
-which CI now runs on a runner with snapd, installs the snap and makes its daemon
-answer. (The socket is also abstract, `@snap.vibesupertonic.ctl-<uid>`, with a
-same-user check in place of the file mode: a first fix, aimed at AppArmor, that
-did not help on its own and was kept.)
+**Seen on a real Kubuntu desktop:**
 
-**The export ffmpeg, verified and not (2026-10-03).** Built here with the
-script's `--fetch` (as the snap part does) and with `--ffmpeg-src/--lame-src` (as
-the Flatpak manifests do); it encodes MP3, AAC and FLAC from a piped WAV;
-`ExportRunner`'s real-ffmpeg test passed against it through `VST_FFMPEG`; every
-sabotage in `ffmpeg-bundle-sabotage.sh` was caught, a real rebuild without
-`aresample` among them. **Not yet observed**: the `ffmpeg` part under snapcraft,
-the module under flatpak-builder (both CI only), the in-confinement checks, the
-document-portal fallback against a real portal, and whether Flathub's reviewers
-accept a bundled ffmpeg CLI (the usual alternative, the `org.freedesktop.Platform.ffmpeg-full`
-extension, carries libraries rather than the program, so it would still need a
-CLI built against it; not checked here, since this session has no flatpak).
+- *Snap.* The tray icon registers (`unity7`), a click opens the window, "Read
+  selected text" speaks, and a click after a logout and login opens the window.
+  Orca reads through the VibeSuperTonic voice. After a reboot the first hotkey
+  press, before any window has opened, starts the daemon, which chooses Wayland,
+  and the selection is read. The hidden menu entry keeps its hotkeys after a
+  reboot. Export works from a menu-opened window and from a tray-opened one (WAV
+  twice, the second over the first; MP3 of 395 KB); an export while the hotkey
+  speaks says "busy (Speaking) …", with no ffmpeg left behind. A refresh from
+  revision 8 to 9 with snapd's timer moved to force the check: snapd
+  pre-downloaded the revision, the daemon logged it waiting, Update now from the
+  tray was pressed, and snapd's refresh completed 20 s later with nothing typed.
+  From 9 to 10 the module was running, stepped aside, and the refresh followed at
+  once.
+- *Flatpak (Kubuntu 2026-10-16).* The window opens on Wayland, the tray icon
+  registers from inside the sandbox, export of a new file and of an overwrite
+  works through the file dialog, and the sandbox gets the Wayland protocol the
+  hotkey reads the selection with (the daemon logged `selection source:
+  wayland`).
 
-**The Flatpak on a real desktop, first time, Kubuntu 2026-10-16 (0.2.17 bundle).**
-Three faults, none visible to CI:
+**Not verified:**
 
-- **The window could not open on Wayland** (`XOpenDisplay failed`): `fallback-x11`
-  withholds X11 whenever Wayland exists, and Avalonia draws only through X11.
-  Note that adding `--socket=x11` beside `fallback-x11` still gave no display;
-  the fallback has to go. Fixed in `389b699`, asserted by
-  `check-flatpak-sockets.sh`. Flathub's linter now reports
-  `finish-args-contains-both-x11-and-wayland`, which this app genuinely needs.
-- **No tray icon, ever**: the proxy refuses `RequestName` for
-  `org.kde.StatusNotifierItem-<pid>-1` with ServiceUnknown. Hidden because the
-  snap's icon sat in the same tray. Fixed in `3cda92a` (fall back to the unique
-  name), seen registering from inside the sandbox.
-- **Export works**: a new file and an overwrite, granted to the Flatpak's id, and
-  the busy message while reading. **The sandbox gets `ext-data-control-v1`**
-  (the daemon logged `selection source: wayland`), but the hotkey itself was not
-  pressed: that needs a logout, skipped.
+- The Flatpak's hotkey itself pressed on Plasma/Wayland (KWin can withhold
+  privileged protocols from sandboxed clients), the Flatpak's tray after a logout
+  and login, and Orca through the Flatpak's module.
+- AutoCopy inside the snap and the Flatpak.
+- A real X11 desktop after a real logout, for the daemon that outlived it
+  (`NativeXAuthority` was seen failing and then passing against this machine's
+  XWayland with a daemon started on a dead `XAUTHORITY`).
+- Whether Flathub's reviewers accept a bundled ffmpeg CLI. The usual alternative,
+  the `org.freedesktop.Platform.ffmpeg-full` extension, carries libraries rather
+  than the program, so it would still need a CLI built against it.
+- The two entries in [lint-exceptions.json](../build/flatpak/lint-exceptions.json)
+  about screenshot mirroring (`appstream-external-screenshot-url` and
+  `appstream-screenshots-not-mirrored-in-ostree`) have never been seen firing,
+  because only Flathub's own builders mirror screenshots. If Flathub's build shows
+  either one not raised, remove it.
+- AUR and winget have not been run through their own submission checks beyond
+  what each section below lists.
 
-**And the snap's tray-opened window still could not export a new file** on
-stable revision 16. The grant goes to `snap.vibesupertonic_ctl` (snapd reports
-ctl's own desktop file), and the snap sees only `snap.vibesupertonic`'s portal
-folder. Revision 15's confirmation had overwritten a file that already had a
-visible grant. Fixed in `56e52cc`: the window passes the grant on with
-`Documents.GrantPermissions`, measured working from inside ctl's confinement.
-**Not yet seen in a built snap.**
+## Where each store stands (2026-11-08)
 
-**Needs a real Kubuntu and a real Ubuntu desktop before submitting**:
-
-- [ ] **Export MP3 from the window in each package**, saving into the home
-      folder through the portal's dialog, and once over an existing file.
-      **Snap, revision 12, Kubuntu 2026-10-15: works from a menu-opened window,
-      fails from a tray-opened one.** From the menu, WAV and MP3 (128 kbps,
-      valid) landed in `~/Downloads/01`, granted to `snap.vibesupertonic`. From
-      the tray: "Export failed: the folder /run/user/1000/doc/44660954 does not
-      exist". The tray opens the window under `ctl`'s confinement, `ctl` had no
-      desktop entry, so `snap routine portal-info` said `DesktopFile=.` and the
-      portal granted the file to an app called "." (`xdg-document-portal:
-      Invalid id .`), which the snap cannot see. **Fixed, not yet seen on the
-      desktop**: `daemon`, `ctl` and `speechd` carry hidden desktop entries;
-      pack-snap.sh asserts them in `meta/gui/` and, with `--test-install`, that
-      portal-info names `vibesupertonic_<app>.desktop` for each. Both checks
-      were run against revision 12 and failed for all three apps, and passed
-      for the window app. **Revision 14 (the fix), same day:** portal-info names
-      all four entries, and the file the "." grant had swallowed is now granted
-      to `snap.vibesupertonic` as well. Its export then failed with "cannot
-      write …: Access to the path '/proc/1/cmdline' is denied": the render was
-      refused (the hotkey was still speaking, 14 s earlier), `TryKill` stopped
-      ffmpeg with `Kill(entireProcessTree: true)`, .NET walked /proc to find
-      the tree, AppArmor refused `/proc/1/cmdline`, and the uncaught exception
-      became the export's message. Now a plain `Kill()` whose failure is never
-      the verdict; a unit test with a lingering fake ffmpeg fails on a TryKill
-      that throws. (Its first replacement, a plain `Kill()`, left a wrapper
-      script's child holding the pipes and broke the cancel test; the tree
-      kill is back, with ffmpeg alone as the fallback.)
-      **Confirmed on revision 15, Kubuntu 2026-10-15**, window opened from the
-      tray (`snap.vibesupertonic.ctl`): WAV exported twice, the second over the
-      first; MP3 exported (395 KB); an MP3 export while the hotkey spoke said
-      "busy (Speaking) …", and the kernel logged the `/proc/1/cmdline` denial
-      at that moment, so the fallback kill ran, and no ffmpeg was left behind.
-      **Decided 2026-10-16: export keeps refusing while anything reads**, and
-      the window keeps the message up until the reading ends, then says it
-      can export (`ExportBusyGate`, asked before the save dialog opens; 6
-      tests, a sabotage caught). The Flatpak is still untried. The Flatpak has no tray/menu
-      split (one app id), but is still untried.
-
-- [ ] **A manual `snap refresh` is refused while any VibeSuperTonic process runs**
-      ("has running apps"): the Speech Dispatcher module (speech-dispatcher keeps
-      it alive), the daemon, or a window the tray opened (which snapd counts as
-      `ctl`). snapd's normal rule; automatic refreshes wait instead. Decide
-      between telling users (listing, INSTALL notes) and making the module and
-      daemon step aside.
-      **Measured 2026-09-26, speech-dispatcher 0.12.1: a module that exits is not
-      restarted.** speechd logs "Output module terminated abnormally, probably
-      crashed", routes every later request to the fallback module, and still lists
-      the dead one in `spd-say -O`. So "the module exits when idle" would silently
-      move a screen-reader user to espeak. Ruled out. The candidate instead is
-      `refresh-mode: ignore-running` on the `speechd` and `daemon` apps, with the
-      daemon exiting when idle once it sees `current` point at a newer revision.
-      Needs a CI snap build to verify.
-      **Built 2026-09-26, uncommitted**: both lines in snapcraft.yaml.in, asserted
-      by pack-snap.sh (a synthetic snap without either line is refused), and
-      `SnapRefreshWatch` in the daemon with 17 tests, three sabotages caught.
-      Still to see: CI's `--test-install` accepting the snap, then a real refresh
-      on the desktop with the daemon and the module running. Today's workaround: `vibesupertonic.ctl shutdown`,
-      `systemctl --user stop speech-dispatcher.service`, close the window.
-      **Withdrawn 2026-09-27: the Store refuses it.** The first publishing run
-      failed at upload: `refresh-mode` is allowed only on services (`daemon:`
-      apps), and neither app is one. Local snapd had installed the snap without
-      complaint, so `--test-install` passed. The lines are gone, and pack-snap.sh
-      now refuses `refresh-mode` on any app that is not a service.
-      `SnapRefreshWatch` stays but does nothing, because `current` cannot move
-      while the daemon runs. **Still open, and the workaround above is the answer
-      for now.** Options to weigh: the daemon exiting after a long idle (costs a
-      cold start on the next press), or snapd's own refresh-app-awareness
-      notification, which asks the user to close the app.
-      **Built 2026-09-27: the user chooses.** The user ruled out anything
-      automatic (no surprise restart, no unannounced slow press). The daemon
-      notices a held revision by the file snapd pre-downloads,
-      `/var/lib/snapd/snaps/<instance>_<rev>.snap`, which every snap's AppArmor
-      profile lets it stat (`snapctl refresh --pending` is refused to a non-root
-      app, and the notices API needs a reviewed interface). It then shows a
-      notification with Update now / Later and a tray row. Update now closes the
-      window (`UpdateStarting` event), the module (the `update-now` marker in
-      `$SNAP_USER_COMMON`, honoured only if written after the module started) and
-      the daemon; snapd applies a held refresh when the apps stop.
-      `SnapUpdateWatch`, `SnapUpdateMarker`, `UpdatePrompt`; 19 tests, two
-      sabotages caught.
-      **Confirmed on Kubuntu 2026-09-27, revision 8 to 9**, with snapd's timer
-      moved to force the check: 04:06:55 snapd pre-downloaded
-      `vibesupertonic_9.snap` and showed its own "Update available" notice;
-      04:10:03 the daemon logged revision 9 waiting; 04:15:36 Update now from the
-      tray; 04:15:56 snapd's auto-refresh completed, 20 s later, nothing typed.
-      Found by it: the notification stayed on screen after Later ("resident"), so
-      Later was clicked 13 times; fixed in the next revision by dropping the hint
-      and closing it on either answer. **Second round, 9 to 10, 04:47:** the
-      Speech Dispatcher module was running and stepped aside (left `<defunct>`:
-      speechd never reaps it, and a zombie does not hold a refresh), and the
-      refresh followed at once. speechd then spoke through espeak-ng until it was
-      restarted, which the notification and the window now explain (62a7bc0).
-- [ ] **After installing or re-binding, log out and back in** before the hotkey
-      works on KDE: kglobalaccel reads shortcuts only at login (by design, see
-      keybindings.sh). Seen on Kubuntu 2026-09-25. The listing should say so.
-
-- [ ] **The hotkey after a reboot, before any window has opened** (snap). Revision
-      5 read nothing in Wayland applications then: the daemon's probe looked for
-      `wayland-0` in the snap's private `$XDG_RUNTIME_DIR`, where only the window's
-      `desktop-launch` links it, and fell back to X11 PRIMARY for its whole life.
-      Log line: `selection source: x11 (PRIMARY)` on a Wayland session. Found on
-      Kubuntu 2026-09-27 and reproduced by removing the link and restarting the
-      daemon. **Fixed 2026-09-27, uncommitted**: `SnapWaylandLink` makes the same
-      link before the probe (7 tests, the sabotage caught by 4). To see on the
-      desktop with the next revision: reboot, press the hotkey before opening the
-      window, and the log says `linked ... wayland-0` then `selection source:
-      wayland`.
-      **Confirmed on the desktop 2026-09-27, revision 7:** after a reboot the first
-      hotkey press started the daemon, which logged the link and chose Wayland,
-      and the selection was read.
-
-- [x] **Hotkey latency through `/snap/bin/vibesupertonic.ctl`.** **Measured
-      2026-09-27 on Kubuntu: 108 ms median per press**, all of it `snap run`
-      setting up confinement (`snap run --shell vibesupertonic.ctl -c true` costs
-      the same), against a 100 ms budget for the whole press. **Accepted: it is
-      the snap's cost, and the fallback does not work.** Run from the mount on
-      the host, `vst-ctl` is refused by the confined daemon's AppArmor profile,
-      which does not accept a connection from an unconfined peer (`DENIED
-      operation="connect" ... requested="send receive accept"`), seen in CI's
-      `--test-install` and then on the desktop. It had first looked like 6 ms and
-      no denial, because the daemon it reached had itself been started
-      unconfined by the same experiment. Tried as d5215c9, reverted. A future
-      route would be a D-Bus call to the daemon (the tray's SNI object already
-      receives calls from the desktop), which needs its own design and an
-      autostart story. The tarball, AppImage and Flatpak do not pay this.
-- [ ] **Selection capture in the Flatpak on Plasma/Wayland.** KWin can withhold
-      privileged Wayland protocols from sandboxed clients (security-context-v1),
-      and `ext-data-control` is exactly that kind of protocol. If KWin withholds
-      it, the hotkey reads nothing.
-- [ ] **The tray icon** in both sandboxes. **Snap: done on Kubuntu 2026-09-25**
-      (revision 5): the icon registers (`unity7`), a click opens the window, and
-      "Read selected text" speaks. **A click after a logout and login opens the
-      window too** (the `ClientDisplay` fix), confirmed 2026-09-26. Flatpak
-      (`--talk-name=org.kde.StatusNotifierWatcher`) not yet tried.
-- [ ] **Orca end to end**: `sandbox-setup.sh speechd-install`, then Orca speaking
-      through the module, in both. **Snap: done on Kubuntu 2026-09-26**, Orca
-      reading through the VibeSuperTonic voice (revision 5). Flatpak not yet
-      tried.
-- [ ] **KDE's menu gains a second VibeSuperTonic entry** after `bind`: the store's
-      own, plus the one keybindings.sh writes to carry the shortcuts. **Confirmed**
-      on Kubuntu with the snap (`vibesupertonic_vibesupertonic.desktop` beside
-      `vibesupertonic.desktop`). Decide
-      whether that one should be `NoDisplay=true`, and test that the shortcuts
-      survive it.
-      **Decided 2026-09-26: yes, in the snap and the Flatpak only** (sandbox-setup.sh
-      sets `VST_KB_KDE_NO_DISPLAY=1`; the tarball and AppImage keep theirs visible,
-      since it is their only entry). Plasma's own "Add Command" shortcuts are
-      NoDisplay entries, which is the reason to expect it to work. **Not yet seen
-      after a real logout.** The user's re-login on 2026-09-27 did not test it:
-      revision 5's `sandbox-setup.sh` predates the change, `bind` was not re-run,
-      and the entry on disk has no `NoDisplay` line. **Confirmed later the same
-      day on revision 7:** `bind` re-run, the entry written `NoDisplay=true`, and
-      after a reboot the hotkeys still work. The user had hidden the entry with KDE's menu editor
-      on 2026-09-26, thinking it a mistake; `keybindings.sh status` now warns when
-      the shortcuts point at an entry that no longer exists.
-- [ ] **GNOME on Wayland**, which is stock Ubuntu: the hotkey cannot read the
-      selection there (no `ext-data-control`), so on the App Center's default
-      desktop the product is its screen-reader voice plus the window. The listing
-      says so; the page's screenshots should not suggest otherwise.
-
-Not offered inside either sandbox yet: the optional CUDA pack (`install-gpu.sh`),
-and the timer helpers (`vst-gpu-guard.sh`, `vst-autotune.sh`).
+| Channel | State |
+| --- | --- |
+| Snap Store | `stable` and `candidate`: 0.2.18, revision 18; `beta` and `edge`: 0.2.18, revision 19 (read from the store's API). Revision 18 is the stable-grade build; 19 is a `devel` CI build, which `stable` refuses |
+| GitHub Releases | Latest 0.2.18, with the tarball, AppImage, Windows ZIP, snap and Flatpak |
+| Flathub | flathub/flathub#10671, open, labels `leave-open` and `too-new`. Opened 2026-10-17 from `Hananel-Hazan/flathub` branch `add-vibesupertonic`, with a manifest the maintainer wrote by hand, building `v0.2.18`. Flathub's test build passed 2026-10-24 with one linter warning, `finish-args-contains-both-x11-and-wayland`. A reviewer objected to "vibe" in the name on 2026-10-21. On 2026-11-05 the submission bot answered that Flathub requires a meaningful history of development, evidence of real-world use and a commitment to ongoing maintenance, and that the submission will be revisited in 1 to 2 months |
+| AppImageHub | Listed (AppImage/appimage.github.io#10295, merged 2026-10-16) |
+| AUR, winget | Drafted in `build/aur/` and `build/winget/`, not submitted |
 
 ## Submitting
 
 ### Snap Store
 
-1. ~~Create a developer account at snapcraft.io and reserve the name:
-   `snapcraft register vibesupertonic`.~~ **Done 2026-09-25**; the name
-   `vibesupertonic` belongs to the project's Ubuntu One account.
-2. `snapcraft upload --release=edge dist/VibeSuperTonic-0.2.17-amd64.snap`. CI's
-   `linux-snap` artifact is a `devel`-grade build, which `edge` and `beta`
-   accept; `candidate` and `stable` need a build made with `--grade stable`.
+1. The name `vibesupertonic` is registered to the project's Ubuntu One account.
+2. `snapcraft upload --release=edge dist/VibeSuperTonic-X.Y.Z-amd64.snap`. CI's
+   `linux-snap` artifact is a `devel`-grade build, which `edge` and `beta` accept;
+   `candidate` and `stable` need a build made with `--grade stable`.
 
-   **CI does this itself** once the repository has an
-   `SNAPCRAFT_STORE_CREDENTIALS` secret: the snap job publishes to `edge` on
-   every push to `main`, and on a manual run with `publish_edge` ticked, after
-   `--test-install` has passed. Make the credential with
-   `snapcraft export-login --snaps=vibesupertonic --channels=edge
-   --acls=package_access,package_push,package_update,package_release <file>`
-   and paste the file's contents into the secret. It can reach `edge` only.
-   Promotion to `stable` stays a person's decision, in the dashboard or with
-   `snapcraft release`. **Never have two publishing runs in flight**: whichever
-   finishes last takes `edge`, even when it carries the older code.
-3. In the dashboard: categories (Utilities, Productivity), screenshots, and the
-   licence note that the models download separately under OpenRAIL-M.
-4. Automated review should pass, because nothing privileged is requested. Promote
-   `edge` → `stable` once the checklist above is done.
-
-**State on 2026-10-16, read from the store's API:** `stable` holds 0.2.17
-(revision 16), and `beta` and `edge` hold 0.2.18 (revision 19). The dashboard's
-categories are *Education* and *Productivity*, not the *Utilities* step 3
-proposed. Either is defensible; there is still no Accessibility category to
-choose. **0.2.18 is not on `stable` yet**, so the App Center and Discover offer
-0.2.17, which lacks the tray-window fix. **Promote revision 18, not 19**: 18 is
-byte-identical to the GitHub release asset and `stable` grade; 19 is a `devel`
-CI build of the commit after the tag, which `stable` refuses.
-`snapcraft release vibesupertonic 18 stable,candidate`.
+   **CI does this itself** once the repository has an `SNAPCRAFT_STORE_CREDENTIALS`
+   secret: the snap job publishes to `edge` on every push to `main`, and on a
+   manual run with `publish_edge` ticked, after `--test-install` has passed. Make
+   the credential with `snapcraft export-login --snaps=vibesupertonic
+   --channels=edge --acls=package_access,package_push,package_update,package_release
+   <file>` and paste the file's contents into the secret. It can reach `edge`
+   only. Promotion to `candidate` and `stable` stays a person's decision, in the
+   dashboard or with `snapcraft release`. **Never have two publishing runs in
+   flight**: whichever finishes last takes `edge`, even when it carries the older
+   code.
+3. In the dashboard: categories, screenshots, and the licence note that the models
+   download separately under OpenRAIL-M.
+4. Automated review passes because nothing privileged is requested.
 
 ### Flathub
 
-**A source-build manifest exists since 2026-09-27; not yet seen building on
-Flathub's image.** Flathub requires source-available apps to be "built entirely
-from source code", so the tarball manifest cannot be submitted. The second
-manifest, `build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in`,
-builds with the `dotnet10` SDK extension, restores offline from the NuGet
-packages pinned in `build/flatpak/nuget-sources.json`, builds espeak-ng at
-`build-espeak.sh`'s pin, and runs `pack-tar.sh` inside the build, so every packer
-assertion runs there too. The tree it installs is the one the tarball holds.
+Flathub requires source-available apps to be "built entirely from source code", so
+the tarball manifest cannot be submitted. A second manifest,
+[build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in](../build/flatpak/io.github.hananel_hazan.VibeSuperTonic.source.yml.in),
+builds with the `dotnet10` SDK extension, restores offline from the NuGet packages
+pinned in `build/flatpak/nuget-sources.json`, builds espeak-ng at
+`build-espeak.sh`'s pin (and libsonic, which espeak-ng's CMake otherwise clones at
+configure time even though nothing links it; `build-espeak.sh --sonic-src`
+refuses any commit but the one espeak-ng names), and runs `pack-tar.sh` inside the
+build, so every packer assertion runs there too. The tree it installs is the one
+the tarball holds. `pack-flatpak.sh --from-source` builds it and `--flathub TAG`
+writes a submission.
 
-**Two of the exceptions in
-[lint-exceptions.json](../build/flatpak/lint-exceptions.json) have never been
-seen firing**: `appstream-external-screenshot-url` and
-`appstream-screenshots-not-mirrored-in-ostree` concern screenshot mirroring,
-which only Flathub's own builders do. If the first build on Flathub shows either
-one not raised, remove it.
-
-- Rehearsed here: `pack-tar.sh` against a feed holding only the 34 packages
-  then pinned, with a fresh package cache and NativeAOT forced onto gcc (the SDK has
-  no clang), passes all its assertions.
-- CI's `flathub` workflow ([flathub.yml](../.github/workflows/flathub.yml)) is
-  the real check: it regenerates the package list inside the SDK (runtime packs
-  are versioned by the SDK that restores them, so a list made on a workstation
-  can be wrong), then runs `pack-flatpak.sh --from-source --test-install`.
-  **It found exactly that.** The workstation list named runtime packs 10.0.12,
-  while Flathub's `dotnet10//25.08` restores 10.0.8 and brings its own apphost:
-  33 packages. Run 3 (2026-09-27) was the first full pass of the build,
-  `--test-install` included, and `467913a` re-pinned the list from that run.
-  The move to `dotnet10//26.08` (`9c80722`) brought the extension to 10.0.12,
-  and the list was re-pinned from CI run 12 (2026-10-04): same 33 packages,
-  eight runtime packs from 10.0.8 to 10.0.12. The Flathub build and the other
-  artifacts now ship the same .NET runtime, 10.0.12.
-
-**State on 2026-10-16:** v0.2.17 tagged and pushed, `flathub.yml` green on the
-tag (run 38926327561), and `dist/flathub/` written for it. The fork
-`Hananel-Hazan/flathub` exists with nothing pushed. **The pull request must be
-opened by the user**: Flathub's template asks the submitter to confirm no AI
-tool or agent generated or automated the submission PR, to attach a video of
-the Flatpak running, and to disclose AI-generated material in the app.
-AppImageHub: AppImage/appimage.github.io#10295, opened 2026-10-16.
-
-**State on 2026-10-24:** the user opened flathub/flathub#10671 on 2026-10-17
-from `Hananel-Hazan/flathub` branch `add-vibesupertonic`, with a manifest of
-their own (86 lines, not `dist/flathub/`), building `v0.2.18` (`1e85f40`).
-Labels: `awaiting-review`, `leave-open`, `AI Slop`. A reviewer (barthalion,
-2026-10-21) objected to "vibe" in the name; the user replied the same day; no
-formal review yet. **Flathub's test build passed on 2026-10-24** (vorarbeiter
-run 40131424757, build-repo 332398) with one linter warning,
-`finish-args-contains-both-x11-and-wayland`, which is the known one above.
-Neither screenshot exception was reported there.
-
-**State on 2026-11-01:** 0.2.19 is committed (`216d0b4`, `4792fac`) and packed
-(tarball, AppImage, Flatpak in `dist/`) but not tagged, not released, and not
-sent to any store; the user runs its AppImage. The portal that AutoCopy uses
-(XDG RemoteDesktop) has not been tried from inside the snap or the Flatpak, so
-those two packages may not offer AutoCopy. The Flathub pull request is still on
-`v0.2.18`.
-
-**State on 2026-11-08:** the Flathub linter failed on the 2026-11-02 push because
-the screenshot URLs in the metainfo still pointed at `v0.2.18`; they now point at
-`v0.2.19`, which 404s until that tag is pushed, so push the tag before the
-Flathub job runs on the merge. `RELEASE_NOTES.md` has the 0.2.19 entry. The
-artifacts in `dist/` predate the metainfo and notes commits, and the Flatpak
-there (2026-10-18) predates AutoCopy: repack all three before tagging. Still
-not checked: AutoCopy's portal inside the snap and the Flatpak.
-
-**Read before submitting (2026-10-16): `dist/flathub/` is not submittable.**
-Flathub's [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
+**The submission cannot be generated.** Flathub's
+[Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
 says manifests "must not contain AI-generated or AI-assisted content", and
 disclosure does not exempt them. Every commit to the source manifest and to
-`gen-nuget-sources.py` is co-authored by Claude. The policy also forbids AI
-tools from opening the pull request or writing its description, commits or
-review replies, and requires the app's own AI-generated material to be
-disclosed with its extent (243 of 268 commits are co-authored, as of today).
-So the Flathub manifest must be written by the maintainer by hand, with
-`flatpak-dotnet-generator.py` from flatpak-builder-tools for the NuGet sources,
-and the steps below describe the mechanics only. The in-repo manifests remain
-right for CI and the local bundle.
+`gen-nuget-sources.py` is co-authored by Claude. The policy also forbids AI tools
+from opening the pull request or writing its description, commits or review
+replies, and requires the app's own AI-generated material to be disclosed with its
+extent (243 of 268 commits were co-authored on 2026-10-16). So the Flathub
+manifest is written by the maintainer by hand, with `flatpak-dotnet-generator.py`
+from flatpak-builder-tools for the NuGet sources, and `dist/flathub/` is not
+submittable. The in-repo manifests are right for CI and for the local bundle.
+Flathub's template also asks the submitter to confirm that no AI tool generated or
+automated the pull request, and to attach a video of the Flatpak running.
 
-Submission, once CI is green and v0.2.17 is tagged and pushed:
+**CI's `flathub` workflow** ([flathub.yml](../.github/workflows/flathub.yml)) is
+the real check of the source manifest. It regenerates the package list inside the
+SDK, because runtime packs are versioned by the SDK that restores them and a list
+made on a workstation can be wrong (a workstation list named runtime packs
+10.0.12 while `dotnet10//25.08` restored 10.0.8), then runs `pack-flatpak.sh
+--from-source --test-install`, and refuses a stale list. The list is regenerated
+with `python3 build/flatpak/gen-nuget-sources.py --in-sdk 26.08`, and whenever a
+`PackageReference` changes it changes with it. It currently holds 33 packages, and
+the Flathub build and the other artifacts ship the same .NET runtime, 10.0.12.
+Rehearsed locally: `pack-tar.sh` against a feed holding only those packages, with a
+fresh package cache and NativeAOT forced onto gcc (the SDK has no clang), passes
+all its assertions. The same job runs Flathub's linter and refuses a screenshot
+URL pinned to any tag but the one being built.
 
-1. Screenshots are in the metainfo (done), at tag URLs.
-2. `bash build/pack-flatpak.sh -v 0.2.17 --flathub v0.2.17` writes
-   `dist/flathub/`: the manifest pinned to the tag's commit, with
-   `nuget-sources.json` and `flathub.json` beside it. `flathub.json` limits Flathub
-   to x86_64. The packer refuses to write the submission without it, because an
-   aarch64 build of this package cannot succeed.
-3. Fork `flathub/flathub`, add all three files on a branch off `new-pr`, and open
-   the pull request. Reviewers will ask about `--device=dri` (GPU inference)
-   and `--share=network` (the model download); both are in the manifest's
-   comments. Answers to the likely questions are in RELEASE-0.2.17.md step 6.
-4. Once merged, the app gets its own repository,
-   `flathub/io.github.hananel_hazan.VibeSuperTonic`. Each release is then a PR
-   there that bumps the tag, the commit, and `nuget-sources.json` if it moved.
+**What a submission contains:**
 
-The tarball manifest stays for CI's `flatpak` job and a local bundle.
+1. The manifest pinned to the tag's commit, `nuget-sources.json`, and
+   `flathub.json`. `flathub.json` limits Flathub to x86_64; without it Flathub also
+   builds aarch64, which this package cannot do, and the pull request is blocked.
+2. A fork of `flathub/flathub`, a branch off `new-pr`, and a pull request against
+   `new-pr`. Reviewers ask about `--device=dri` (optional GPU inference, with a CPU
+   fallback) and `--share=network` (the model download after the user accepts the
+   licence); both are in the manifest's comments.
+3. Suggested description:
 
-The app id is permanent once published. `io.github.hananel_hazan` is verified
-through the GitHub account, so there is no domain to prove.
+> **VibeSuperTonic**: text to speech for the Linux desktop. Select text, press a
+> key, and a neural voice reads it aloud. It runs entirely on the user's machine
+> and is also a Speech Dispatcher voice, so Orca can use it. Accessibility,
+> Utility.
+>
+> I am the upstream developer. Source: MIT; the package is GPL-3.0-or-later as a
+> whole because it bundles espeak-ng (licence and source offer in
+> `LICENSE-PHONEMIZER.txt`).
 
-## Beyond the two stores (2026-10-16)
+| Question | Answer |
+| --- | --- |
+| `--share=network`? | The voice models download on first run from Hugging Face, after the user accepts their licence. Shipping them would skip that acceptance. Nothing the user reads is sent anywhere |
+| `--device=dri`? | Optional GPU inference for the neural model. It falls back to the CPU |
+| `--talk-name=org.kde.StatusNotifierWatcher`? | The tray icon |
+| Prebuilt binaries in the NuGet packages? | ONNX Runtime (Microsoft) and SkiaSharp/HarfBuzzSharp (the .NET Foundation's Avalonia stack) ship their native libraries only inside their NuGet packages, pinned by SHA-512 in `nuget-sources.json`. Everything of ours, and espeak-ng, is compiled in the build |
+| Why no filesystem or host access for hotkeys and speech-dispatcher? | Both are the desktop's configuration. A script the package ships (`sandbox-setup.sh`) is run on the host once, by the user, instead of asking the sandbox for write access to `~/.config` |
 
-Drafted for 0.2.18, neither submitted. Both are thin wrappers around a release
-asset, so they need no build of their own and inherit every packer assertion.
+Once merged, the app gets its own repository,
+`flathub/io.github.hananel_hazan.VibeSuperTonic`, and each release is a pull request
+there that bumps the tag, the commit, and `nuget-sources.json` if it moved. Then the
+README's Flathub badge points at
+`https://flathub.org/apps/io.github.hananel_hazan.VibeSuperTonic` and the "coming
+soon" badge goes. The app id is permanent once published; `io.github.hananel_hazan`
+is verified through the GitHub account, so there is no domain to prove.
 
 ### AUR: [build/aur/](../build/aur/PKGBUILD)
 
-`vibesupertonic-appimage`, which installs **the release AppImage whole** at
-`/opt/vibesupertonic/VibeSuperTonic.AppImage` with `/usr/bin/vibesupertonic`
-linked to it, and the desktop entry, metainfo, icon and licence from the tag.
-It is not built from the tarball because a tarball tree in root-owned `/opt`
-cannot run: outside an AppImage or a sandbox, `LinuxDataPaths.ResolveStore`
-puts the store beside the executable. The AppImage branch already falls back to
-`$XDG_DATA_HOME/vibesupertonic`. A real distro package (from source, or the
-tarball in `/usr/lib`) would need a third branch there first.
+`vibesupertonic-appimage` installs **the release AppImage whole** at
+`/opt/vibesupertonic/VibeSuperTonic.AppImage` with `/usr/bin/vibesupertonic` linked
+to it, and the desktop entry, metainfo, icon and licence from the tag. It is not
+built from the tarball because a tarball tree in root-owned `/opt` cannot run:
+outside an AppImage or a sandbox, `LinuxDataPaths.ResolveStore` puts the store
+beside the executable, and the AppImage branch already falls back to
+`$XDG_DATA_HOME/vibesupertonic`. A real distro package (from source, or the tarball
+in `/usr/lib`) would need a third branch there first.
 
 Verified in an `archlinux:latest` container: `makepkg` builds it, `pacman -U`
 installs it, `vibesupertonic --version` through the symlink prints the version
-(with `APPIMAGE_EXTRACT_AND_RUN=1`, because the container could not FUSE-mount),
-and `appstreamcli validate` passes. namcap's two remaining complaints, ELF under
-`/opt` and `fuse3` "maybe not needed", are expected for an AppImage package: the
-runtime calls `fusermount3` by name, so namcap cannot see the dependency.
+(with `APPIMAGE_EXTRACT_AND_RUN=1`, because the container could not FUSE-mount), and
+`appstreamcli validate` passes. namcap's two remaining complaints, ELF under `/opt`
+and `fuse3` "maybe not needed", are expected for an AppImage package: the runtime
+calls `fusermount3` by name, so namcap cannot see the dependency.
 
-To publish: an AUR account with an SSH key, then
-`git clone ssh://aur@aur.archlinux.org/vibesupertonic-appimage.git`, copy in
-`PKGBUILD`, `vibesupertonic-appimage.install` and `.SRCINFO`, commit, push. Each
-release bumps `pkgver`, the five hashes, and regenerates `.SRCINFO` with
-`makepkg --printsrcinfo`.
+To publish: an AUR account with an SSH key, then `git clone
+ssh://aur@aur.archlinux.org/vibesupertonic-appimage.git`, copy in `PKGBUILD`,
+`vibesupertonic-appimage.install` and `.SRCINFO`, commit, push. Each release bumps
+`pkgver` and the five hashes, and regenerates `.SRCINFO` with `makepkg
+--printsrcinfo`.
 
-### winget: [build/winget/](../build/winget/manifests/h/HananelHazan/VibeSuperTonic/0.2.18)
+### winget: [build/winget/](../build/winget/manifests/h/HananelHazan/VibeSuperTonic)
 
-`HananelHazan.VibeSuperTonic`, the release ZIP installed as a **portable** zip,
-with the x64 .NET 10 runtime and VC++ redistributable as dependencies. The
-folder stays one portable unit; no installer was added, by decision
-(2026-10-16).
+`HananelHazan.VibeSuperTonic` is the release ZIP installed as a **portable** zip,
+with the x64 .NET 10 runtime and VC++ redistributable as dependencies. The folder
+stays one portable unit; no installer was added, by decision. A manifest folder is
+named for the version it describes, so each release adds one.
 
-- **`ArchiveBinariesDependOnPath: true`**: winget puts the folder itself on
-  PATH instead of a symlink in `WinGet\Links`. The launcher takes its own
-  folder as the root for every COM path it registers (`AppContext.BaseDirectory`),
-  and a launch through a symlink could otherwise register the Links folder.
+- **`ArchiveBinariesDependOnPath: true`**: winget puts the folder itself on PATH
+  instead of a symlink in `WinGet\Links`. The launcher takes its own folder as the
+  root for every COM path it registers (`AppContext.BaseDirectory`), and a launch
+  through a symlink could otherwise register the Links folder.
 - **Settings and models survive upgrades**: winget's portable uninstall does not
   purge unless `--purge` or `purgePortablePackage` asks it to, so `data\` and
   `models\` beside the exe are kept.
 - **What winget cannot do, the install notes say**, because a portable package
   runs no code at install or uninstall: register once with *Repair all* or
-  `--register`; run `--unregister` before `winget uninstall`, or dead voices stay
-  in every SAPI list; close SAPI programs before `winget upgrade`, because the
-  engine DLL is loaded in-process and cannot be replaced while one holds it.
-  The Status tab's lock row names the holders. A real fix for the last one is the
-  half-upgraded-engine item in [WINDOWS-PLAN.md](WINDOWS-PLAN.md).
+  `--register` (a plain launch of `VibeSuperTonic.exe` never registers); run
+  `--unregister` before `winget uninstall`, or dead voices stay in every SAPI list;
+  close SAPI programs before `winget upgrade`, because the engine DLL is loaded
+  in-process and cannot be replaced while one holds it. The Status tab's lock row
+  names the holders. A real fix for the last one is the half-upgraded-engine item
+  in [WINDOWS-PLAN.md](WINDOWS-PLAN.md).
 - **The x86 pair** cannot be a dependency of an x64 package; the launcher's first
-  window already detects it missing and offers the winget command.
+  window detects it missing and offers the winget command.
 
 Validated against winget's published 1.10.0 JSON schemas, with a sabotaged copy
-seen failing (a string boolean and a short hash). Not yet run:
-`winget validate --manifest <dir>` and `winget install --manifest <dir>` on
-Windows, which come before the PR to `microsoft/winget-pkgs`.
-
-Found on the way, and corrected in README and INSTALL.txt: a plain launch of
-`VibeSuperTonic.exe` **never registers**. Only *Repair all* (Status tab) and
-`--register` do. Both documents said the first run, or any re-run after a move,
-did it.
+seen failing (a string boolean and a short hash). Not yet run: `winget validate
+--manifest <dir>` and `winget install --manifest <dir>` on Windows, which come
+before the pull request to `microsoft/winget-pkgs`.

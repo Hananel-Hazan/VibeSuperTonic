@@ -109,7 +109,7 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <!-- The date is the day it is packed; docs/RELEASE-0.2.17.md step 3 sets it. -->
+    <!-- The date is the day it is packed; docs/RELEASING.md step 1 sets it. -->
     <release version="0.2.19" date="2026-11-08" type="stable">
       <description>
         <ul>
