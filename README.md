@@ -313,6 +313,9 @@ In both cases the Control Panel's own Test button keeps working, because the Con
 - [x] Snap on `stable`, with a store listing and screenshots *(0.2.17)*
 - [ ] Flatpak on Flathub
 - [x] Orca speaking through the snap on Kubuntu *(0.2.17)*
+- [x] The read key stops a reading of the same selection *(0.2.19)*
+- [x] Programs that publish no highlight: a clipboard switch, and opt-in AutoCopy through the RemoteDesktop portal, Wayland only *(0.2.19)*
+- [ ] AutoCopy inside the snap and the Flatpak, and restoring the clipboard afterwards
 - [ ] A report from a daily screen-reader user
 - [ ] Pitch shifting
 - [ ] Signed Windows binaries
