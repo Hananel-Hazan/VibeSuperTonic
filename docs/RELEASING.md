@@ -126,9 +126,12 @@ git push origin Dev vX.Y.Z
 
 Push the tag together with Dev, because the screenshot URLs in the metainfo
 return 404 until the tag exists on GitHub and the Flathub job fails on a
-missing one. Wait for every job on the push to be green: `build` (the Windows
-ZIP), `linux`, `pack`, `smoke`, `speechd`, `parity`, `snap`, `flatpak`, and
-`flathub`.
+missing one. Wait for every job of the `build` workflow on the push to be green
+(`build`, `linux`, `pack`, `smoke`, `speechd`, `parity`, `snap`, `flatpak`) and for
+the `release` workflow. The `flathub` workflow runs on a push only when packaging
+files changed, which a metainfo edit is not, so run it by hand and wait for it,
+because its linter is what checks the screenshot URLs against the tag:
+`gh workflow run flathub.yml --ref Dev`.
 
 ## 5. Merge to `main`
 
@@ -143,18 +146,20 @@ gh run watch                       # the snap job's log names the new revision
 
 ## 6. The GitHub release
 
-Assets: the tarball and the AppImage from step 2, and from the tag's CI run
-the Windows ZIP, the stable-grade snap and the Flatpak (artifacts `VibeSuperTonic-ci-<sha>`,
-`linux-snap`, `linux-flatpak`). Download the CI artifacts with
-`gh run download <run-id>`.
+Pushing the tag starts the `release` workflow
+([release.yml](../.github/workflows/release.yml)), which builds the Windows ZIP
+and creates the release with that one asset and generated notes. Finish it by
+hand: replace the notes with the entry from `RELEASE_NOTES.md`, and add the
+tarball and the AppImage from step 2 and, from the tag's CI run
+(`gh run download <run-id>`), the Flatpak (`linux-flatpak`) and the stable-grade
+snap (`linux-snap`, from the manual run in step 5).
 
 ```bash
-gh release create vX.Y.Z \
+gh release edit vX.Y.Z --notes "$(sed -n '/^# VibeSuperTonic vX.Y.Z$/,/^---$/p' RELEASE_NOTES.md | sed '1d;$d')"
+gh release upload vX.Y.Z \
   dist/VibeSuperTonic-X.Y.Z-linux-x64.tar.gz \
   dist/VibeSuperTonic-X.Y.Z-x86_64.AppImage \
-  <the Windows ZIP, snap and Flatpak from CI> \
-  --title "VibeSuperTonic X.Y.Z" \
-  --notes "$(sed -n '/^# VibeSuperTonic vX.Y.Z$/,/^---$/p' RELEASE_NOTES.md | sed '1d;$d')"
+  <the Flatpak and the snap from CI>
 ```
 
 The tarball is what every other package is built from, so it is the one that
