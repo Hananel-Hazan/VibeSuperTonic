@@ -1,3 +1,52 @@
+# VibeSuperTonic v0.2.19
+
+*The read key no longer repeats stale text, and it can stop what it is reading.*
+
+```
+VibeSuperTonic-0.2.19-linux-x64.tar.gz
+VibeSuperTonic-0.2.19-amd64.snap           (built by CI)
+VibeSuperTonic-0.2.19-x86_64.flatpak       (built by CI)
+VibeSuperTonic-0.2.19-x86_64.AppImage
+VibeSuperTonic-0.2.19-win.zip              (built by CI)
+```
+
+## Stopping and starting
+
+- **Pressing the read key on the text already being read stops it.** Before,
+  a second press on the same selection seemed to do nothing.
+
+## Programs that do not share what you highlight
+
+Some programs (PdfCraft is the one that found it) never publish the
+highlighted text, so on Wayland the read key kept reading whatever was
+selected last somewhere else. The Tune tab has two switches for this. Both are
+off by default, and both are for Wayland only.
+
+- **Read what you copied.** When the highlight has not changed, the key reads
+  the clipboard if you copied since you highlighted. You press Ctrl+C
+  yourself.
+- **Press Ctrl+C for me (AutoCopy).** When the highlight has not changed, the
+  daemon presses Ctrl+C through the desktop's remote-control portal and reads
+  the clipboard. The desktop asks for permission; the grant is remembered.
+
+What both switches cost, measured on Kubuntu:
+
+- **The copied text replaces your clipboard.** It is not put back. A clipboard
+  holding an image or other formats loses them.
+- **The Ctrl+C the app presses lands in the clipboard history** (Klipper
+  showed it).
+- **Not tested inside the snap or the Flatpak.** The portal may be out of
+  reach from there, in which case AutoCopy will not work in those two
+  packages.
+- **X11 has no AutoCopy.**
+
+## AppImage
+
+- After binding the hotkeys and logging in again, KDE runs the AppImage and
+  not an earlier snap.
+
+---
+
 # VibeSuperTonic v0.2.18
 
 *Fixes for the snap and the Flatpak, found the day 0.2.17 shipped.*

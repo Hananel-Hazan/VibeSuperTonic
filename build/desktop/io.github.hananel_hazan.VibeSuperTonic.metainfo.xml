@@ -67,15 +67,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Reading the selection aloud, highlighting each word</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.18/docs/screenshots/reader.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/reader.png</image>
     </screenshot>
     <screenshot>
       <caption>Downloading voices, with each voice's licence shown first</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.18/docs/screenshots/voices.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/voices.png</image>
     </screenshot>
     <screenshot>
       <caption>Engine, voice, speed and quality, for all voices or just one</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.18/docs/screenshots/tune.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/tune.png</image>
     </screenshot>
   </screenshots>
 
@@ -110,7 +110,7 @@
 
   <releases>
     <!-- The date is the day it is packed; docs/RELEASE-0.2.17.md step 3 sets it. -->
-    <release version="0.2.19" date="2026-10-18" type="stable">
+    <release version="0.2.19" date="2026-11-08" type="stable">
       <description>
         <ul>
           <li>Pressing the read key on the text already being read now stops it, instead of seeming to do nothing</li>

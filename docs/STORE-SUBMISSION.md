@@ -484,6 +484,14 @@ sent to any store; the user runs its AppImage. The portal that AutoCopy uses
 those two packages may not offer AutoCopy. The Flathub pull request is still on
 `v0.2.18`.
 
+**State on 2026-11-08:** the Flathub linter failed on the 2026-11-02 push because
+the screenshot URLs in the metainfo still pointed at `v0.2.18`; they now point at
+`v0.2.19`, which 404s until that tag is pushed, so push the tag before the
+Flathub job runs on the merge. `RELEASE_NOTES.md` has the 0.2.19 entry. The
+artifacts in `dist/` predate the metainfo and notes commits, and the Flatpak
+there (2026-10-18) predates AutoCopy: repack all three before tagging. Still
+not checked: AutoCopy's portal inside the snap and the Flatpak.
+
 **Read before submitting (2026-10-16): `dist/flathub/` is not submittable.**
 Flathub's [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
 says manifests "must not contain AI-generated or AI-assisted content", and
