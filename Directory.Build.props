@@ -39,7 +39,7 @@
       shipped 2026-10-16. 0.2.18, the same day: the fixes the Flatpak's and the
       snap's first desktop test found, chosen by the user as a patch release.
     -->
-    <VstVersion>0.2.18</VstVersion>
+    <VstVersion>0.2.19</VstVersion>
 
     <!--
       And every assembly in the tree carries it. Set here rather than per-project

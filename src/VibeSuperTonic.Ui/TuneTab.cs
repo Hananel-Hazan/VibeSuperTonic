@@ -54,7 +54,8 @@ public sealed class TuneTab : UserControl
     private readonly TextBlock _benchmarkStatus = Ui.Label("");
     private readonly TextBlock _inForce = Ui.Label("");
     private readonly Button _benchmark;
-    private readonly CheckBox _clipboardFallback = new() { Content = "Fall back to the clipboard when nothing is selected" };
+    private readonly CheckBox _autoCopy = new() { Content = "Press Ctrl+C for me when the selection has not changed" };
+    private readonly CheckBox _clipboardFallback = new() { Content = "Read the clipboard when I copy after selecting, or when nothing is selected" };
 
     /// <summary>
     /// auto / cpu / gpu. Not a text box, because there are exactly three answers
@@ -249,7 +250,7 @@ public sealed class TuneTab : UserControl
             + "NVIDIA (install-gpu.sh), Intel (install-openvino.sh) or any Vulkan GPU such as AMD "
             + "(install-webgpu.sh). Without one, auto and gpu "
             + "both mean CPU, and the line below says so."));
-        grid.Children.Add(_clipboardFallback);
+        grid.Children.Add(WrongTextGroup());
         grid.Children.Add(_gpuOnBattery);
 
         _resetConfirm.Children.Add(_resetQuestion);
@@ -323,6 +324,43 @@ public sealed class TuneTab : UserControl
         AttachedToVisualTree += async (_, _) => await RefreshAsync();
     }
 
+    /// <summary>
+    /// The two switches for a program whose highlight the hotkey cannot see, under
+    /// one heading that says when to reach for them. Both are off by default and
+    /// the wording names no program: the people who need them are the ones whose
+    /// hotkey just read the wrong text, and that is the sentence they will look for.
+    /// </summary>
+    private Control WrongTextGroup() => new StackPanel
+    {
+        Spacing = 4,
+        Children =
+        {
+            new TextBlock { Text = "If the hotkey reads the wrong text", FontWeight = FontWeight.SemiBold },
+            Note("Most programs share what you highlight, so the hotkey reads it with nothing "
+               + "else to do. A few do not, and the hotkey then reads what you highlighted last "
+               + "somewhere else. If that happens, turn on one of these. Both are off by default, "
+               + "and the daemon needs a restart to apply a change.", underCheckbox: false),
+            _autoCopy,
+            Note("The hotkey presses Ctrl+C for you when the selection has not changed, then reads "
+               + "the copy. The desktop asks your permission the first time (Wayland only). Each "
+               + "copy is added to your clipboard history, and the copied text replaces what was on "
+               + "the clipboard."),
+            _clipboardFallback,
+            Note("You press Ctrl+C yourself, then the hotkey, and it reads the copy. Nothing is "
+               + "pressed for you and no permission is needed."),
+        },
+    };
+
+    /// <summary>Dim explanatory text, indented under its checkbox unless it introduces the group.</summary>
+    private static TextBlock Note(string text, bool underCheckbox = true) => new()
+    {
+        Text = text,
+        Opacity = 0.6,
+        TextWrapping = TextWrapping.Wrap,
+        MaxWidth = 640,
+        Margin = new Thickness(underCheckbox ? 26 : 0, 0, 0, 6),
+    };
+
     private static Control Row(string label, Control field, string hint) => new StackPanel
     {
         Orientation = Orientation.Horizontal,
@@ -394,6 +432,7 @@ public sealed class TuneTab : UserControl
         _fields["OnnxInterOpThreads"].Watermark = "1";
 
         _clipboardFallback.IsChecked = root.Bool("ClipboardFallback") ?? false;
+        _autoCopy.IsChecked = root.Bool("AutoCopy") ?? false;
         _gpuOnBattery.IsChecked = root.Bool("GpuOnBattery") ?? false;
         _provider.SelectedItem = root.String("Provider") is { Length: > 0 } p
                                  && new[] { "auto", "cpu", "gpu" }.Contains(p)
@@ -837,6 +876,7 @@ public sealed class TuneTab : UserControl
         SettingsScope.Save(root, kind, scopeEngine, scopeVoice, scoped);
 
         root.Set("ClipboardFallback", JsonValue.Create(_clipboardFallback.IsChecked == true));
+        root.Set("AutoCopy", JsonValue.Create(_autoCopy.IsChecked == true));
         root.Set("GpuOnBattery", JsonValue.Create(_gpuOnBattery.IsChecked == true));
 
         // Written even when it is "auto", which is the default: it is a setting a

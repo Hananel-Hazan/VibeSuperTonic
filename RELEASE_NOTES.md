@@ -1,3 +1,66 @@
+# VibeSuperTonic v0.2.19
+
+*The read key no longer repeats stale text, and it can stop what it is reading.*
+
+```
+VibeSuperTonic-0.2.19-linux-x64.tar.gz
+VibeSuperTonic-0.2.19-amd64.snap           (built by CI)
+VibeSuperTonic-0.2.19-x86_64.flatpak       (built by CI)
+VibeSuperTonic-0.2.19-x86_64.AppImage
+VibeSuperTonic-0.2.19-win.zip              (built by CI)
+```
+
+## Stopping and starting
+
+- **Pressing the read key on the text already being read stops it.** Before,
+  a second press on the same selection did nothing. Linux, both X11 and
+  Wayland.
+
+## Programs that do not share what you highlight (Wayland)
+
+Some programs never publish the text you highlight. PdfCraft is the one that
+showed it: highlighting there changes nothing the daemon can see, so the read
+key read whatever you had highlighted last in another window. The Tune tab has
+a new group, "If the hotkey reads the wrong text", with two switches. Both are
+off by default, and the daemon needs a restart to apply a change.
+
+- **Read the clipboard when I copy after selecting.** You press Ctrl+C
+  yourself, then the hotkey. If the highlight has not changed since the last
+  press and the clipboard has, the key reads the clipboard. This switch
+  existed before; on Wayland it now also decides by what changed since the
+  last press, which is the new part.
+- **Press Ctrl+C for me (AutoCopy).** When the highlight has not changed
+  since the last press, the daemon presses Ctrl+C through the desktop's
+  remote-control portal and reads the clipboard. This is Wayland only. The
+  first time, the desktop asks your permission and that press reads nothing;
+  approve and press again. The grant is remembered.
+
+What AutoCopy costs, measured on Kubuntu with the AppImage:
+
+- **The copied text replaces your clipboard.** It is not put back, so a
+  clipboard holding an image or other formats loses them.
+- **Each Ctrl+C it presses lands in the clipboard history** (Klipper showed
+  it). That includes the first press after the daemon starts, and the press
+  that stops a reading, because both see an unchanged highlight.
+- **Not tested inside the snap or the Flatpak.** The portal may be out of
+  reach from there, in which case AutoCopy will not work in those packages.
+- **X11 has no AutoCopy.**
+
+## AppImage
+
+- With a portable home, binding the hotkeys and logging in again now makes KDE
+  run the AppImage. Before, KDE's cached shortcut could still start an earlier
+  snap.
+
+## Windows
+
+- Nothing that changes how the voices work (the shared code changes by one
+  settings name). The notes in the ZIP now tell you to press "Repair all"
+  on the Status tab, and give `VibeSuperTonic.exe --register` for a command
+  prompt.
+
+---
+
 # VibeSuperTonic v0.2.18
 
 *Fixes for the snap and the Flatpak, found the day 0.2.17 shipped.*

@@ -1,0 +1,59 @@
+# Maintainer: Hananel Hazan <hananel at hazan dot org dot il>
+#
+# Packages the release AppImage, not the tarball. A tarball tree in /opt would
+# not run: outside an AppImage or a sandbox the store goes beside the
+# executable (LinuxDataPaths.ResolveStore), and /opt is root's. The AppImage
+# path already falls back to $XDG_DATA_HOME/vibesupertonic when its directory
+# is not writable, so the image is installed whole and never extracted.
+#
+# Hotkeys:      vibesupertonic bind
+# Screen reader: vibesupertonic speechd-install
+
+pkgname=vibesupertonic-appimage
+pkgver=0.2.18
+pkgrel=1
+pkgdesc="Private, offline text to speech (TTS): reads selected text aloud; also a Speech Dispatcher voice for Orca and other screen readers"
+arch=('x86_64')
+url="https://github.com/Hananel-Hazan/VibeSuperTonic"
+license=('MIT' 'GPL-3.0-or-later')
+# The type-2 runtime is static and needs only fusermount3 to mount the image.
+depends=('fuse3' 'hicolor-icon-theme')
+optdepends=('speech-dispatcher: use the voices from Orca and other screen readers'
+            'ffmpeg: export to MP3, AAC and FLAC'
+            'vulkan-icd-loader: the optional WebGPU acceleration pack')
+provides=('vibesupertonic')
+conflicts=('vibesupertonic')
+options=('!strip' '!debug')
+install=vibesupertonic-appimage.install
+
+_id=io.github.hananel_hazan.VibeSuperTonic
+_raw="https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v${pkgver}"
+source=("VibeSuperTonic-${pkgver}-x86_64.AppImage::${url}/releases/download/v${pkgver}/VibeSuperTonic-${pkgver}-x86_64.AppImage"
+        "${_id}-${pkgver}.desktop::${_raw}/build/desktop/${_id}.desktop"
+        "${_id}-${pkgver}.metainfo.xml::${_raw}/build/desktop/${_id}.metainfo.xml"
+        "vibesupertonic-${pkgver}.png::${_raw}/build/vibesupertonic.png"
+        "LICENSE-${pkgver}::${_raw}/LICENSE")
+noextract=("VibeSuperTonic-${pkgver}-x86_64.AppImage")
+sha256sums=('c1550d47ab8947cee5df667e55990705e37a0d63a6030f64c2254c5a511d515d'
+            '27e355f8a9ccf010e3ef32e312bb62618253063e5dd4251b7f1500eae92c474d'
+            '572d5cfddf492c6b16cfaee83831aceeeb27f5ce43811fcb146167fed3ff5709'
+            '871cadfe48d6d62e8deeb1b49017db5e04e380e35617362608cd3dfd872e7959'
+            '4f403c0b8e3a6a6a35b4a1eeb53579b31d23eb5a08e8d7c914a4a1827ec912f6')
+
+package() {
+    # One fixed path across upgrades, so the install check never reports the
+    # program as moved and the ~/.local/bin/vst-ctl pointer stays valid.
+    install -Dm755 "VibeSuperTonic-${pkgver}-x86_64.AppImage" \
+        "$pkgdir/opt/vibesupertonic/VibeSuperTonic.AppImage"
+
+    # AppRun dispatches on argv[0]; "vibesupertonic" is its default branch, the
+    # window, and verbs (bind, speechd-install, ...) still work through it.
+    install -d "$pkgdir/usr/bin"
+    ln -s /opt/vibesupertonic/VibeSuperTonic.AppImage "$pkgdir/usr/bin/vibesupertonic"
+
+    install -Dm644 "${_id}-${pkgver}.desktop"      "$pkgdir/usr/share/applications/${_id}.desktop"
+    install -Dm644 "${_id}-${pkgver}.metainfo.xml" "$pkgdir/usr/share/metainfo/${_id}.metainfo.xml"
+    install -Dm644 "vibesupertonic-${pkgver}.png"  "$pkgdir/usr/share/icons/hicolor/256x256/apps/${_id}.png"
+    # The repository's MIT text; the GPL terms for espeak-ng ship inside the image.
+    install -Dm644 "LICENSE-${pkgver}" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

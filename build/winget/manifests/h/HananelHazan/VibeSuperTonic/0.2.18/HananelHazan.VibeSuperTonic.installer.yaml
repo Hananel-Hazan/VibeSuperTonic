@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: HananelHazan.VibeSuperTonic
+PackageVersion: 0.2.18
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: VibeSuperTonic.exe
+# The folder itself goes on PATH, not a symlink in WinGet\Links. The launcher
+# registers COM paths relative to AppContext.BaseDirectory, and the folder must
+# stay one portable unit: engine\, models\ and data\ beside the exe. winget's
+# default uninstall does not purge, so data\ and models\ survive an upgrade.
+ArchiveBinariesDependOnPath: true
+# The engine is framework-dependent and loads in-process into SAPI hosts; the
+# launcher is self-contained. 32-bit hosts also need the x86 runtime and VC++
+# redistributable, which a dependency of an x64 package cannot name; the
+# launcher's first window detects them missing and offers the winget command.
+Dependencies:
+  PackageDependencies:
+  - PackageIdentifier: Microsoft.DotNet.Runtime.10
+  - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+ReleaseDate: 2026-10-16
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/Hananel-Hazan/VibeSuperTonic/releases/download/v0.2.18/VibeSuperTonic-0.2.18-win.zip
+  InstallerSha256: E583CEDD0F822A05CD4D3A1541E3D7B1A53B22809B1E9C6A68238994C012AA10
+ManifestType: installer
+ManifestVersion: 1.10.0

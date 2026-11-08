@@ -223,17 +223,18 @@ missing in plain words, and can install them for you (double-click the row).
 Quick install
 -------------
 1. Install the runtimes above — or let the Control Panel do it in step 4.
-2. Run VibeSuperTonic.exe.
+2. Run VibeSuperTonic.exe, open the Status tab and press "Repair all".
 3. Accept the UAC prompt (one-time — registers voice tokens to HKLM).
+   From a command prompt, VibeSuperTonic.exe --register does the same.
 4. The models will download (~380 MB) on first run.
 5. Open any SAPI client (Balabolka, NVDA, Narrator) — voices appear as
    VibeSuperTonic M1 .. F5.
 
-If you install a runtime after step 2, re-run VibeSuperTonic.exe (or press
-"Repair all" on the Status tab) so the newly usable bitness gets registered.
+If you install a runtime after step 2, press "Repair all" on the Status
+tab again so the newly usable bitness gets registered.
 
-Move folder anywhere. Re-run VibeSuperTonic.exe at the new location to
-update registry — no admin needed for moves.
+Move folder anywhere. Run VibeSuperTonic.exe at the new location and press
+"Repair all" to update the registry — no admin needed for moves.
 
 Uninstall:  VibeSuperTonic.exe --unregister  (UAC to clean HKLM)
 

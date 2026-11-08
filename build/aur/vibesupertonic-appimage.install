@@ -1,0 +1,15 @@
+post_install() {
+    cat <<'EOF'
+VibeSuperTonic is installed. Two optional steps, each run once as your user:
+
+    vibesupertonic bind              # the global hotkeys
+    vibesupertonic speechd-install   # the voices in Orca (needs speech-dispatcher)
+
+The voice models (about 380 MB) download on first run, after you accept
+their licence.
+EOF
+}
+
+post_upgrade() {
+    echo "Restart VibeSuperTonic (or log out and in) so the running daemon is the new one."
+}

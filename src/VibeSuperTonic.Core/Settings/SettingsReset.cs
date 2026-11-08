@@ -35,7 +35,7 @@ public static class SettingsReset
     /// </summary>
     public static readonly string[] MachineKeys =
     [
-        "MaxCpuPercent", "OnnxInterOpThreads", "Provider", "ClipboardFallback", "GpuOnBattery",
+        "MaxCpuPercent", "OnnxInterOpThreads", "Provider", "ClipboardFallback", "AutoCopy", "GpuOnBattery",
     ];
 
     /// <summary>Reset one scope.</summary>

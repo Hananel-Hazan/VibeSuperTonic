@@ -105,6 +105,11 @@ public sealed class LinuxSettings
     /// without synthesising keystrokes. With this on, selecting inside such a
     /// viewer, pressing Ctrl+C and then the hotkey works.</para>
     ///
+    /// <para>On Wayland the same holds for PdfCraft (egui), measured 2026-10-23:
+    /// highlighting there never changes PRIMARY. Data-control has no TIMESTAMP, so
+    /// <see cref="WaylandSelectionSource"/> orders the two by what each held at the
+    /// previous press instead.</para>
+    ///
     /// <para>Off by default because X11 cannot distinguish "the application did
     /// not publish my selection" from "the user pressed the key twice on the
     /// same selection", and in the second case reading the clipboard is the
@@ -112,6 +117,25 @@ public sealed class LinuxSettings
     /// The explanatory notice is emitted either way.</para>
     /// </summary>
     public bool ClipboardFallback { get; set; }
+
+    /// <summary>
+    /// Press Ctrl+C for the user when the selection has not changed since the last
+    /// press. Off by default, Wayland only, and read once at daemon start.
+    ///
+    /// <para>For applications that never publish a highlight — PdfCraft and the
+    /// other egui programs, measured 2026-10-23 — so that selecting and pressing
+    /// the hotkey reads the new text with no Ctrl+C by hand. The key is sent
+    /// through the desktop's RemoteDesktop portal, which asks permission once
+    /// (see <see cref="PortalCopyKey"/>).</para>
+    ///
+    /// <para><b>The cost, measured 2026-10-30: the copy lands in the clipboard
+    /// history.</b> The application makes the copy, not this program, and Klipper
+    /// records it at once; the daemon's own tools cannot remove one entry. The
+    /// copied text also stays on the clipboard afterwards, exactly as after a
+    /// Ctrl+C by hand — restoring the previous contents is not built. Both are
+    /// why this is a choice the user makes.</para>
+    /// </summary>
+    public bool AutoCopy { get; set; }
 
     /// <summary>
     /// Percentage of logical processors inference may use. Default 20.
