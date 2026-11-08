@@ -373,7 +373,7 @@ and closing the window.
 
 | Channel | State |
 | --- | --- |
-| Snap Store | `stable` and `candidate`: 0.2.18, revision 18; `beta`: 0.2.18, revision 19; `edge`: 0.2.19, revision 21 (read from the store's API). Revision 21 is the stable-grade 0.2.19 build, byte-identical to the GitHub release asset (SHA3-384 compared); it is not promoted yet. The main-branch push published a `devel` build before it, which `stable` refuses |
+| Snap Store | `stable`, `candidate` and `edge`: 0.2.19, revision 21 (read from the store's API on 2026-11-08). Revision 21 is the stable-grade build, byte-identical to the GitHub release asset (SHA3-384 compared). `beta` still holds 0.2.18, revision 19, a `devel` build, which `stable` refuses |
 | GitHub Releases | Latest 0.2.19 (tag `v0.2.19`), with the tarball, AppImage, Windows ZIP, snap and Flatpak |
 | Flathub | flathub/flathub#10671, open, labels `leave-open` and `too-new`. Opened 2026-10-17 from `Hananel-Hazan/flathub` branch `add-vibesupertonic`, with a manifest the maintainer wrote by hand, building `v0.2.18`. Flathub's test build passed 2026-10-24 with one linter warning, `finish-args-contains-both-x11-and-wayland`. A reviewer objected to "vibe" in the name on 2026-10-21. On 2026-11-05 the submission bot answered that Flathub requires a meaningful history of development, evidence of real-world use and a commitment to ongoing maintenance, and that the submission will be revisited in 1 to 2 months |
 | AppImageHub | Listed (AppImage/appimage.github.io#10295, merged 2026-10-16) |
