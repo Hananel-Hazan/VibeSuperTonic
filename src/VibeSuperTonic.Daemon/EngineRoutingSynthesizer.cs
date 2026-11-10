@@ -156,6 +156,61 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
     public Selection Select(string? requestedId, out EngineLease? lease) =>
         SelectCore(requestedId, pin: true, out lease);
 
+    /// <summary>
+    /// The voice the daemon points itself at when it starts: <c>--voice</c>, or
+    /// the configured voice.
+    ///
+    /// <para><b>The configured voice, not <c>DefaultVoice</c>.</b> Until
+    /// 2026-11-09 startup read <c>Settings.DefaultVoice</c>, which is only ever
+    /// written for a Supertonic style. A user on <c>piper:de_DE-thorsten-high</c>
+    /// got Supertonic selected at every start, and the Piper load plus its first
+    /// calibration landed on the first press, which is what the startup selection
+    /// exists to avoid. <see cref="HostConfig.ConfiguredVoice"/> prefers
+    /// <c>VoiceId</c>, the same answer every other reader of "the default voice"
+    /// gets.</para>
+    /// </summary>
+    public static string StartupVoice(string? voiceOverride, HostConfig config) =>
+        string.IsNullOrWhiteSpace(voiceOverride) ? config.ConfiguredVoice : voiceOverride.Trim();
+
+    /// <summary>
+    /// The daemon's startup selection: point at <paramref name="voiceId"/>'s
+    /// engine without loading Supertonic.
+    ///
+    /// <para><b>Why this is not <see cref="Select"/>.</b> Select answers with the
+    /// engine's sample rate, and the Supertonic engine answers that by loading
+    /// its model (<c>OrtSynthesizer.SampleRate => EnsureLoaded().SampleRate</c>).
+    /// Called from startup, that loaded 380 MB before the control socket was
+    /// bound, on every start: the first press after login waited for it,
+    /// <c>--preload</c> changed nothing, and a Piper-only user carried
+    /// Supertonic resident. The router starts on Supertonic, so for a Supertonic
+    /// voice there is nothing to switch and nothing to ask; the rate is asked on
+    /// the first press, which needs the model anyway.</para>
+    ///
+    /// <para>A Piper voice is still built here, which is the point of calling this
+    /// at startup: its session and its calibration start before anyone is
+    /// waiting. <see cref="Selection.SampleRate"/> is 0 when nothing was asked.
+    /// Like Select, this may fail and never throws.</para>
+    /// </summary>
+    public Selection SelectAtStartup(string? voiceId)
+    {
+        VoiceId? requested = VoiceId.TryParse(voiceId, out var parsed) ? parsed : null;
+        bool piper = requested is { MayBePiper: true } && _store.ModelPath(requested.Value.Bare) is not null;
+        if (!piper)
+        {
+            lock (_gate)
+            {
+                if (_currentPiperVoice is null)
+                {
+                    _log(requested is { MayBePiper: true }
+                        ? $"engine: '{voiceId}' is not installed; supertonic instead, loaded on first use"
+                        : $"engine: supertonic for '{voiceId ?? "(default)"}', loaded on first use");
+                    return new Selection(false, 0, null);
+                }
+            }
+        }
+        return Select(voiceId);
+    }
+
     private Selection SelectCore(string? requestedId, bool pin, out EngineLease? lease)
     {
         lease = null;
@@ -244,7 +299,10 @@ public sealed class EngineRoutingSynthesizer : ISynthesizer
                 // Not a fallback to Supertonic: the user asked for this voice.
                 string why = $"{ex.GetType().Name}: {ex.Message.Split('\n')[0].Trim()}";
                 _log($"engine: could not load the Piper voice '{voiceId}' ({why})");
-                return new Selection(false, _current.SampleRate,
+                // Rate 0, not _current.SampleRate: a refusal is never played, and
+                // asking Supertonic its rate here loads its model (on the startup
+                // path too, where this refusal is only logged).
+                return new Selection(false, 0,
                     $"the voice '{voiceId}' could not be loaded — {why}");
             }
 

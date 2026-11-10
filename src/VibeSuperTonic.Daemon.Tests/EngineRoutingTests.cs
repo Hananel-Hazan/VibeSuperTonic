@@ -113,8 +113,9 @@ public class EngineRoutingTests : IDisposable
     [Fact]
     public void The_default_voice_at_startup_is_asked_for_by_a_null_id()
     {
-        // Program.cs passes `voice ?? config.Settings.DefaultVoice`, which is
-        // null when neither is set — the exact shape of a fresh install. It must
+        // A press with no voice asks for null. (Program's startup now goes
+        // through SelectAtStartup with HostConfig.ConfiguredVoice, which never
+        // reads the rate for a Supertonic voice; see DaemonStartupTests.) It must
         // reach the same refusal rather than a NullReferenceException on the way.
         using var router = Router(new UnloadableSynth(),
             _ => throw new Xunit.Sdk.XunitException("must not build Piper"),

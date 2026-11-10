@@ -224,7 +224,7 @@ It was built by one human and one AI, and it shows in the best way: every fix in
 - 🦮 **Use it with Orca for a day** and tell us what a screen-reader user notices. It works on Kubuntu, but only a daily user finds the things that matter. This is the most valuable contribution there is, and it needs a human ear. An agent can prepare the test plan.
 - 🐧 **The Flatpak on KDE/Wayland:** does selection capture work inside the sandbox? Does the tray icon appear?
 - 🔁 **Move the screen-reader voice to a new snap version without a logout.** speech-dispatcher 0.12 never restarts a module that exits (we measured it), so this probably means a change in speech-dispatcher itself. That would be a good upstream contribution.
-- 🖥️ **Handle a stale `XAUTHORITY` on X11** for a daemon that outlived a logout. It's already fixed for the window, but not yet for selection capture.
+- 🖥️ **Handle a stale `XAUTHORITY` on X11** for a daemon that outlived a logout. The window and X11 selection capture both already follow the latest client's `XAUTHORITY` (`NativeXAuthority`, applied in `DaemonServer.CaptureSelection`). What remains open: other X11 paths (for example the AutoCopy key press and the clipboard fallback) are not re-checked, and none of it has been tried across a real logout. Verify before closing.
 - 📸 **Screenshots for the Flathub listing**, which the Flathub submission is waiting on.
 - 🎵 **Pitch shifting**, separate from time-stretch.
 - 🪟 **The Windows catch-up list** in [docs/WINDOWS-PLAN.md](docs/WINDOWS-PLAN.md).
@@ -260,7 +260,7 @@ bash build/pack-snap.sh                     # needs snapcraft
 bash build/pack-flatpak.sh                  # needs flatpak-builder
 ```
 
-The tarball packer runs eleven assertions against what it built: matching versions, no bundled models, a glibc floor, a native `vst-ctl`, a working phonemiser, a working speechd module, size and startup budgets, and more. Each one exists because the failure it catches is silent. [CLAUDE.md](CLAUDE.md) explains every one.
+The tarball packer runs a set of assertions against what it built: matching versions, no bundled models, a glibc floor, a native `vst-ctl`, a working phonemiser, a working speechd module, size and startup budgets, and more. Each one exists because the failure it catches is silent. [CLAUDE.md](CLAUDE.md) explains every one and gives their count.
 
 **Windows.**
 

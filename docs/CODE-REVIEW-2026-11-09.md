@@ -594,6 +594,21 @@ These reach a user as silence, a wrong voice, or a release that cannot be built.
     rate and volume changes (item 49), SSML volume (item 50), shorter utterance padding
     (item 51).
 
+### Added after batch 1's review pass (2026-11-09)
+
+104. **SSIP `KEY` echo still speaks English key names in any voice.** Batch 1 fixed `CHAR`
+    only (`SpeechdModule.cs:355-365`); `KEY` messages (`space`, `shift_a`, `Return`) take
+    the old path, so a German voice says "space" rather than "Leerzeichen".
+105. **A language is demoted for the module's life on one stderr string.** `Lacks()`
+    (`SpeechdModule.cs:617-623`) treats any "Can't read dictionary file" line as a missing
+    language. No shipped voice prints it for an auxiliary file; a language outside the
+    catalog could. PLAUSIBLE, low.
+106. **The first espeak run per language holds the whole WAV** (`SpeechdModule.cs:651-665`)
+    to read stderr before sending audio. With the daemon down, the first long SPEAK in a
+    language waits for its full render. Once per language per login; STOP is honoured.
+107. **`HandleInit` (`SpeechdModule.cs:202`) owes no reply**, so an exception there leaves
+    INIT unanswered and speechd drops the module. Not a regression of batch 1.
+
 ## 9. Checked and found sound
 
 Protocol parsing and peer-credential checks on the daemon socket; stop and interrupt

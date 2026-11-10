@@ -367,14 +367,6 @@ using var engines = new EngineRoutingSynthesizer(
     () => sessionState?.Invoke() ?? SpeechStateProbe.Idle,
     DaemonLog.Write);
 
-// Pointed at the default voice's engine now rather than at the first press. Two
-// things follow from doing it here: the log says which engine a daemon is
-// holding before anyone asks it to speak, and a Piper voice that has never been
-// calibrated starts being measured at startup instead of during the first
-// utterance the user is waiting on.
-if (engines.Select(voice ?? config.Settings.DefaultVoice) is { Error: { } engineError })
-    DaemonLog.Write($"engine: {engineError}");
-
 // Opened on the first request that needs to play, not here. Opening here meant a
 // machine whose audio server was unreachable got an unhandled exception and a
 // core dump before the control socket existed -- so every verb that could have
@@ -459,6 +451,39 @@ catch (IOException ex)
     DaemonLog.Write(ex.Message);
     return 1;
 }
+catch (UnauthorizedAccessException ex)
+{
+    // Bind turns the /tmp fallback's "directory belongs to someone else" into an
+    // IOException already; this is the belt for any path it does not cover. An
+    // unhandled exception here is exit 134 and a core file with no log line.
+    DaemonLog.Write($"cannot use the control socket's directory: {ex.Message}");
+    return 1;
+}
+
+// Pointed at the configured voice's engine at startup rather than at the first
+// press: the log says which engine a daemon is holding before anyone asks it to
+// speak, and a Piper voice that has never been calibrated starts being measured
+// now instead of during the first utterance the user is waiting on.
+//
+// AFTER Bind and on a worker, because building a Piper session takes time and
+// the socket must already be answering (vst-ctl's autostart waits five seconds).
+// SelectAtStartup never loads Supertonic: see it for the 380 MB that used to
+// load here, before the socket existed, on every start. --preload below waits
+// for this, so it preloads the engine that was selected.
+// Caught here: the --preload await below would otherwise rethrow a failure of
+// the store scan (an unreadable models folder) and end the daemon at startup.
+var startupSelection = Task.Run(() =>
+{
+    try
+    {
+        if (engines.SelectAtStartup(EngineRoutingSynthesizer.StartupVoice(voice, config)) is { Error: { } engineError })
+            DaemonLog.Write($"engine: {engineError}");
+    }
+    catch (Exception ex)
+    {
+        DaemonLog.Write($"engine: startup selection failed, the first press selects instead: {ex.GetType().Name}: {ex.Message}");
+    }
+});
 
 using var lifetime = new CancellationTokenSource();
 
@@ -506,7 +531,11 @@ session.Emitted += tray.OnSessionEvent;
 server.UiAttachedChanged += tray.OnUiAttachedChanged;
 await tray.StartAsync();
 
-if (preload) await server.PreloadAsync(lifetime.Token);
+if (preload)
+{
+    await startupSelection;
+    await server.PreloadAsync(lifetime.Token);
+}
 
 try
 {
@@ -520,6 +549,8 @@ catch (IOException ex)
 
 session.Stop();
 try { await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* going away */ }
+// A Piper build still running must not outlive the router it is building into.
+try { await startupSelection.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* going away */ }
 
 foreach (var registration in signals) registration.Dispose();
 

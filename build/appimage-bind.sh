@@ -161,7 +161,10 @@ printf '\n\033[36m>>> Binding the keys\033[0m\n'
 desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/vibesupertonic.desktop"
 previous=""
 if [[ -f "$desktop" ]]; then
-    previous="$(awk -F= '/^Exec=.*vst-ctl (read|toggle)$/ { split($2, a, " "); print a[1]; exit }' "$desktop")"
+    # The whole command minus its verb, unquoted: keybindings.sh quotes an
+    # executable whose path has a space (`Exec="/a b/vst-ctl" read`), and
+    # splitting on the first space cut such a path in half.
+    previous="$(awk '/^Exec=.*vst-ctl"? (read|toggle)$/ { s = $0; sub(/^Exec=/, "", s); sub(/ (read|toggle)$/, "", s); if (s ~ /^".*"$/) s = substr(s, 2, length(s) - 2); print s; exit }' "$desktop")"
 fi
 
 # The window is inside the image, so the menu entry has to launch the image.

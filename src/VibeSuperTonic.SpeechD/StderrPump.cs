@@ -26,6 +26,15 @@ internal sealed class StderrPump
     private readonly Thread _thread;
     private volatile string? _firstMessage;
 
+    /// <summary>
+    /// Every diagnostic line, up to <see cref="MaxLines"/>, so a caller can ask
+    /// whether one particular message was printed. espeak-ng's only report of a
+    /// missing dictionary is such a line, with exit code 0.
+    /// </summary>
+    private readonly ConcurrentQueue<string> _lines = new();
+
+    private const int MaxLines = 64;
+
     internal StderrPump(TextReader stderr)
     {
         _thread = new Thread(() =>
@@ -35,7 +44,11 @@ internal sealed class StderrPump
                 while (stderr.ReadLine() is { } line)
                 {
                     if (MarkLine.TryParse(line, out var mark)) _marks.Enqueue(mark);
-                    else if (_firstMessage is null && line.Trim().Length > 0) _firstMessage = line.Trim();
+                    else if (line.Trim() is { Length: > 0 } said)
+                    {
+                        _firstMessage ??= said;
+                        if (_lines.Count < MaxLines) _lines.Enqueue(said);
+                    }
                 }
             }
             catch (Exception)
@@ -59,6 +72,13 @@ internal sealed class StderrPump
     /// queued. Called once the process has finished producing audio.
     /// </summary>
     internal void WaitForEnd(int milliseconds = 2000) => _thread.Join(milliseconds);
+
+    /// <summary>
+    /// The first diagnostic line containing <paramref name="fragment"/>, or null.
+    /// Complete only after <see cref="WaitForEnd"/>.
+    /// </summary>
+    internal string? Find(string fragment) =>
+        _lines.FirstOrDefault(l => l.Contains(fragment, StringComparison.Ordinal));
 
     /// <summary>The first line of ordinary diagnostic output, for the log.</summary>
     internal string Message => _firstMessage ?? "no message";

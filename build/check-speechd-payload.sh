@@ -143,4 +143,61 @@ n_end="$(LC_ALL=C grep -a -c -x '702 END' "$pause_out" || true)"
 
 info "vst-speechd reports SSML index marks and honours PAUSE"
 
+# A LANGUAGE THE PAYLOAD HAS NO DICTIONARY FOR (item 1 of the 2026-11-09 review).
+# The payload ships about 31 dictionaries. For any other language espeak-ng prints
+# "Can't read dictionary file" on stderr, exits 0 and writes a WAV of silence, and
+# until the fix the module sent that silence as speech: a Hebrew screen-reader
+# user heard nothing for every key echo. The module must say it again in espeak's
+# default voice, so the samples it sends for a CHAR in that language must be
+# exactly the samples it sends for the same CHAR in English, and it must log the
+# fallback. espeak-ng is deterministic, so equality is not a tolerance.
+#
+# `ja` and not `he` or `ar`: those two may join the payload, and then this case
+# would test nothing. So first ask the shipped espeak-ng that the language really
+# is absent, and refuse to go on quietly if it is not.
+absent=ja
+printf 'a' > "$scratch/absent.txt"
+"$staging/espeak/espeak-ng" --path="$staging/espeak" -q -v "$absent" --stdin \
+    < "$scratch/absent.txt" > /dev/null 2> "$scratch/absent.err" || true
+n_lacks="$(grep -c "Can't read dictionary file" "$scratch/absent.err" || true)"
+[[ "$n_lacks" -ge 1 ]] || die "the shipped espeak-ng now has a '$absent' dictionary, so this check can no
+       longer drive a missing language. Set 'absent' to a language the payload lacks."
+
+samples() {   # total samples in the module's audio blocks
+    LC_ALL=C grep -a -o '705-num_samples=[0-9]*' "$1" > "$1.n" || true
+    awk -F= '{ s += $2 } END { print s + 0 }' "$1.n"
+}
+
+run_module "INIT\nSET\nlanguage=$absent\n.\nCHAR\na\n.\n" "$scratch/absent.out"
+cp "$scratch/session.err" "$scratch/absent-module.err"
+run_module 'INIT\nSET\nlanguage=en\n.\nCHAR\na\n.\n' "$scratch/en.out"
+
+n_absent="$(samples "$scratch/absent.out")"
+n_en="$(samples "$scratch/en.out")"
+n_logged="$(grep -c "cannot speak '$absent'" "$scratch/absent-module.err" || true)"
+[[ "$n_absent" -gt 0 && "$n_absent" == "$n_en" && "$n_logged" == 1 ]] || die "the shipped vst-speechd did not fall back to espeak's default voice for
+       '$absent', a language the payload has no dictionary for. It sent $n_absent samples
+       for CHAR 'a' (English sends $n_en) and logged the fallback $n_logged time(s); expected
+       the same samples and one line. Without the retry, a screen reader in that language
+       hears silence for every key echo."
+
+info "vst-speechd says '$absent', which the payload lacks, in espeak's default voice"
+
+# HEBREW AND ARABIC ARE IN THE PAYLOAD (item 91, 2026-11-09). Neither has a neural
+# voice anywhere in the product, so espeak is the only thing that speaks them, and
+# build-espeak.sh prunes dictionaries to a list. A later edit of that list that drops
+# them is the silence above coming back for exactly the users it was fixed for. So a
+# letter of each must come out as audio with no fallback logged.
+for lang_letter in "he:א" "ar:ا"; do
+    lang="${lang_letter%%:*}"; letter="${lang_letter#*:}"
+    run_module "INIT\nSET\nlanguage=$lang\n.\nCHAR\n$letter\n.\n" "$scratch/$lang.out"
+    n_lang="$(samples "$scratch/$lang.out")"
+    n_fell="$(grep -c "cannot speak '$lang'" "$scratch/session.err" || true)"
+    [[ "$n_lang" -gt 0 && "$n_fell" == 0 ]] || die "the shipped espeak cannot speak '$lang': CHAR '$letter' gave $n_lang samples
+       and the module logged $n_fell fallback(s). The payload has lost its $lang dictionary;
+       check the language list in build/build-espeak.sh."
+done
+
+info "vst-speechd speaks Hebrew and Arabic from the payload's own dictionaries"
+
 exit 0

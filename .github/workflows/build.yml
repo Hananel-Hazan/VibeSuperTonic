@@ -212,7 +212,7 @@ jobs:
 
   # ------------------------------------------------------------------- pack
   #
-  # WHY THIS JOB EXISTS. build/pack-tar.sh carries ten assertions, and until
+  # WHY THIS JOB EXISTS. build/pack-tar.sh carries assertions (count: CLAUDE.md), and until
   # this job they ran ONLY on the machine that packed a release, only when a
   # human ran the packer. Every one of them guards a failure that is silent — a
   # stale binary, a managed apphost, 330 MB of CUDA provider, a missing espeak
@@ -256,7 +256,7 @@ jobs:
       # No -v: the default is <VstVersion> from Directory.Build.props, which is
       # what assertion 1 checks the binaries against. Passing a version here
       # would test the flag rather than the agreement.
-      - name: Pack the Linux tarball, with its eleven assertions
+      - name: Pack the Linux tarball, with its assertions
         run: bash build/pack-tar.sh
 
       # The script travels WITH the tarball rather than being checked out in the
@@ -480,7 +480,7 @@ jobs:
   # ------------------------------------------------------------------- snap
   #
   # THE SNAP, BUILT FROM THE SAME TARBALL. pack-snap.sh publishes nothing: it
-  # repackages the tree pack-tar.sh composed, so the eleven assertions of the
+  # repackages the tree pack-tar.sh composed, so the assertions (count: CLAUDE.md) of the
   # pack job are the snap's too, and it adds its own: strict confinement, all
   # five apps present, the hotkey app free of any launcher wrapper, the daemon's
   # native libraries staged, and the module answering INIT from inside the

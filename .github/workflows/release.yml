@@ -28,17 +28,41 @@ jobs:
       - name: Determine version
         id: version
         shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = $env:REF_NAME
           if ($tag -match '^v(.+)$') { $version = $Matches[1] }
-          elseif ('${{ inputs.version }}' -ne '') { $version = '${{ inputs.version }}' }
-          else { $version = '0.0.0-' + '${{ github.sha }}'.Substring(0, 7) }
+          elseif ($env:INPUT_VERSION -ne '') { $version = $env:INPUT_VERSION }
+          else { $version = '0.0.0-' + $env:SHA.Substring(0, 7) }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Building version: $version"
 
       - name: Build release ZIP
         shell: pwsh
-        run: ./build/pack-zip.ps1 -Version "${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./build/pack-zip.ps1 -Version $env:VERSION
+
+      - name: Take the release body from RELEASE_NOTES.md
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Same range CLAUDE.md uses for the tag message: from this version's
+          # "# VibeSuperTonic v<X>" heading to the next "---" line.
+          $lines = Get-Content RELEASE_NOTES.md
+          $head = "# VibeSuperTonic v$($env:VERSION)"
+          $start = [Array]::IndexOf($lines, $head)
+          if ($start -lt 0) { throw "RELEASE_NOTES.md has no section '$head'" }
+          $out = @()
+          for ($i = $start; $i -lt $lines.Count; $i++) {
+            $out += $lines[$i]
+            if ($lines[$i] -eq '---') { break }
+          }
+          $out | Set-Content -Path release-body.md -Encoding utf8
 
       - name: Locate ZIP
         id: zip
@@ -55,21 +79,5 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          generate_release_notes: true
-          body: |
-            ## VibeSuperTonic ${{ steps.version.outputs.version }}
-
-            Portable Windows SAPI 5 TTS engine wrapping Supertone's Supertonic neural TTS.
-            10 English voices visible to any SAPI client (Balabolka, NVDA, Narrator, …).
-
-            ### Install
-
-            1. Download `${{ steps.zip.outputs.name }}` below.
-            2. Extract anywhere.
-            3. Run `VibeSuperTonic.exe` once (UAC prompt — registers voice tokens).
-            4. Models (~380 MB) download on first speak.
-
-            Requires **.NET 10 Desktop Runtime** (x64; x86 also for 32-bit SAPI clients).
-
-            See the README in the repo for full docs and limitations.
+          body_path: release-body.md
           files: ${{ steps.zip.outputs.path }}

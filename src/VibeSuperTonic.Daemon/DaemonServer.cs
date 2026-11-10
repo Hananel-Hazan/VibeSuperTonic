@@ -258,11 +258,26 @@ public sealed partial class DaemonServer : IDisposable
         {
             string dir = Path.GetDirectoryName(path)!;
 
-            Directory.CreateDirectory(dir);
-            // Explicit rather than inherited. Under $XDG_RUNTIME_DIR the parent is
-            // already 0700, but the /tmp fallback is world-writable and the socket
-            // is a remote-control interface for the user's speakers.
-            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            try
+            {
+                Directory.CreateDirectory(dir);
+                // Explicit rather than inherited. Under $XDG_RUNTIME_DIR the parent is
+                // already 0700, but the /tmp fallback is world-writable and the socket
+                // is a remote-control interface for the user's speakers.
+                File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // The /tmp fallback (no $XDG_RUNTIME_DIR) is shared, so the
+                // directory can already exist and belong to another user, or sit
+                // under a parent this user cannot write. Both throw
+                // UnauthorizedAccessException, which is not an IOException, so it
+                // left Main unhandled: exit 134, a core file, nothing in the log.
+                // Reported as every other reason this cannot bind is.
+                throw new IOException(
+                    $"cannot use {dir} for the control socket: {ex.Message} " +
+                    "It may belong to another user; set $XDG_RUNTIME_DIR, or remove the directory.", ex);
+            }
 
             ClearStaleSocket(path);
         }
@@ -310,6 +325,19 @@ public sealed partial class DaemonServer : IDisposable
         Log($"listening on {path}");
     }
 
+    /// <summary>
+    /// How the accept loop takes its next connection. A seam for the tests, which
+    /// cannot make the kernel fail accept() on demand; nothing else sets it.
+    /// </summary>
+    internal Func<Socket, CancellationToken, ValueTask<Socket>> Accept { get; set; } =
+        static (listener, token) => listener.AcceptAsync(token);
+
+    /// <summary>
+    /// The pause after a failed accept: long enough that EMFILE does not spin a
+    /// core, short enough that the press after it is not noticeably late.
+    /// </summary>
+    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(200);
+
     public async Task RunAsync(CancellationToken token)
     {
         Bind();
@@ -322,13 +350,37 @@ public sealed partial class DaemonServer : IDisposable
         var serving = stopping.Token;
         _ = WatchForUpdateAsync(serving);
 
+        int acceptFailures = 0;
         try
         {
             while (!serving.IsCancellationRequested)
             {
                 Socket client;
-                try { client = await listener.AcceptAsync(serving); }
+                try
+                {
+                    client = await Accept(listener, serving);
+                    acceptFailures = 0;
+                }
                 catch (OperationCanceledException) { break; }
+                catch (SocketException ex) when (!serving.IsCancellationRequested
+                                                  && ex.SocketErrorCode != SocketError.OperationAborted
+                                                  && ReferenceEquals(_listener, listener))
+                {
+                    // EMFILE when the process is out of descriptors, ECONNABORTED
+                    // when a client gave up in the queue. Neither is an
+                    // IOException, so this used to end the daemon with nothing in
+                    // its log: exit 134, the socket file deleted by the finally,
+                    // and the press lost. One bad accept costs one connection, not
+                    // the daemon. Logged on the first failure of a run and every
+                    // 100th after, so a descriptor leak does not fill the log at
+                    // the pause's rate.
+                    if (acceptFailures++ % 100 == 0)
+                        Log($"accept failed ({ex.SocketErrorCode}: {ex.Message}); still listening" +
+                            (acceptFailures > 1 ? $", {acceptFailures} failures in a row" : ""));
+                    try { await Task.Delay(AcceptRetryDelay, serving); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
 
                 // An abstract socket has no file mode, so anyone on the machine
                 // can connect to it. Only this user may drive these speakers.

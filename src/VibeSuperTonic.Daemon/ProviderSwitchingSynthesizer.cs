@@ -267,9 +267,18 @@ public sealed class ProviderSwitchingSynthesizer : ISynthesizer
             preference = ProviderPreference.Auto;
         }
 
+        // The facts a stored profile is compared against, built exactly as
+        // Program builds the startup decision's: the benchmark voice (always a
+        // Supertonic one) and the steps THAT voice runs at. This read the
+        // file's top-level TotalStep until 2026-11-09, so with
+        // PerEngine.supertonic.TotalStep 6 under a global 12 the first press
+        // called a fresh profile stale, dropped its thread count and GPU pick,
+        // and rebuilt the session. HostConfig.TotalStepFor lists the four
+        // places this was fixed before; this was the fifth.
+        string benchmarkVoice = _config.BenchmarkVoiceFor(_voiceOverride);
         var machine = MachineFacts.Current(
-            _config.ModelsRoot, settings.TotalStep,
-            _voiceOverride ?? settings.DefaultVoice,
+            _config.ModelsRoot, _config.TotalStepFor(benchmarkVoice),
+            benchmarkVoice,
             _languageOverride ?? settings.Language);
 
         return ExecutionDecision.Decide(

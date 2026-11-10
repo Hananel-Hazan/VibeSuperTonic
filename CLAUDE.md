@@ -96,7 +96,7 @@ how a green run should be read. Four jobs were added to
 [build.yml](.github/workflows/build.yml):
 
 - **`pack`** builds espeak-ng (cached on the pin) and runs `pack-tar.sh`, so all
-  nine assertions run on every push rather than only when a human packs.
+  the packer's assertions (counted under "The Linux packer" below) run on every push rather than only when a human packs.
 - **`smoke`** extracts that tarball into a bare `ubuntu:22.04` container — the
   oldest distro the glibc floor claims — and starts the daemon there with no
   .NET, no display, no audio device, no models and no espeak-ng installed.
@@ -171,7 +171,7 @@ because Linux has no COM bitness problem), writes `install.sh`, `uninstall.sh`,
 `INSTALL.txt` and `LICENSE-MODELS.txt`, copies `models-manifest.json` and
 `install-gpu.sh` to the root, and archives it.
 
-Eleven assertions run against the **composed tree** — one of them, the budgets,
+**Twelve labelled assertion blocks** (1, 2, 3, 3b, 3c, 3d, 3e, 4, 4b, 4c, 5, 6; counted 2026-11-09 with `grep -c -E "^# --- [0-9]+[a-e]?\. |^# 4[bc]\. " build/pack-tar.sh`, which printed 12) run against the **composed tree** — this is the one place the number is stated; every other file points here. One of them, the budgets,
 against the finished tarball as well — and each exists because the failure it
 catches is silent:
 
@@ -455,9 +455,10 @@ has not shipped this round of changes before, the last `dist/` filename is the
 correct baseline; if they have, infer from the most recent ZIP.
 
 **The three-release sequence settled on 2026-08-24 is spent.** `<VstVersion>` is
-`0.2.17`, the snap and Flatpak release, **under development** since 2026-09-25.
-(This paragraph said `0.2.12` until then; 0.2.13 to 0.2.16 came and went without
-it being updated, and the table below does not list all of them.) `0.2.11` shipped on
+`0.3.0`, **under development** since 2026-11-09, chosen by the user as one release
+covering the six batches of [docs/FIX-PLAN-2026-11-09.md](docs/FIX-PLAN-2026-11-09.md).
+The 0.2.12 to 0.2.16 artifacts were deleted from `dist/` on 2026-11-09. (This paragraph
+has gone stale before; the table below does not list every version.) `0.2.11` shipped on
 2026-08-30 and is tagged `v0.2.11`; the bump followed the same day, which is the
 rule below working rather than a coincidence.
 
@@ -473,7 +474,8 @@ rule below working rather than a coincidence.
 | `0.2.17` | The snap and the Flatpak — [STORE-SUBMISSION.md](docs/STORE-SUBMISSION.md) — and the sandbox-aware store, install check and socket they need. Chosen by the user as a patch release | **shipped 2026-10-16**, tagged `v0.2.17` (`ccc2da9`), on GitHub Releases with the Windows ZIP; snap revision 16 (stable grade) on `edge` |
 | `0.2.18` | The fixes the first desktop test of the store packages found: the snap's tray-window export, the Flatpak's window on Wayland and its tray icon. Chosen by the user as a patch release | **shipped 2026-10-16**, tagged `v0.2.18` (`1e85f40`), on GitHub Releases; snap revision 18 (stable grade) on `edge` |
 | `0.2.19` | The read key stops a reading of the same selection; for programs that publish no highlight, the clipboard switch's Wayland ordering and opt-in AutoCopy (Ctrl+C through the RemoteDesktop portal); the AppImage binding fix. Chosen by the user as a patch release | **shipped 2026-11-08**, tagged `v0.2.19` (`d4e090b`), on GitHub Releases with the Windows ZIP, snap and Flatpak; snap revision 21 (stable grade) on `stable` |
-| `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | undecided |
+| `0.3` | ~~Piper as a second engine~~ — P0–P5 **shipped inside 0.2.11**, so this number is now free for whatever the next feature release turns out to be | superseded: `0.3.0` below is the next release, chosen 2026-11-09 |
+| `0.3.0` | One release covering the six batches of [docs/FIX-PLAN-2026-11-09.md](docs/FIX-PLAN-2026-11-09.md) (the code review's 103 items). Chosen by the user | **under development since 2026-11-09**, not packed |
 
 **A first `0.2.11` was packed and then withdrawn the same day**, and the
 reasoning on both sides is worth keeping. (The number was later reclaimed by the

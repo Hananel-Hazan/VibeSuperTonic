@@ -18,7 +18,7 @@ defended very well, one is defended by accident, and two are not defended at all
 | **The parity spike** | [spike/piper-phonemes](../spike/piper-phonemes) — 327 sentences against piper's own output, with five deliberate sabotages that must all be caught | Phoneme divergence, which is wrong audio rather than a failure |
 | **CI** | [build.yml](../.github/workflows/build.yml): six jobs — `build` (Windows), `linux`, `pack` and `smoke` since 2026-08-27, `speechd` and `parity` since 2026-08-30 | Compile breaks, `Core.Tests` on both platforms, an AOT publish that silently went managed — **every packer assertion, "does the archive run on Ubuntu 22.04", "does espeak-ng still answer after we install", and "do our phonemes still equal piper's"** |
 
-**The gap this document opened with — *CI runs none of the packer's nine
+**The gap this document opened with — *CI runs none of the packer's
 assertions, never builds espeak-ng, and never runs the parity spike* — is
 closed.** Since 2026-08-27 `pack` builds espeak-ng against a pin-keyed cache
 and runs the packer, and `smoke` extracts the tarball it produced into a bare
@@ -283,7 +283,7 @@ codebase has found was a thing that worked and was wrong.
 **This is the strongest axis and it is worth saying why**, because the method is
 reusable: every check is *behavioural* and every check has been **seen to fail**.
 The parity spike runs five deliberate sabotages before it reports a pass. The
-nine packer assertions were each sabotaged on the day they were written, and P5's
+the packer assertions (count in [CLAUDE.md](../CLAUDE.md)) were each sabotaged on the day they were written, and P5's
 three again on 2026-08-27 — a removed dictionary, a wrong pin, the distro
 library, missing data, no payload, a library without the export. Six sabotages,
 six refusals.
@@ -295,7 +295,7 @@ is not evidence. Sabotage it once, at the time you write it.**
 
 The artifact-level checks only ever run on the machine that packs. Concretely:
 
-- CI does not run `pack-tar.sh`, so **none of the nine assertions run in CI**.
+- CI does not run `pack-tar.sh`, so **none of the packer's assertions run in CI** (this was written when CI did not pack; the count is in [CLAUDE.md](../CLAUDE.md)).
 - CI never builds espeak-ng, so P5's payload is unverified until a release run.
 - ~~CI never runs the parity spike~~ — **it does, as of 2026-08-30**, negative
   control first.
@@ -307,7 +307,7 @@ The artifact-level checks only ever run on the machine that packs. Concretely:
 
 1. **A CI job that packs.** Build espeak-ng once and cache it on the pin (it is a
    fixed commit, so the cache key is exact and it rebuilds only when the pin
-   moves), then run `pack-tar.sh`. This turns nine hand-run assertions into nine
+   moves), then run `pack-tar.sh`. This turns the hand-run assertions (count: [CLAUDE.md](../CLAUDE.md)) into
    continuous ones and is the single highest-value item in this document.
 2. **A smoke test in a clean container**, on the tarball that job produces:
    extract it into `ubuntu:22.04` (the glibc floor's own claim — 2.34), and run
@@ -399,7 +399,7 @@ fresh install.
 | Introduced by | `3d5e8ff`, P3, *"A Piper voice speaks through the product"* |
 
 **Why nothing caught it for two phases**: every machine that has ever run this
-product has models on it. 1159 unit tests, nine packer assertions and a CI job
+product has models on it. 1159 unit tests, the packer assertions (count in CLAUDE.md) and a CI job
 all pass against a tree that cannot start. It took an empty directory on a
 machine that had never seen the product.
 

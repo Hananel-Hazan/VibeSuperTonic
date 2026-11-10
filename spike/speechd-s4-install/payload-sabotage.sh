@@ -98,6 +98,14 @@ run_case "the module no longer honours PAUSE" \
     'mv vst-speechd vst-speechd.real && printf "#!/bin/sh\nd=\$(dirname \"\$0\")\ngrep -a -v \"^PAUSE\\$\" | \"\$d/vst-speechd.real\"\n" > vst-speechd && chmod 755 vst-speechd' \
     "honour PAUSE"
 
+# The fallback for a language the payload has no dictionary for (2026-11-09).
+# The module notices it only through espeak-ng's stderr, so a wrapper that hides
+# that stderr from the module's runs (they pass --stdout; the check's own probe
+# does not) is the retry taken away without rebuilding the module.
+run_case "the module no longer falls back for a language the payload lacks" \
+    'mv espeak/espeak-ng espeak/espeak-ng.real && printf "%s\n" "#!/bin/sh" "d=\$(dirname \"\$0\")" "case \" \$* \" in *\" --stdout \"*) exec \"\$d/espeak-ng.real\" \"\$@\" 2>/dev/null ;; esac" "exec \"\$d/espeak-ng.real\" \"\$@\"" > espeak/espeak-ng && chmod 755 espeak/espeak-ng' \
+    "did not fall back"
+
 rm -rf "$work"
 printf '\n%s caught, %s not\n' "$pass" "$fail"
 exit $(( fail > 0 ))

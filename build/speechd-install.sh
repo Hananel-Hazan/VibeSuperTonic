@@ -348,14 +348,19 @@ if [[ "$action" == check ]]; then
     say ""
     say "  module command   $module_cmd"
 
-    if [[ -x "${module_cmd%% *}" || -x "$module_cmd" ]]; then
+    if [[ "$module_cmd" =~ [[:space:]] ]]; then
+        say "  it exists        NO — the path contains whitespace; speechd execs one absolute"
+        say "                   path with no arguments, so it cannot run this module from here"
+        rc=1
+    elif [[ -x "$module_cmd" ]]; then
         say "  it exists        yes"
     else
         say "  it exists        NO — nothing at that path, or it is not executable"
         rc=1
     fi
 
-    reply="$(module_init_reply $module_cmd)"
+    reply=""
+    [[ "$module_cmd" =~ [[:space:]] ]] || reply="$(module_init_reply "$module_cmd")"
     if [[ "$reply" == 299\ * ]]; then
         say "  it answers INIT  $reply"
     else
@@ -455,13 +460,21 @@ command -v speech-dispatcher >/dev/null 2>&1 \
     || warn "  note: speech-dispatcher is not on PATH. Writing the config anyway;
         it takes effect when it is installed."
 
-[[ -e "${module_cmd%% *}" ]] || die "no module at ${module_cmd%% *}.
+# speech-dispatcher execs ONE absolute path with no arguments (measured: a path
+# with a space fails "Exec of module ... error 2" while speechd still logs the
+# module as loaded). So a whitespace path is refused here, in words, instead of
+# being split into a command and arguments and dying as "does not answer INIT".
+[[ ! "$module_cmd" =~ [[:space:]] ]] || die "the module path contains whitespace: $module_cmd
+       speech-dispatcher runs a module by one absolute path with no arguments, so it
+       cannot run from a folder with a space in its name. Move this folder to a path
+       without one (for example ~/Apps/VibeSuperTonic) and run this again."
+[[ -e "$module_cmd" ]] || die "no module at $module_cmd.
        This script belongs beside vst-speechd in an extracted release."
 
 # Refuse to register something that cannot speak — before writing any config,
 # because a config that names a broken module is how a screen reader ends up
 # routing to silence.
-reply="$(module_init_reply $module_cmd)"
+reply="$(module_init_reply "$module_cmd")"
 [[ "$reply" == 299\ * ]] || die "the module does not answer INIT with 299; it said: ${reply:-nothing}.
        speechd would drop it and it would never appear in \`spd-say -O\`.
        Most likely the espeak-ng payload is missing from this install."

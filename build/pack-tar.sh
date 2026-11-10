@@ -4,7 +4,7 @@
 #
 #     bash build/pack-tar.sh [-v X.Y.Z]
 #
-# Publishes all three binaries, composes the portable layout, and archives it to
+# Publishes all four binaries, composes the portable layout, and archives it to
 # dist/VibeSuperTonic-<version>-linux-x64.tar.gz.
 #
 # This is the canonical Linux packer and the counterpart to build/pack-zip.ps1.
@@ -14,7 +14,7 @@
 # archive that is quietly wrong.
 #
 # ---------------------------------------------------------------------------
-# The six assertions, and why each exists. Every one of them exists because the
+# The assertions (CLAUDE.md states how many), and why each exists. Every one of them exists because the
 # failure it catches is SILENT — a green build, a plausible archive, and a defect
 # that surfaces on someone else's machine.
 #
@@ -305,7 +305,7 @@ info "vibesupertonic-ui $v_ui"
 info "vst-ctl           $v_ctl"
 info "vst-speechd       $v_speechd"
 if [[ "$v_daemon" != "$v_ui" || "$v_daemon" != "$v_ctl" || "$v_daemon" != "$v_speechd" ]]; then
-    die "the three binaries do not agree on a version — a stale one survived a publish"
+    die "the four binaries do not agree on a version — a stale one survived a publish"
 fi
 # And they must agree with the archive's NAME, or the tarball lies about itself.
 if [[ "$v_daemon" != "$version" ]]; then
@@ -330,8 +330,9 @@ fi
 # could be large.
 _assert_native() {
     local exe="$1" name; name="$(basename "$exe")"
-    file "$exe" | grep -q 'ELF 64-bit' \
-        || die "$name is not an ELF binary: $(file -b "$exe")"
+    local ftype; ftype="$(file -b "$exe")"
+    [[ "$ftype" == *'ELF 64-bit'* ]] \
+        || die "$name is not an ELF binary: $ftype"
     [[ -e "$exe.dll" ]] \
         && die "$name.dll is present beside $name — that is a MANAGED apphost.
        PublishAot did not take effect. The binary works perfectly, so nothing
@@ -348,14 +349,17 @@ _assert_native "$staging/vst-ctl"
 _assert_native "$staging/vst-speechd"
 
 # --- 3. no models in the archive ---------------------------------------------
-if find "$staging/models" -type f -print -quit | grep -q .; then
+# Captured, not piped to `grep -q .`: an early-exiting consumer is the SIGPIPE shape.
+found_models="$(find "$staging/models" -type f)"
+if [[ -n "$found_models" ]]; then
     die "models/ is not empty. The archive must ship NO models — they download on
        first run behind the OpenRAIL-M acceptance, and shipping them makes that
        screen a lie."
 fi
 # A belt-and-braces sweep: an .onnx anywhere in the tree means something copied
 # a model in by a route models/ does not cover.
-if find "$staging" -name '*.onnx' -print -quit | grep -q .; then
+found_onnx="$(find "$staging" -name '*.onnx')"
+if [[ -n "$found_onnx" ]]; then
     die "an .onnx file is in the staging tree; the archive must ship no models"
 fi
 info "models/ is empty, as it must be"
@@ -376,7 +380,7 @@ _assert_catalog() {
     local bytes
     bytes=$(stat -c%s "$file")
 
-    # 43 voices of metadata is ~40 KB. A megabyte means something other than
+    # A catalog of 60-odd voices is metadata of a few dozen KB. A megabyte means something other than
     # metadata got in.
     (( bytes < 1048576 )) || die "piper-voices.json is $(numfmt --to=iec "$bytes").
        A catalog is metadata; this is large enough to be carrying voice data."
@@ -599,10 +603,14 @@ print("\n".join(v))
        this check is not an option: it is the only thing that proves the shipped
        dictionaries match the voices the catalog offers."
 
-    local v out err errfile="$staging/.espeak-probe.err"
+    local v out err rc errfile="$staging/.espeak-probe.err"
     for v in "${voices[@]}"; do
-        if ! out="$("$bin" --path="$dir" -v "$v" -q --ipa -- "$probe" 2>"$errfile")"; then
-            echo "       $v: espeak-ng exited $?" >&2; bad=1; continue
+        # rc captured on the same line: `$?` inside the `then` of `if !` is the
+        # status of the negation (always 0), which made this message say "exited 0".
+        rc=0
+        out="$("$bin" --path="$dir" -v "$v" -q --ipa -- "$probe" 2>"$errfile")" || rc=$?
+        if (( rc != 0 )); then
+            echo "       $v: espeak-ng exited $rc" >&2; bad=1; continue
         fi
         err="$(cat "$errfile")"
         if [[ -n "$err" ]]; then
@@ -674,8 +682,11 @@ _assert_speechd
 # quietly under an SDK bump. The archive doubling in size is not something the
 # publish step will complain about.
 for unwanted in libonnxruntime_providers_cuda.so libonnxruntime_providers_tensorrt.so; do
-    if [[ -e "$staging/$unwanted" ]]; then
-        die "$unwanted is in the archive ($(numfmt --to=iec "$(stat -c%s "$staging/$unwanted")")).
+    # The whole tree, as the other packers do: a provider that landed in a
+    # subdirectory (runtimes/linux-x64/native/) was invisible to a root-only test.
+    unwanted_found="$(find "$staging" -name "$unwanted")"
+    if [[ -n "$unwanted_found" ]]; then
+        die "$unwanted is in the archive: ${unwanted_found//$'\n'/, }.
        RemoveOptionalGpuProviders in VibeSuperTonic.Onnx.Ort.csproj is not taking
        effect. The pack is fetched by install-gpu.sh; it must not ship."
     fi
@@ -780,6 +791,12 @@ while IFS= read -r elf; do
     fi
 done < <(find "$staging" -type f)
 
+# No measurement is not a pass: with objdump returning nothing for every ELF the
+# comparison below sorts an empty string under the floor and says "fine".
+[[ -n "$glibc_max" ]] || die "no glibc symbol version was measured in any ELF in the tree.
+       objdump -T returned nothing for every file, so the floor is unknown, not
+       unchanged. vst-ctl alone should report GLIBC_2.34."
+
 if [[ "$(printf '%s\n%s\n' "$glibc_floor" "$glibc_max" | sort -V | tail -1)" != "$glibc_floor" ]]; then
     die "the glibc floor has risen to $glibc_max, needed by ${glibc_worst#$staging/}.
        It was $glibc_floor, which is Ubuntu 22.04+ / Debian 12+ / RHEL 9+. Something
@@ -839,7 +856,7 @@ MIT licensed and is unchanged by this — MIT is GPL-compatible, and every sourc
 file keeps its own licence and header. See LICENSE.txt.
 
 Earlier releases — up to and including 0.2.10 — contain no espeak-ng and are
-not affected. These terms apply from 0.2.13 onward, the first release to
+not affected. These terms apply from 0.2.11 onward, the first release to
 include it.
 
 THE SOURCE, which is the obligation this file discharges. The library here was
@@ -867,7 +884,7 @@ cat > "$staging/INSTALL.txt" <<'EOF'
 VibeSuperTonic for Linux — Setup
 ================================
 
-No runtime to install. All three binaries carry what they need.
+No runtime to install. All four binaries carry what they need.
 
   vibesupertonicd     the daemon: holds the warm model, owns the audio device
                       and the tray icon. Long-lived, started on the first
@@ -975,8 +992,8 @@ If a hotkey does nothing, the daemon's log is the place to look:
 
 Other voices, other languages
 -----------------------------
-The ten Supertonic voices are English. For anything else there are 43 Piper
-voices across 35 languages, 60 to 115 MB each, downloaded on request.
+The ten Supertonic voices are English. For anything else there are @PIPER_VOICES@ Piper
+voices across @PIPER_LANGS@ languages, 60 to 115 MB each, downloaded on request.
 
     ./vst-ctl voices                what is installed, and what is offered
     ./vst-ctl voice install <id>    download one and calibrate it
@@ -1127,6 +1144,21 @@ Uninstall
 Nothing is written outside this folder except the desktop shortcut entries,
 which uninstall.sh removes.
 EOF
+
+# The voice and language counts come from the catalog that ships, so INSTALL.txt
+# cannot go stale when the catalog grows (it said 43 while the catalog had 65).
+# python3 is already required by assertion 3b above.
+piper_counts="$(python3 -c '
+import json, sys
+v = json.load(open(sys.argv[1]))["voices"]
+print(len(v), len({e["language"]["code"].split("_")[0] for e in v}))
+' "$staging/piper-voices.json")"
+read -r piper_n piper_langs <<<"$piper_counts"
+[[ "$piper_n" =~ ^[0-9]+$ && "$piper_langs" =~ ^[0-9]+$ ]] \
+    || die "could not count the catalog's voices for INSTALL.txt (got: $piper_counts)"
+sed -i -e "s/@PIPER_VOICES@/$piper_n/" -e "s/@PIPER_LANGS@/$piper_langs/" "$staging/INSTALL.txt"
+[[ "$(grep -c '@PIPER_' "$staging/INSTALL.txt" || true)" == 0 ]] \
+    || die "INSTALL.txt still has an unreplaced @PIPER_ placeholder"
 
 # ------------------------------------------------------------------ install.sh
 #
@@ -1304,7 +1336,7 @@ chmod 755 "$staging/uninstall.sh"
 step "Creating $tarball…"
 mkdir -p "$root/dist"
 rm -f "$tarball"
-tar -czf "$tarball" -C "$root/dist/release-linux" VibeSuperTonic
+tar --owner=0 --group=0 --numeric-owner -czf "$tarball" -C "$root/dist/release-linux" VibeSuperTonic
 
 # --- 6. THE BUDGETS: how big the archive is, and how fast vst-ctl starts ------
 #

@@ -82,6 +82,18 @@ internal sealed class SpeechdModule
     private string? _language;
     private string? _synthesisVoice;
 
+    /// <summary>speechd's <c>cap_let_recogn</c>, as espeak-ng's <c>-k</c>; 0 is off.</summary>
+    private int _capitals;
+
+    /// <summary>
+    /// espeak-ng voices this install has been seen to speak, and ones it has been
+    /// seen to lack — item 1 of docs/CODE-REVIEW-2026-11-09.md. The payload ships
+    /// about 31 dictionaries; for any other language espeak-ng prints
+    /// <c>Can't read dictionary file</c>, exits 0 and writes a WAV of silence.
+    /// </summary>
+    private readonly HashSet<string> _espeakSpeaks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _espeakLacks = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// speechd's <c>voice=male1</c> and friends. Read because it is the DEFAULT
     /// selection path rather than an exotic one: measured against 0.12.1, a
@@ -115,24 +127,64 @@ internal sealed class SpeechdModule
             string? line = _in.ReadLine(block: true);
             if (line is null) return 0;              // speech-dispatcher closed stdin
 
-            switch (line)
-            {
-                case "INIT": HandleInit(); break;
-                case "AUDIO": HandleAudio(); break;
-                case "SET": HandleSet(); break;
-                case "LOGLEVEL": HandleLogLevel(); break;
-                case "STOP": Reply("703 STOP"); break;
-                case "PAUSE": Reply("704 PAUSE"); break;
-                case "QUIT": Reply("210 OK QUIT"); return 0;
+            _owed.Clear();
+            _blockOpen = false;
 
-                default:
-                    if (ModuleRouting.Parse(line) is { } type) HandleSpeak(type);
-                    else if (line.StartsWith("LIST VOICES", StringComparison.Ordinal)) HandleListVoices();
-                    else if (line.StartsWith("DEBUG", StringComparison.Ordinal)) Reply("200 OK DEBUGGING SET");
-                    else Reply("300 ERROR UNKNOWN COMMAND");
-                    break;
+            // ONE COMMAND'S FAILURE IS NOT THE MODULE'S (item 56, 2026-11-09).
+            // An exception escaping here used to end the process mid-utterance,
+            // and speechd then has no module for this voice until the next login.
+            // So it is logged, whatever the command still owed the server is sent
+            // (for an utterance, its END), and the loop goes on. Only a failure to
+            // write that reply escapes: then the server is gone and so is the point.
+            try
+            {
+                switch (line)
+                {
+                    case "INIT": HandleInit(); break;
+                    case "AUDIO": HandleAudio(); break;
+                    case "SET": HandleSet(); break;
+                    case "LOGLEVEL": HandleLogLevel(); break;
+                    case "STOP": Reply("703 STOP"); break;
+                    case "PAUSE": Reply("704 PAUSE"); break;
+                    case "QUIT": Reply("210 OK QUIT"); return 0;
+
+                    default:
+                        if (ModuleRouting.Parse(line) is { } type) HandleSpeak(type);
+                        else if (line.StartsWith("LIST VOICES", StringComparison.Ordinal)) HandleListVoices();
+                        else if (line.StartsWith("DEBUG", StringComparison.Ordinal)) Reply("200 OK DEBUGGING SET");
+                        else Reply("300 ERROR UNKNOWN COMMAND");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                try { _log($"{line}: {ex.GetType().Name}: {ex.Message}; answering what it owed and carrying on"); }
+                catch (Exception) { /* the log is what failed; the reply still matters */ }
+
+                // The rest of a parameter block would otherwise be read as commands.
+                if (_blockOpen)
+                    while (_in.ReadLine(block: true) is { } rest && rest != ".") { }
+                _blockOpen = false;
+
+                foreach (string owed in _owed.ToArray()) Reply(owed);
             }
         }
+    }
+
+    /// <summary>
+    /// The replies the command in hand still owes the server, in order, for
+    /// <see cref="Run"/>'s catch to send if it fails. Each handler states its debt
+    /// with <see cref="Owe"/>; <see cref="Reply"/> pays it down.
+    /// </summary>
+    private readonly List<string> _owed = new();
+
+    /// <summary>True while a parameter block's lines are still unread.</summary>
+    private bool _blockOpen;
+
+    private void Owe(params string[] lines)
+    {
+        _owed.Clear();
+        _owed.AddRange(lines);
     }
 
     // -------------------------------------------------------------- commands
@@ -170,6 +222,7 @@ internal sealed class SpeechdModule
     /// </summary>
     private void HandleAudio()
     {
+        Owe("207 OK RECEIVING AUDIO SETTINGS", "203 OK AUDIO INITIALIZED");
         Reply("207 OK RECEIVING AUDIO SETTINGS");
 
         foreach (var (key, value) in ReadParameters())
@@ -188,6 +241,7 @@ internal sealed class SpeechdModule
 
     private void HandleSet()
     {
+        Owe("203 OK RECEIVING SETTINGS", "203 OK SETTINGS RECEIVED");
         Reply("203 OK RECEIVING SETTINGS");
 
         foreach (var (key, value) in ReadParameters())
@@ -200,11 +254,16 @@ internal sealed class SpeechdModule
                 case "synthesis_voice": _synthesisVoice = Normalise(value); break;
                 case "voice": _symbolicVoice = Normalise(value); break;
 
+                // Read for key echo only: a CHAR that is a capital letter is
+                // announced as one when the client asks (item 2, 2026-11-09).
+                case "cap_let_recogn": _capitals = CharEcho.Capitals(value); break;
+
                 // ACCEPTED AND IGNORED, WHICH IS A DECISION AND NOT AN OMISSION.
-                // punctuation_mode, spelling_mode and cap_let_recogn all mean
-                // "say something extra out loud", and this product has no concept
-                // of it. Answering 303 to a parameter every client sends would
-                // make the module look broken to a user who is not using the
+                // punctuation_mode and spelling_mode mean "say something extra
+                // out loud" while reading, and this product has no concept of it.
+                // (A CHAR always says its punctuation, as speechd's own espeak
+                // module does.) Answering 303 to a parameter every client sends
+                // would make the module look broken to a user who is not using the
                 // feature at all. docs/SPEECHD-PLAN.md, trap 11.
                 //
                 // PITCH AND PITCH_RANGE ARE IGNORED FOR A DIFFERENT REASON, and it
@@ -227,6 +286,7 @@ internal sealed class SpeechdModule
 
     private void HandleLogLevel()
     {
+        Owe("207 OK RECEIVING LOGLEVEL SETTINGS", "203 OK LOGLEVEL SET");
         Reply("207 OK RECEIVING LOGLEVEL SETTINGS");
         foreach (var _ in ReadParameters()) { }
         Reply("203 OK LOGLEVEL SET");
@@ -251,6 +311,7 @@ internal sealed class SpeechdModule
     /// </summary>
     private void HandleListVoices()
     {
+        Owe("200 OK VOICE LIST SENT");
         foreach (var v in _installed.Read())
             Reply($"200-{v.Name}\t{v.Language}\t{v.Variant}");
 
@@ -269,6 +330,8 @@ internal sealed class SpeechdModule
 
     private void HandleSpeak(SpeechdMessageType type)
     {
+        // An utterance, once begun, must end — even through Run's catch.
+        Owe("202 OK RECEIVING MESSAGE", "200 OK SPEAKING", "701 BEGIN", "702 END");
         Reply("202 OK RECEIVING MESSAGE");
         string text = ReadMessage();
 
@@ -285,9 +348,27 @@ internal sealed class SpeechdModule
         // two callers, so they cannot disagree about what a document means. A
         // document that does not parse is null here and is STRIPPED, which is
         // what this module did for every document before 2026-10-03.
-        IReadOnlyList<SsmlFragment>? fragments =
-            SsmlDocument.TryParse(text, out var parsed) ? parsed : null;
-        string plain = fragments is null ? Ssml.Strip(text) : SsmlDocument.SpokenText(fragments);
+        //
+        // KEY ECHO GETS ITS OWN SWITCHES (item 2). A CHAR is said with --punct
+        // and, when the client asked, espeak's capital announcement; a space,
+        // which as text is nothing at all, is named instead — see CharEcho. That
+        // SSML is the module's own and is not parsed as the client's.
+        var echo = type == SpeechdMessageType.Char
+            ? new EspeakEcho(Punctuation: true, Capitals: _capitals, Ssml: false)
+            : default;
+        IReadOnlyList<SsmlFragment>? fragments;
+        string plain;
+        if (type == SpeechdMessageType.Char && CharEcho.WhitespaceSsml(text) is { } named)
+        {
+            fragments = null;
+            plain = named;
+            echo = echo with { Ssml = true };
+        }
+        else
+        {
+            fragments = SsmlDocument.TryParse(text, out var parsed) ? parsed : null;
+            plain = fragments is null ? Ssml.Strip(text) : SsmlDocument.SpokenText(fragments);
+        }
 
         if (string.IsNullOrWhiteSpace(plain))
         {
@@ -354,7 +435,7 @@ internal sealed class SpeechdModule
         // sounds different" is a different kind of day from "my screen reader
         // stopped".
         if (!spoke && !Interrupted)
-            spoke = SpeakEspeak(fragments, plain);
+            spoke = SpeakEspeak(fragments, plain, echo);
 
         if (_stopRequested) Reply("703 STOP");
 
@@ -380,15 +461,12 @@ internal sealed class SpeechdModule
     /// own language and pace, a <c>&lt;break&gt;</c> becomes silence and a
     /// <c>&lt;mark&gt;</c> is reported where the audio before it ends.
     /// </summary>
-    private bool SpeakEspeak(IReadOnlyList<SsmlFragment>? fragments, string plain)
+    private bool SpeakEspeak(IReadOnlyList<SsmlFragment>? fragments, string plain, EspeakEcho echo)
     {
         // Not a document, or one that did not parse: the stripped text, in one
         // run. espeak-ng would otherwise be handed "<speak>" and read it.
         if (fragments is null)
-        {
-            return SpeakWith(
-                () => _voices.StartEspeak(plain, _language, _rate, _volume), "espeak");
-        }
+            return RunEspeak(plain, _language, 0, echo);
 
         bool any = false;
         int silenceLeft = MaxSilenceMs;
@@ -410,17 +488,65 @@ internal sealed class SpeechdModule
                     break;
 
                 default:
-                    string said = fragment.Text;
-                    string? lang = fragment.Lang ?? _language;
-                    int adj = fragment.RateAdj;
-                    any |= SpeakWith(
-                        () => _voices.StartEspeak(said, lang, _rate, _volume, adj), "espeak");
+                    any |= RunEspeak(fragment.Text, fragment.Lang ?? _language, fragment.RateAdj, echo);
                     break;
             }
         }
 
         return any;
     }
+
+    /// <summary>
+    /// One espeak-ng run, in <paramref name="language"/> when this install can
+    /// speak it and in espeak's default voice when it cannot.
+    ///
+    /// <para><b>The fallback has a fallback (item 1, 2026-11-09).</b> With
+    /// <c>-v he</c> the shipped espeak-ng prints <c>Can't read dictionary
+    /// file</c>, exits 0 and writes a WAV of silence, which looked like success:
+    /// a Hebrew user heard nothing for every key echo and for every sentence while
+    /// the daemon was down, and nothing was logged. So the first run in a language
+    /// is held whole until its stderr has ended, and if it says the language is
+    /// missing its audio is dropped and the text is said again without
+    /// <c>-v</c>. That is logged once, and every later run in that language goes
+    /// straight to the default voice. A language seen to work streams as before.
+    /// The default voice reads foreign script letter by letter or by name, which
+    /// is poor, but it is not silence.</para>
+    /// </summary>
+    private bool RunEspeak(string text, string? language, int rateAdj, EspeakEcho echo)
+    {
+        string? voice = string.IsNullOrWhiteSpace(language) || _espeakLacks.Contains(language) ? null : language;
+        bool check = voice is not null && !_espeakSpeaks.Contains(voice);
+
+        var outcome = Render(
+            () => _voices.StartEspeak(text, voice, _rate, _volume, rateAdj, echo), "espeak", check, out string? why);
+
+        if (outcome == RenderOutcome.LanguageMissing)
+        {
+            _espeakLacks.Add(voice!);
+            _log($"espeak-ng cannot speak '{voice}' in this install ({why}); using its default voice for it from now on");
+            outcome = Render(
+                () => _voices.StartEspeak(text, null, _rate, _volume, rateAdj, echo), "espeak", false, out _);
+        }
+        else if (outcome == RenderOutcome.Spoke && voice is not null)
+        {
+            _espeakSpeaks.Add(voice);
+        }
+
+        return outcome == RenderOutcome.Spoke;
+    }
+
+    private enum RenderOutcome { Spoke, Silent, LanguageMissing }
+
+    /// <summary>
+    /// What espeak-ng prints when it cannot speak the voice it was given: the
+    /// first with exit code 0 and a WAV of silence, the second with exit code 1
+    /// and nothing. Both measured against the shipped payload.
+    /// </summary>
+    private static readonly string[] EspeakLacksLanguage =
+    [
+        "Can't read dictionary file",
+        "voice does not exist",
+    ];
 
     /// <summary>
     /// Write <paramref name="ms"/> of silence as audio blocks. Returns false if
@@ -451,11 +577,24 @@ internal sealed class SpeechdModule
     }
 
     /// <summary>
-    /// Run one renderer and forward its WAV as audio blocks. Returns false if it
-    /// produced no audio, which is the caller's cue to fall back.
+    /// Run the neural renderer and forward its WAV as audio blocks. Returns false
+    /// if it produced no audio, which is the caller's cue to fall back.
     /// </summary>
-    private bool SpeakWith(Func<Process> start, string what)
+    private bool SpeakWith(Func<Process> start, string what) =>
+        Render(start, what, checkLanguage: false, out _) == RenderOutcome.Spoke;
+
+    /// <summary>
+    /// Run one renderer and forward its WAV as audio blocks.
+    /// </summary>
+    /// <param name="checkLanguage">
+    /// Hold the whole WAV until the renderer's stderr has ended, and send none of
+    /// it if espeak-ng said it cannot speak the voice it was given. See
+    /// <see cref="RunEspeak"/>.
+    /// </param>
+    /// <param name="why">espeak-ng's own line, when the outcome is LanguageMissing.</param>
+    private RenderOutcome Render(Func<Process> start, string what, bool checkLanguage, out string? why)
     {
+        why = null;
         Process process;
         try
         {
@@ -464,13 +603,24 @@ internal sealed class SpeechdModule
         catch (Exception ex)
         {
             _log($"{what}: could not start — {ex.GetType().Name}: {ex.Message}");
-            return false;
+            return RenderOutcome.Silent;
         }
 
-        // The neural renderer reports bookmarks on stderr, so something has to be
-        // reading it. espeak-ng has nothing to say there until it fails, and its
-        // stderr is read once, after the fact, as it always was.
-        StderrPump? pump = what == "neural" ? new StderrPump(process.StandardError) : null;
+        // EVERY RENDERER'S STDERR IS READ AS IT ARRIVES (2026-11-09). The neural
+        // renderer reports bookmarks there; espeak-ng reports a missing
+        // dictionary there and nowhere else, with exit code 0. It used to be read
+        // only after a failure, so that report was never seen, and a renderer
+        // that filled the pipe buffer would have blocked mid-utterance.
+        var pump = new StderrPump(process.StandardError);
+        StderrPump? marks = what == "neural" ? pump : null;
+
+        string? Lacks()
+        {
+            pump.WaitForEnd();
+            foreach (string said in EspeakLacksLanguage)
+                if (pump.Find(said) is { } line) return line;
+            return null;
+        }
 
         try
         {
@@ -484,14 +634,7 @@ internal sealed class SpeechdModule
             // audio loop asks. On an interruption the finally kills the renderer,
             // which ends the read.
             var headerRead = Task.Run(() => WavHeader.Read(stdout));
-            _ = headerRead.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
-            // The wait handle rather than Wait(ms), which throws for a faulted read
-            // instead of reporting that it finished.
-            var finished = ((IAsyncResult)headerRead).AsyncWaitHandle;
-            while (!finished.WaitOne(HeaderPollMs))
-            {
-                if (DrainCommandsAndCheckInterrupt()) return false;
-            }
+            if (!AwaitAside(headerRead)) return RenderOutcome.Silent;
 
             // GetResult rather than Result so a failed read is logged as itself
             // and not as an AggregateException wrapping it.
@@ -500,43 +643,81 @@ internal sealed class SpeechdModule
                 // Not a WAV. Either the renderer refused — vst-ctl exits non-zero
                 // with a reason on stderr, which is exactly what "never exit 0
                 // with no audio" bought us — or it is not the program we think.
-                if (pump is not null) { pump.WaitForEnd(); _log($"{what}: no audio ({pump.Message})"); }
-                else _log($"{what}: no audio ({Drain(process)})");
-                return false;
+                if (checkLanguage && Lacks() is { } missing) { why = missing; return RenderOutcome.LanguageMissing; }
+                pump.WaitForEnd();
+                _log($"{what}: no audio ({pump.Message})");
+                return RenderOutcome.Silent;
+            }
+
+            Stream pcm = stdout;
+            if (checkLanguage)
+            {
+                // espeak renders a sentence in milliseconds, so holding one run
+                // per language costs nothing a listener hears; stdin is still
+                // watched while it runs.
+                var rest = Task.Run(() =>
+                {
+                    var held = new MemoryStream();
+                    stdout.CopyTo(held);
+                    held.Position = 0;
+                    return held;
+                });
+                if (!AwaitAside(rest)) return RenderOutcome.Silent;
+                if (Lacks() is { } missing) { why = missing; return RenderOutcome.LanguageMissing; }
+                pcm = rest.GetAwaiter().GetResult();
             }
 
             _streamRate = wav.SampleRate;
-            long sent = SendAudio(stdout, wav, pump);
+            long sent = SendAudio(pcm, wav, marks);
 
             // NEVER REPORT SUCCESS HAVING PRODUCED NO AUDIO. A renderer can emit
             // a header and then nothing at all, and that is the failure this
             // whole feature keeps finding.
             if (sent == 0 && !Interrupted)
             {
-                _log($"{what}: a header and no samples ({(pump is not null ? pump.Message : Drain(process))})");
-                return false;
+                pump.WaitForEnd();
+                _log($"{what}: a header and no samples ({pump.Message})");
+                return RenderOutcome.Silent;
             }
 
             // The audio is all handed over, so every bookmark the renderer
             // printed is now due, in order — before the END that follows.
-            if (!Interrupted && pump is not null)
+            if (!Interrupted && marks is not null)
             {
-                pump.WaitForEnd();
-                CollectMarks(pump);
+                marks.WaitForEnd();
+                CollectMarks(marks);
                 ReportMarks(before: long.MaxValue);
             }
 
-            return true;
+            return RenderOutcome.Spoke;
         }
         catch (Exception ex)
         {
             _log($"{what}: {ex.GetType().Name}: {ex.Message}");
-            return false;
+            return RenderOutcome.Silent;
         }
         finally
         {
             StopProcess(process);
         }
+    }
+
+    /// <summary>
+    /// Wait for a read running aside while answering stdin the way the audio loop
+    /// does. False if a STOP or PAUSE arrived first.
+    /// </summary>
+    private bool AwaitAside(Task read)
+    {
+        _ = read.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        // The wait handle rather than Wait(ms), which throws for a faulted read
+        // instead of reporting that it finished.
+        var finished = ((IAsyncResult)read).AsyncWaitHandle;
+        while (!finished.WaitOne(HeaderPollMs))
+        {
+            if (DrainCommandsAndCheckInterrupt()) return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -693,10 +874,11 @@ internal sealed class SpeechdModule
     /// <summary>Key/value lines until a lone dot.</summary>
     private IEnumerable<(string Key, string Value)> ReadParameters()
     {
+        _blockOpen = true;
         while (true)
         {
             string? line = _in.ReadLine(block: true);
-            if (line is null || line == ".") yield break;
+            if (line is null || line == ".") { _blockOpen = false; yield break; }
 
             int eq = line.IndexOf('=');
             if (eq <= 0) continue;
@@ -714,11 +896,12 @@ internal sealed class SpeechdModule
     private string ReadMessage()
     {
         var sb = new StringBuilder();
+        _blockOpen = true;
 
         while (true)
         {
             string? line = _in.ReadLine(block: true);
-            if (line is null || line == ".") break;
+            if (line is null || line == ".") { _blockOpen = false; break; }
 
             if (sb.Length > 0) sb.Append('\n');
             sb.Append(line.StartsWith("..", StringComparison.Ordinal) ? line[1..] : line);
@@ -733,6 +916,12 @@ internal sealed class SpeechdModule
     {
         _out.Write(Encoding.UTF8.GetBytes(line + "\n"));
         _out.Flush();
+
+        // Pay down the debt Run's catch would otherwise settle. Any terminator
+        // settles an utterance, so a STOP or a PAUSE is not followed by an END.
+        int paid = _owed.IndexOf(line);
+        if (paid >= 0) _owed.RemoveRange(0, paid + 1);
+        else if (line is "702 END" or "703 STOP" or "704 PAUSE") _owed.Clear();
     }
 
     // ----------------------------------------------------------------- utils
@@ -748,22 +937,20 @@ internal sealed class SpeechdModule
     private static string? Normalise(string value) =>
         string.IsNullOrWhiteSpace(value) || value == "NULL" ? null : value;
 
-    /// <summary>The renderer's own explanation, for the log.</summary>
-    private static string Drain(Process process)
-    {
-        try
-        {
-            string err = process.StandardError.ReadToEnd().Trim();
-            return string.IsNullOrEmpty(err) ? "no message" : err.Split('\n')[0];
-        }
-        catch (Exception ex) { return ex.GetType().Name; }
-    }
-
     /// <summary>
-    /// SIGTERM, then make sure it is gone. vst-ctl handles SIGTERM as a stop and
-    /// exits 0 (S1); espeak-ng dies on it. Either way the point is that a
-    /// cancelled utterance leaves no process still synthesising it, because Orca
-    /// cancels constantly and they would otherwise accumulate for the session.
+    /// SIGTERM, a short grace, then SIGKILL — to the renderer alone, never its
+    /// children. vst-ctl handles SIGTERM as a stop and exits 0 (S1); espeak-ng
+    /// dies on it. Either way the point is that a cancelled utterance leaves no
+    /// process still synthesising it, because Orca cancels constantly and they
+    /// would otherwise accumulate for the session.
+    ///
+    /// <para><b>Until 2026-11-09 this said SIGTERM and sent SIGKILL to the whole
+    /// process tree</b> (item 27). The tree is the reason it changed, not the
+    /// signal. vst-ctl starts the daemon itself when none is running (R-5), with a
+    /// plain Process.Start, so the daemon is that vst-ctl's child for as long as
+    /// it runs, cold model load included. A STOP during that first utterance
+    /// killed the daemon it had just started, and the next utterance began
+    /// another cold start. ProtocolTests now shows such a child surviving.</para>
     /// </summary>
     private void StopProcess(Process process)
     {
@@ -771,11 +958,26 @@ internal sealed class SpeechdModule
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(2000);
+                if (kill(process.Id, Sigterm) == 0) process.WaitForExit(TermGraceMs);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: false);
+                    process.WaitForExit(2000);
+                }
             }
         }
         catch (Exception) { /* it exited between the check and the kill */ }
         finally { process.Dispose(); }
     }
+
+    /// <summary>
+    /// How long a renderer has to obey SIGTERM. Both exit within milliseconds of
+    /// it; this bounds only a hung one, and the module answers nothing meanwhile.
+    /// </summary>
+    private const int TermGraceMs = 250;
+
+    private const int Sigterm = 15;
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int sig);
 }

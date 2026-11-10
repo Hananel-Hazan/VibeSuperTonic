@@ -302,6 +302,12 @@ want |= cat
 if os.path.exists(sys.argv[2]):
     corpus = json.load(open(sys.argv[2]))
     want |= {e["espeak_voice"] for e in corpus.get("entries", []) if e.get("espeak_voice")}
+# THIRD SOURCE (CODE-REVIEW item 91): Hebrew and Arabic have no Piper voice in
+# the catalog, but a Hebrew or Arabic screen reader falls back to espeak
+# and said nothing for want of he_dict / ar_dict (under 1 MB for both), and any
+# later Hebrew Piper voice needs its phonemiser. Add a language here when the
+# product should speak it before the catalog does.
+want |= {"he", "ar"}
 print("\n".join(sorted(want)))
 ' "$catalog" "$root/spike/piper-phonemes/corpus.json")
 
@@ -312,7 +318,7 @@ print("\n".join(sorted(want)))
     # asserted clean.
     (( ${#voices[@]} > 0 )) || die "no espeak voices came back from $catalog.
        Regenerate it: python3 build/gen-piper-catalog.py"
-    info "${#voices[@]} espeak voices — the catalog's, plus the ones P1 measured"
+    info "${#voices[@]} espeak voices — the catalog's, the ones P1 measured, plus he and ar"
 
     # A sentence rather than a word: dictionaries are consulted per word, and a
     # single token can be answered by letter rules while the rest of a clause

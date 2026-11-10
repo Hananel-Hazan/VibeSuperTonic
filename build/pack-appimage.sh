@@ -35,7 +35,7 @@
 # THE RUNTIME IS FETCHED AND HASH-PINNED. AppImage's type-2 runtime is a 944 KB
 # static ELF that is concatenated in front of a squashfs image; that is all an
 # AppImage is, and it is why appimagetool is not required. It is downloaded once
-# into dist/build-linux/ and checked against the SHA-256 below on every run,
+# into dist/runtime-cache/ and checked against the SHA-256 below on every run,
 # fresh or cached — the same discipline models-manifest.json applies to the
 # weights, for the same reason: something fetched from the internet ends up
 # inside what we hand a user.
@@ -71,15 +71,22 @@ fi
 
 staging="$root/dist/release-linux/VibeSuperTonic"
 appdir="$root/dist/build-linux/AppDir"
-runtime="$root/dist/build-linux/runtime-x86_64"
-out="$root/dist/VibeSuperTonic-$version-x86_64.AppImage"
+# A FIXED RELEASE TAG, never `continuous`: that tag is rebuilt upstream (its
+# asset changed on 2026-09-28 and again 2026-10-19) and a pin on a moving target
+# goes stale. Tag 20251108 is immutable in practice; 944632 bytes. The hash
+# equals the digest GitHub publishes for the asset, and was re-derived by
+# downloading it on 2026-11-09:
+#   gh api repos/AppImage/type2-runtime/releases/tags/20251108
+#     --jq '.assets[] | select(.name=="runtime-x86_64") | .digest'
+RUNTIME_TAG="20251108"
+RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_TAG/runtime-x86_64"
+RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
 
-RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
-# Re-pinned 2026-10-16: upstream rebuilt `continuous` on 2026-09-28 (commit
-# 8f39b89, 944632 bytes). The new hash equals the digest GitHub publishes for
-# the asset: gh api repos/AppImage/type2-runtime/releases/tags/continuous
-#   --jq '.assets[] | select(.name=="runtime-x86_64") | .digest'
-RUNTIME_SHA256="156f4bdbde9c52d01814600013e0a273f0118dc2de98975f3c8c63427ec79074"
+# Outside dist/build-linux, which pack-tar.sh empties on every run: a cache in
+# there was wiped before this script ran, so the documented sequence always
+# downloaded afresh.
+runtime="$root/dist/runtime-cache/runtime-x86_64-$RUNTIME_TAG"
+out="$root/dist/VibeSuperTonic-$version-x86_64.AppImage"
 
 # --------------------------------------------------------------- preconditions
 step "Checking the composed tree…"
@@ -112,12 +119,14 @@ info "all four binaries report $version"
 ctl_bytes=$(stat -c%s "$staging/vst-ctl")
 (( ctl_bytes > 1000000 )) || die "vst-ctl is $ctl_bytes bytes; a NativeAOT build is megabytes."
 
-if [[ -d "$staging/models" ]] && find "$staging/models" -type f -print -quit | grep -q .; then
+# find | grep -c, not `-print -quit | grep -q .`: no early-exiting consumer
+# in a pipeline (CLAUDE.md, SIGPIPE rule). Both read to the end.
+if [[ -d "$staging/models" ]] && (( $(find "$staging/models" -type f | grep -c .) > 0 )); then
     die "the composed tree contains model files. They download on first run behind
        the OpenRAIL-M acceptance; shipping them would make that screen a lie."
 fi
 
-if find "$staging" -name 'libonnxruntime_providers_cuda.so' -print -quit | grep -q .; then
+if (( $(find "$staging" -name 'libonnxruntime_providers_cuda.so' | grep -c .) > 0 )); then
     die "libonnxruntime_providers_cuda.so is in the composed tree — 330 MB that must
        not ship. See Directory.Build.targets."
 fi

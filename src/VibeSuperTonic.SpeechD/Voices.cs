@@ -177,10 +177,12 @@ internal sealed class Voices
     /// </param>
     /// <param name="volume">speech-dispatcher's −100..100, as espeak's amplitude.</param>
     /// <param name="rateAdj">An SSML fragment's own rate adjustment, −10..10.</param>
-    internal Process StartEspeak(string text, string? language, int rate, int volume = 0, int rateAdj = 0)
+    /// <param name="echo">How a <c>CHAR</c> is said; the default is ordinary text.</param>
+    internal Process StartEspeak(
+        string text, string? language, int rate, int volume = 0, int rateAdj = 0, EspeakEcho echo = default)
     {
         var psi = Base(EspeakPath);
-        foreach (string argument in EspeakArguments(language, rate, volume, rateAdj))
+        foreach (string argument in EspeakArguments(language, rate, volume, rateAdj, echo))
             psi.ArgumentList.Add(argument);
         return Start(psi, text);
     }
@@ -190,7 +192,7 @@ internal sealed class Voices
     /// reason <see cref="NeuralArguments"/> is.
     /// </summary>
     internal IReadOnlyList<string> EspeakArguments(
-        string? language, int rate, int volume = 0, int rateAdj = 0)
+        string? language, int rate, int volume = 0, int rateAdj = 0, EspeakEcho echo = default)
     {
         var args = new List<string>
         {
@@ -214,6 +216,26 @@ internal sealed class Voices
             args.Add("-v");
             args.Add(language);
         }
+
+        // KEY ECHO (CHAR), 2026-11-09. Without --punct a comma is 13 KB of
+        // nothing and a full stop a bare header: espeak-ng says punctuation only
+        // when asked to, and says its name in the voice's own language ("comma",
+        // "Komma", "virgule"), measured against the shipped payload with -x.
+        if (echo.Punctuation) args.Add("--punct");
+
+        // -k is espeak-ng's own capital-letter switch: 1 a sound, 2 the word, in
+        // the voice's language ("capital", "groß", "majuscule"; measured). That
+        // is better than prefixing an English word, which a German voice would
+        // read with German phonemes.
+        if (echo.Capitals > 0)
+        {
+            args.Add("-k");
+            args.Add(echo.Capitals.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        // The text is SSML the module wrote itself (a <say-as> for whitespace);
+        // never set for text a client sent.
+        if (echo.Ssml) args.Add("-m");
 
         // The text on stdin, read WHOLE. Without --stdin espeak-ng also reads
         // stdin when it has no text argument, but line by line through a

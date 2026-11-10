@@ -485,7 +485,7 @@ if (( test_install )); then
             sleep 0.5
         done
         "${as_user[@]}" timeout 30 snap run vibesupertonic.ctl shutdown >/dev/null 2>&1 || true
-        [[ -n "$bus_pid" ]] && kill "$bus_pid" 2>/dev/null
+        [[ -n "$bus_pid" ]] && kill "$bus_pid" 2>/dev/null || true
         [[ "$tray" == registered* || "$tray" == *"nothing on the session bus implements"* ]] || die "the daemon's tray under confinement said: ${tray:-nothing}
        With a session bus and no tray host it should say that nothing implements
        the watcher. See unity7 in snapcraft.yaml.in."

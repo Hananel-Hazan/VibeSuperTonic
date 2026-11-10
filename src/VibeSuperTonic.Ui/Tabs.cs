@@ -203,10 +203,13 @@ public sealed class AboutTab : UserControl
                     lasts an afternoon and one that does not — unless you set GpuOnBattery.
                     The Status tab says which is in force and why.
 
-                    LICENCES. The program is MIT. The voice models are not part of it: they
-                    are downloaded from Hugging Face on first run and are distributed by
-                    Supertone, Inc. under the OpenRAIL-M licence, which you accepted on the
-                    first-run screen. See LICENSE-MODELS.txt beside the program.
+                    LICENCES. The program's own source is MIT. The Linux packages (since
+                    0.2.11) are GPL-3.0-or-later as a whole, because they include espeak-ng;
+                    see LICENSE-PHONEMIZER.txt. The Supertonic voice models are not part of
+                    the program: they are downloaded from Hugging Face on first run and are
+                    distributed by Supertone, Inc. under the OpenRAIL-M licence, which you
+                    accepted on the first-run screen (LICENSE-MODELS.txt). Each Piper voice
+                    carries its own licence, shown to you at download.
 
                     https://github.com/Hananel-Hazan/VibeSuperTonic
                     """))

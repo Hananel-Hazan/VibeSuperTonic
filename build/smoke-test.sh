@@ -9,7 +9,7 @@
 # a developer machine.
 #
 # ---------------------------------------------------------------------------
-# WHY THIS EXISTS, WHEN THE PACKER ALREADY HAS NINE ASSERTIONS.
+# WHY THIS EXISTS, WHEN THE PACKER ALREADY HAS ITS OWN ASSERTIONS (count: CLAUDE.md).
 #
 # Every one of those runs on the machine that packed the archive — a machine
 # with the .NET SDK, a display, PulseAudio, ICU, espeak-ng already installed,
