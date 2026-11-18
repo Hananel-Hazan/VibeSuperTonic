@@ -1,0 +1,4 @@
+Hello.
+Thank you.
+Open the door.
+Turn left here.
