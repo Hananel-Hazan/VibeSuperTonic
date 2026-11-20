@@ -248,9 +248,15 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
                     RedirectStandardError = true,
                     UseShellExecute = false,
                 };
+                // -noreset (2026-11-20): an X server resets when its last client
+                // leaves, and the probe below is that client. A connection that
+                // arrives during the reset fails with the server still running
+                // and nothing on its stderr: measured with Xvfb 21.1.22, 22 of
+                // 2,000 reconnects after a close failed without it, 0 of 2,000
+                // with it. That is what turned CI's linux job red that day.
                 foreach (string a in xwayland
-                             ? new[] { $":{n}", "-geometry", "64x64", "-nolisten", "tcp" }
-                             : new[] { $":{n}", "-screen", "0", "64x64x24", "-nolisten", "tcp" })
+                             ? new[] { $":{n}", "-geometry", "64x64", "-nolisten", "tcp", "-noreset" }
+                             : new[] { $":{n}", "-screen", "0", "64x64x24", "-nolisten", "tcp", "-noreset" })
                     psi.ArgumentList.Add(a);
 
                 var p = Process.Start(psi)!;
