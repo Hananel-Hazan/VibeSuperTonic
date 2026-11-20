@@ -716,6 +716,15 @@ namespace Supertonic
 
     public static class Helper
     {
+        /// <summary>
+        /// Where the SDK's progress lines go. Standard output by default, which is
+        /// what the Linux daemon and the spikes have always had. The Windows engine
+        /// replaces it before the first model load: loaded in-process by a SAPI
+        /// client, its standard output is the HOST's, and a console host streaming
+        /// audio there got these lines in the middle of it (review item 67).
+        /// </summary>
+        public static Action<string> Diagnostic { get; set; } = Console.WriteLine;
+
         // ============================================================================
         // Utility functions
         // ============================================================================
@@ -866,7 +875,7 @@ namespace Supertonic
 
             if (verbose)
             {
-                Console.WriteLine($"Loaded {bsz} voice styles");
+                Diagnostic($"Loaded {bsz} voice styles");
             }
 
             return new Style(ttlFlat, ttlShape, dpFlat, dpShape);
@@ -964,11 +973,11 @@ namespace Supertonic
                 {
                     opts.AppendExecutionProvider_DML(directMLDevice);
                     gpuActive = true;
-                    Console.WriteLine($"DirectML provider appended (device {directMLDevice})");
+                    Diagnostic($"DirectML provider appended (device {directMLDevice})");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"DirectML init failed, falling back to CPU: {ex.Message}");
+                    Diagnostic($"DirectML init failed, falling back to CPU: {ex.Message}");
                     // Continue without DML; opts has only the default CPU provider.
                 }
 #else
@@ -993,7 +1002,7 @@ namespace Supertonic
                 // branch and ignores the parameter.
                 if (appendGpuProvider is not null) appendGpuProvider(opts, directMLDevice);
                 else opts.AppendExecutionProvider_CUDA(directMLDevice);
-                Console.WriteLine($"GPU provider appended (device {directMLDevice})");
+                Diagnostic($"GPU provider appended (device {directMLDevice})");
 #endif
                 (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) = LoadOnnxAll(onnxDir, opts);
             }
@@ -1098,10 +1107,10 @@ namespace Supertonic
         public static T Timer<T>(string name, Func<T> func)
         {
             var start = DateTime.Now;
-            Console.WriteLine($"{name}...");
+            Diagnostic($"{name}...");
             var result = func();
             var elapsed = (DateTime.Now - start).TotalSeconds;
-            Console.WriteLine($"  -> {name} completed in {elapsed:F2} sec");
+            Diagnostic($"  -> {name} completed in {elapsed:F2} sec");
             return result;
         }
 

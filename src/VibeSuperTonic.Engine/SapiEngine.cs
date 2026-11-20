@@ -27,11 +27,18 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     private const int BytesPerSecond = SampleRate * BlockAlign;
     private const int ChunkBytes = 4096;
 
-    // Per-chunk synth wait budget. On CPU with totalStep=8 a 200-char chunk is
-    // 3-10 s; observed worst case on slow hardware ~15-20 s. 45 s is "the driver
-    // is wedged, not slow." Past this we force a session rebuild and surface
-    // E_FAIL instead of holding the COM thread.
-    private const int SynthHardTimeoutMs = 45_000;
+    // Per-chunk synth wait budget: "the driver is wedged, not slow." Past this we
+    // force a session rebuild and surface E_FAIL instead of holding the COM
+    // thread. Stop stays responsive throughout — the wait polls SPVES_ABORT.
+    //
+    // It has to outlast everything the adapter's own recovery may legitimately
+    // spend on one chunk: a GPU call its watchdog gives up on, a CPU session
+    // reload, and the CPU retry under the same watchdog. At 45 s it did not
+    // (30 + up to 20 for the reload): the ceiling fired while a working CPU
+    // retry was still running, threw it away, and its reset re-enabled the GPU
+    // the watchdog had just latched off (review item 34).
+    private const int SynthHardTimeoutMs =
+        2 * SupertonicAdapter.SynthCallWatchdogMs + SupertonicAdapter.CpuReloadBudgetMs + 5_000;
     // Grace window after we cancel speakCts so cancellation can propagate
     // through the totalStep loop in _Infer. One iteration is ~200 ms at
     // totalStep=8; give it ~3× that before we give up on graceful unwind.
@@ -61,6 +68,19 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     static SapiEngine()
     {
         Trace("static-ctor", "engine assembly loaded — kicking off background ONNX preload");
+        // The SDK's progress lines ("DirectML provider appended", "Loaded N voice
+        // styles") used to go to Console.Out — the HOST's stdout, which a console
+        // SAPI client may be streaming audio to (review item 67). They go to
+        // engine.log instead, and to stdout only inside a benchmark render,
+        // where the launcher's sweep reads the provider line from the helper.
+        // Set before the preload below, which is what prints them.
+        Supertonic.Helper.Diagnostic = msg =>
+        {
+            Trace("sdk", msg);
+            if (BenchSwitches.IsAuthorised(
+                    Environment.GetEnvironmentVariable(BenchSwitches.UnpacedVariable), Environment.ProcessId))
+                Console.WriteLine(msg);
+        };
         // Eager pre-warm. The DLL is loaded by SAPI well before any Speak; trigger model
         // load right now on a background thread so the first synthesis doesn't pay the
         // 2-5s ONNX load cost on top of its own 3-7s synth time.
@@ -228,18 +248,20 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             var globalSettings = EngineSettingsCache.Resolve();
             var resolved = globalSettings.ResolveFor(_voiceId);
             float volTrimLinear = (float)Math.Pow(10.0, Math.Clamp(resolved.VolumeTrimDb, -12f, 6f) / 20.0);
-            float volumeScale = Math.Clamp(siteVolumePct / 100f * volTrimLinear, 0f, 4f);
+            float SiteVolumeScale(ushort pct) => Math.Clamp(pct / 100f * volTrimLinear, 0f, 4f);
+            float volumeScale = SiteVolumeScale(siteVolumePct);
             uint interChunkSilenceMs = (uint)Math.Max(0, resolved.InterChunkSilenceMs);
 
             string defaultLang = SupertonicLanguages.Normalize(resolved.Language);
-            var planItems = BuildSpeakPlan(pTextFragList, defaultLang);
-            Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, plan: {planItems.Count} item(s)");
+            bool speakPunctuation = (dwSpeakFlags & SapiConstants.SPF_NLP_SPEAK_PUNC) != 0;
+            var planItems = BuildSpeakPlan(pTextFragList, defaultLang, speakPunctuation);
+            Trace("Speak", $"siteRate={siteRate}, voiceId={_voiceId}, lang={defaultLang}, volume={siteVolumePct}%×{volTrimLinear:F2}, totalStep={resolved.TotalStep}, engSpeed={resolved.EngineSpeed:F2}, dspRate={resolved.DspRate:F2}, punctuation={(speakPunctuation ? "all" : "default")}, plan: {planItems.Count} item(s)");
 
             // Telemetry: announce we're starting work. BeginUtterance first, so
             // the figures MarkIdle publishes at the end belong to THIS utterance
             // and cannot be the previous one's left in a latch.
             try { TelemetryWriter.BeginUtterance(); } catch { /* swallow */ }
-            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ""); }
+            try { TelemetryWriter.Update(true, _voiceId, "(starting)", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 1, 0, TelemetryThreads(resolved), 0, ""); }
             catch { /* swallow */ }
 
             if (planItems.Count == 0) return SapiConstants.S_OK;
@@ -280,7 +302,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         execPlan.Add(new SpeakChunkExec(
                             chunk.Text, speakItem.SourceCharOffset,
                             TextOffsetMap.Chain(chunk.Map, speakItem.Offsets),
-                            speakItem.RateAdj, speakItem.Lang));
+                            speakItem.RateAdj, speakItem.Lang,
+                            speakItem.Gain, speakItem.PitchFactor));
                     }
                 }
                 else
@@ -342,13 +365,11 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             // next chunk's synthesis.
             int nextSynthIdx = 1;
             var firstChunkExec = (SpeakChunkExec)execPlan[synthIndices[0]];
-            var (firstSynth, firstStretch) = ComputeSpeed(siteRate, firstChunkExec.RateAdj, resolved);
-            int totalStepResolved = resolved.TotalStep;
-            Task<short[]> currentSynth = Task.Run(() =>
-            {
-                var raw = adapter.Synthesize(firstChunkExec.Text, totalStep: totalStepResolved, speed: firstSynth, cancellationToken: speakToken, lang: firstChunkExec.Lang);
-                return TimeStretch.Stretch(raw, firstStretch, SampleRate);
-            }, speakToken);
+            Task<short[]> currentSynth = StartSynth(adapter, firstChunkExec, siteRate, resolved, speakToken);
+            // The site rate the in-flight synthesis was started at. SPVES_RATE can
+            // move siteRate while it runs; the result is then re-stretched to the
+            // new rate rather than played at the old one (review item 49).
+            int currentSynthRate = siteRate;
             var firstSynthStartMs = Environment.TickCount64;
             double rollingRtf = double.NaN;
 
@@ -357,6 +378,32 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             for (int i = 0; i < execPlan.Count; i++)
             {
                 uint actions = getActions(sitePtr);
+
+                // Rate and volume can change while a long passage is spoken — a
+                // screen reader's rate keys, a client's volume slider. SAPI raises
+                // these bits and expects the engine to re-read; until 0.3.0 both
+                // were read once per Speak and a change waited for the next one
+                // (review item 49). Read here, they take effect at the next chunk.
+                if ((actions & SapiConstants.SPVES_RATE) != 0)
+                {
+                    int newRate = siteRate;
+                    if (getRate(sitePtr, &newRate) >= 0 && newRate != siteRate)
+                    {
+                        Trace("Speak", $"rate {siteRate} → {newRate} before exec item {i}/{execPlan.Count}");
+                        siteRate = newRate;
+                    }
+                }
+                if ((actions & SapiConstants.SPVES_VOLUME) != 0)
+                {
+                    ushort newVolume = siteVolumePct;
+                    if (getVolume(sitePtr, &newVolume) >= 0 && newVolume != siteVolumePct)
+                    {
+                        Trace("Speak", $"volume {siteVolumePct}% → {newVolume}% before exec item {i}/{execPlan.Count}");
+                        siteVolumePct = newVolume;
+                        volumeScale = SiteVolumeScale(siteVolumePct);
+                    }
+                }
+
                 if ((actions & SapiConstants.SPVES_ABORT) != 0)
                 {
                     Trace("Speak", $"abort before exec item {i}/{execPlan.Count}");
@@ -372,7 +419,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                     if (getSkipInfo(sitePtr, &skipType, &skipCount) >= 0 && skipCount != 0)
                     {
                         int skipped = ApplySkip(execPlan, ref i, skipCount, ref nextSynthIdx, synthIndices,
-                            adapter, siteRate, ref currentSynth, resolved, speakToken);
+                            adapter, siteRate, ref currentSynth, ref currentSynthRate, resolved, speakToken);
                         Trace("Speak", $"skip {skipCount} requested, {skipped} applied (i={i})");
                         completeSkip(sitePtr, skipped);
                         continue; // re-evaluate from new i
@@ -433,12 +480,16 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 Log("Speak.SynthHang", new TimeoutException(
                                     $"Synth wait exceeded {SynthHardTimeoutMs} ms for '{hangPreview}' " +
                                     $"(first 60 with escapes: [{hangCodePoints}]). Forcing session rebuild."));
-                                try { SupertonicAdapter.RequestReset(); } catch { }
+                                // A rebuild, not RequestReset: that one also clears the
+                                // DirectML latch, and a hang is exactly the evidence the
+                                // latch records — clearing it here re-enabled the GPU the
+                                // watchdog had just turned off (review item 34).
+                                try { SupertonicAdapter.RequestSessionRebuild(); } catch { }
                                 try
                                 {
                                     TelemetryWriter.Update(false, _voiceId, "",
                                         resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                        0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0,
+                                        0, double.NaN, 0, 0, TelemetryThreads(resolved), 0,
                                         $"Synth hang > {SynthHardTimeoutMs / 1000}s — session reset queued");
                                 }
                                 catch { }
@@ -448,6 +499,11 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             pcm = currentSynth.Result; // safe: completed == true
                             synthEndMs = Environment.TickCount64;
                             chunksDone++;
+                            if (currentSynthRate != siteRate)
+                            {
+                                pcm = Restretch(pcm, currentSynthRate, siteRate, chunk.RateAdj, resolved);
+                                Trace("Speak", $"chunk {chunksDone} was synthesised at rate {currentSynthRate}; re-stretched to {siteRate}");
+                            }
                             var (s, st) = ComputeSpeed(siteRate, chunk.RateAdj, resolved);
                             // Rolling RTF over this chunk: synth time / produced audio time.
                             double audioSec = (double)pcm.Length / SampleRate;
@@ -465,7 +521,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                                 // file backend has no such limit.)
                                 TelemetryWriter.Update(true, _voiceId, chunk.Text ?? "",
                                     resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate,
-                                    firstByte, rollingRtf, 1, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, "");
+                                    firstByte, rollingRtf, 1, 0, TelemetryThreads(resolved), 0, "");
                             }
                             catch { /* swallow */ }
                         }
@@ -495,7 +551,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             Log("Speak.Synthesize",
                                 new Exception($"Failed chunk text (first 60 with escapes): [{codePoints}] " +
                                               $"| preview: \"{failPreview}\"", ex));
-                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, SupertonicAdapter.EffectiveIntraOpThreads, 0, ex.Message); } catch { }
+                            try { TelemetryWriter.Update(false, _voiceId, "", resolved.TotalStep, resolved.EngineSpeed, resolved.DspRate, 0, double.NaN, 0, 0, TelemetryThreads(resolved), 0, ex.Message); } catch { }
                             return SapiConstants.E_FAIL;
                         }
 
@@ -508,23 +564,22 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             && (getActions(sitePtr) & SapiConstants.SPVES_ABORT) == 0)
                         {
                             var nextChunkExec = (SpeakChunkExec)execPlan[synthIndices[nextSynthIdx]];
-                            var (nSynth, nStretch) = ComputeSpeed(siteRate, nextChunkExec.RateAdj, resolved);
-                            int nextTotalStep = resolved.TotalStep;
-                            currentSynth = Task.Run(() =>
-                            {
-                                var raw = adapter.Synthesize(nextChunkExec.Text, totalStep: nextTotalStep, speed: nSynth, cancellationToken: speakToken, lang: nextChunkExec.Lang);
-                                return TimeStretch.Stretch(raw, nStretch, SampleRate);
-                            }, speakToken);
+                            currentSynth = StartSynth(adapter, nextChunkExec, siteRate, resolved, speakToken);
+                            currentSynthRate = siteRate;
                             nextSynthIdx++;
                         }
 
-                        ApplyVolume(pcm, volumeScale);
+                        // Site volume × the fragment's own: SSML <prosody volume>,
+                        // SAPI <volume>, and <emph> (review item 50).
+                        ApplyVolume(pcm, volumeScale * chunk.Gain);
                         EmitSentenceBoundary(addEvents, sitePtr, chunk, pcm.Length, totalStreamBytes);
                         EmitWordBoundaries(addEvents, sitePtr, chunk, pcm.Length, totalStreamBytes);
 
-                        int hr = StreamPcm(pcm, sitePtr, getActions, write);
+                        // Count what was written, not what was meant to be: an
+                        // abort mid-chunk used to add the whole chunk (review item 35).
+                        int hr = StreamPcm(pcm, sitePtr, getActions, write, out ulong chunkWritten);
                         if (hr < 0) return hr;
-                        totalStreamBytes += (ulong)(pcm.Length * sizeof(short));
+                        totalStreamBytes += chunkWritten;
 
                         if (i + 1 < execPlan.Count && execPlan[i + 1] is SpeakChunkExec)
                             totalStreamBytes += WriteSilence(interChunkSilenceMs, volumeScale, sitePtr, getActions, write);
@@ -551,10 +606,18 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             // hardware-buffer cut lands in silence, not in the last word. SAPI may
             // signal "done" while the audio device's hardware buffer (100-300 ms
             // typical) hasn't fully physically output. Releasing the voice COM at
-            // that point can cut whatever's still in the buffer. 700 ms of silence
-            // gives even the laziest drivers headroom — any cut lands in the pad.
+            // that point can cut whatever's still in the buffer.
+            //
+            // Scaled to the utterance since 0.3.0 (review item 51). A fixed 700 ms,
+            // plus the 500 ms drain floor below, cost every menu item and every
+            // echoed keystroke 1.2 s after its audio — a screen reader's whole
+            // working vocabulary. TailSilenceMs on the Advanced tab overrides it.
             if (chunksDone > 0)
-                totalStreamBytes += WriteSilence(700, volumeScale, sitePtr, getActions, write);
+            {
+                uint padMs = TailPadMs(resolved.TailSilenceMs, totalStreamBytes);
+                Trace("Speak", $"tail pad {padMs}ms");
+                totalStreamBytes += WriteSilence(padMs, volumeScale, sitePtr, getActions, write);
+            }
 
             EmitEndOfStream(addEvents, sitePtr, totalStreamBytes);
 
@@ -579,12 +642,15 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 ? Environment.TickCount64 - _firstWriteTickMs
                 : 0;
             double drainMs = totalAudioMs - elapsedSinceFirstWriteMs + 150;
-            // Floor the drain at 500 ms so the audio device's hardware buffer has
-            // time to physically output samples even when our pacing kept SAPI's
-            // buffer thin. Without this floor, drainMs can drop to ~0 or even
-            // negative when our pacing is exactly aligned, but the device's own
-            // hardware buffer (100-300 ms) hasn't drained yet.
-            if (drainMs < 500) drainMs = 500;
+            // Floor the drain so the audio device's hardware buffer has time to
+            // physically output samples even when our pacing kept SAPI's buffer
+            // thin. Without this floor, drainMs can drop to ~0 or even negative
+            // when our pacing is exactly aligned, but the device's own hardware
+            // buffer (100-300 ms) hasn't drained yet. 250 ms since 0.3.0, down
+            // from 500: the tail pad above is written as audio, so it is already
+            // inside this wait's arithmetic, and pad + floor together still cover
+            // the 300 ms worst case.
+            if (drainMs < DrainFloorMs) drainMs = DrainFloorMs;
             // Cap, don't skip: a pathological drainMs >= 60000 used to skip the drain
             // entirely, letting SAPI cut trailing audio. Clamp to the ceiling instead.
             if (drainMs > 60000) drainMs = 60000;
@@ -643,7 +709,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         uint FragmentSourceOffset,
         TextOffsetMap Offsets,
         int RateAdj,
-        string Lang)
+        string Lang,
+        float Gain,
+        double PitchFactor)
     {
         /// <summary>Absolute offset in the client's text of a position within this chunk.</summary>
         public uint SourceOffsetAt(int indexInChunk) =>
@@ -698,7 +766,7 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// </summary>
     private static int ApplySkip(List<object> execPlan, ref int i, int skipCount,
         ref int nextSynthIdx, List<int> synthIndices, SupertonicAdapter adapter, int siteRate,
-        ref Task<short[]> currentSynth, EngineSettings resolved, CancellationToken speakToken)
+        ref Task<short[]> currentSynth, ref int currentSynthRate, EngineSettings resolved, CancellationToken speakToken)
     {
         int actuallySkipped = 0;
         int direction = Math.Sign(skipCount);
@@ -725,13 +793,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         if (currentSynthIdx < synthIndices.Count)
         {
             var nextExec = (SpeakChunkExec)execPlan[synthIndices[currentSynthIdx]];
-            var (nSynth, nStretch) = ComputeSpeed(siteRate, nextExec.RateAdj, resolved);
-            int totalStepLocal = resolved.TotalStep;
-            currentSynth = Task.Run(() =>
-            {
-                var raw = adapter.Synthesize(nextExec.Text, totalStep: totalStepLocal, speed: nSynth, cancellationToken: speakToken, lang: nextExec.Lang);
-                return TimeStretch.Stretch(raw, nStretch, SampleRate);
-            }, speakToken);
+            currentSynth = StartSynth(adapter, nextExec, siteRate, resolved, speakToken);
+            currentSynthRate = siteRate;
             nextSynthIdx = currentSynthIdx + 1;
             i = synthIndices[currentSynthIdx] - 1;
         }
@@ -777,6 +840,108 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         return (synthSpeed, stretchFactor);
     }
 
+    /// <summary>
+    /// Synthesise one chunk on a worker thread: the model at the speed it can
+    /// take, the DSP stretch for the rest, then the fragment's pitch. One place,
+    /// because the first chunk, every prefetch and a skip all start one, and
+    /// three copies of this lambda is how one of them missed a parameter.
+    /// </summary>
+    private static Task<short[]> StartSynth(SupertonicAdapter adapter, SpeakChunkExec chunk, int siteRate,
+        EngineSettings resolved, CancellationToken token)
+    {
+        var (synthSpeed, stretch) = ComputeSpeed(siteRate, chunk.RateAdj, resolved);
+        int totalStep = resolved.TotalStep;
+        // The Advanced tab's knob, which never reached the model before 0.3.0
+        // (review item 33). The model inserts it only where its own splitter cuts
+        // a chunk — above 300 characters — so it is heard only when Max chunk
+        // chars is raised past that.
+        float silenceSec = Math.Clamp(resolved.SynthesisSilenceSec, 0f, 2f);
+        return Task.Run(() =>
+        {
+            var raw = adapter.Synthesize(chunk.Text, totalStep: totalStep, speed: synthSpeed,
+                cancellationToken: token, lang: chunk.Lang, silenceSec: silenceSec);
+            var pcm = TimeStretch.Stretch(raw, stretch, SampleRate);
+            return ShiftPitch(pcm, chunk.PitchFactor);
+        }, token);
+    }
+
+    /// <summary>
+    /// A chunk rendered at <paramref name="fromRate"/>, played at
+    /// <paramref name="toRate"/>: the ratio of the two total speeds, applied as
+    /// one more pitch-preserving stretch. The model's part of the speed is
+    /// already baked in, so this is the only lever left once the audio exists.
+    /// </summary>
+    private static short[] Restretch(short[] pcm, int fromRate, int toRate, int fragRate, EngineSettings s)
+    {
+        var (fromSynth, fromStretch) = ComputeSpeed(fromRate, fragRate, s);
+        var (toSynth, toStretch) = ComputeSpeed(toRate, fragRate, s);
+        double from = fromSynth * fromStretch, to = toSynth * toStretch;
+        if (from <= 0 || to <= 0) return pcm;
+        return TimeStretch.Stretch(pcm, Math.Clamp(to / from, 0.5, 2.0), SampleRate);
+    }
+
+    /// <summary>
+    /// SAPI's pitch, <c>&lt;pitch middle&gt;</c> and SSML <c>&lt;prosody
+    /// pitch&gt;</c>, as a frequency ratio: resampling raises the pitch and
+    /// shortens the audio by the same factor, and the pitch-preserving stretch
+    /// then puts the duration back. Review item 50: it used to be dropped.
+    /// </summary>
+    private static short[] ShiftPitch(short[] pcm, double factor)
+    {
+        if (pcm.Length == 0 || Math.Abs(factor - 1.0) < 0.01) return pcm;
+        int n = (int)(pcm.Length / factor);
+        if (n < 2) return pcm;
+        var resampled = new short[n];
+        for (int i = 0; i < n; i++)
+        {
+            double src = i * factor;
+            int j = (int)src;
+            double frac = src - j;
+            int a = pcm[Math.Min(j, pcm.Length - 1)];
+            int b = pcm[Math.Min(j + 1, pcm.Length - 1)];
+            resampled[i] = (short)Math.Clamp(Math.Round(a + (b - a) * frac), short.MinValue, short.MaxValue);
+        }
+        var restored = TimeStretch.Stretch(resampled, 1.0 / factor, SampleRate);
+        // TimeStretch leaves audio too short for its pitch search untouched; such
+        // a fragment keeps the shifted pitch and the shorter duration, which for a
+        // syllable is the lesser of the two errors.
+        return restored;
+    }
+
+    // <emph>: the model has no emphasis input, so it is approximated the way a
+    // speaker does it — a little louder (+3 dB) and a little slower.
+    private const float EmphasisGain = 1.41f;
+    private const int EmphasisRateAdj = -1;
+
+    /// <summary>SAPI pitch units (−10…10) to a frequency ratio: ±10 is ±6 semitones.</summary>
+    private static double PitchFactorFor(int middleAdj) =>
+        Math.Pow(2.0, Math.Clamp(middleAdj, -10, 10) * 0.6 / 12.0);
+
+    /// <summary>
+    /// The silence appended after an utterance. A configured
+    /// <c>TailSilenceMs</c> of zero or more wins; otherwise a tenth of the
+    /// utterance, between 150 and 700 ms — a long passage keeps the old pad,
+    /// a one-word item stops paying it.
+    /// </summary>
+    private static uint TailPadMs(int configuredMs, ulong audioBytes)
+    {
+        if (configuredMs >= 0) return (uint)Math.Min(configuredMs, 2000);
+        double audioMs = audioBytes * 1000.0 / BytesPerSecond;
+        return (uint)Math.Clamp(audioMs / 10.0, 150.0, 700.0);
+    }
+
+    private const int DrainFloorMs = 250;
+
+    /// <summary>
+    /// The thread count telemetry reports: the live session's, or before there
+    /// is one the configured value, rather than the -1 that means "no session"
+    /// (review item 68: the first snapshot of every process said -1).
+    /// </summary>
+    private static int TelemetryThreads(EngineSettings resolved) =>
+        SupertonicAdapter.EffectiveIntraOpThreads >= 0
+            ? SupertonicAdapter.EffectiveIntraOpThreads
+            : Math.Max(0, resolved.OnnxThreads);
+
     private static void ApplyVolume(short[] pcm, float scale)
     {
         if (Math.Abs(scale - 1f) < 0.001f) return;
@@ -797,8 +962,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         if (samples <= 0) return 0;
         short[] silence = new short[samples];
         // (volumeScale doesn't matter for silence but kept symmetric with audio path)
-        StreamPcm(silence, sitePtr, getActions, write);
-        return (ulong)(samples * sizeof(short));
+        StreamPcm(silence, sitePtr, getActions, write, out ulong written);
+        return written;
     }
 
     private static unsafe void EmitSentenceBoundary(
@@ -859,7 +1024,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         fixed (SPEVENT* p = arr)
         {
             int hr = addEvents(sitePtr, p, (uint)arr.Length);
-            Trace("Speak", $"AddEvents(word x{arr.Length}) hr=0x{hr:X8} firstOffset={arr[0].ullAudioStreamOffset} pos={(int)arr[0].lParam} len={(int)arr[0].wParam}");
+            // Every offset, not just the first: the harness asserts they rise
+            // through the passage (review item 80), and this line is the one
+            // place a host-independent reading of them exists.
+            Trace("Speak", $"AddEvents(word x{arr.Length}) hr=0x{hr:X8} firstOffset={arr[0].ullAudioStreamOffset} pos={(int)arr[0].lParam} len={(int)arr[0].wParam} offsets={string.Join(',', arr.Select(e => e.ullAudioStreamOffset))}");
         }
     }
 
@@ -885,10 +1053,20 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
             wParam = (IntPtr)wInt,
             lParam = nameUtf16,
         };
-        int hr = addEvents(sitePtr, &ev, 1);
-        if (hr < 0) Trace("Speak", $"AddEvents(bookmark) hr=0x{hr:X8}");
-        // The lParam string is owned by SAPI after AddEvents returns; we don't free it here
-        // because SAPI will free it via CoTaskMemFree per the SPET_LPARAM_IS_STRING contract.
+        try
+        {
+            int hr = addEvents(sitePtr, &ev, 1);
+            if (hr < 0) Trace("Speak", $"AddEvents(bookmark) hr=0x{hr:X8}");
+        }
+        finally
+        {
+            // SAPI copies the string inside AddEvents — the SDK's sample engine
+            // passes stack memory — so it is ours to free. Until 0.3.0 this said
+            // SAPI took ownership, and every bookmark leaked its name: about
+            // 1.6 MB per 2,000 measured, for a reader that bookmarks each
+            // sentence all day (review item 30).
+            Marshal.FreeCoTaskMem(nameUtf16);
+        }
     }
 
     private static unsafe void EmitEndOfStream(
@@ -951,16 +1129,19 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// </summary>
     internal static volatile bool UnpacedActive;
 
+    /// <param name="bytesWritten">What actually reached SAPI, which after an abort
+    /// is less than <paramref name="pcm"/> holds.</param>
     private unsafe int StreamPcm(short[] pcm, IntPtr sitePtr,
         delegate* unmanaged[Stdcall]<IntPtr, uint> getActions,
-        delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint*, int> write)
+        delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint*, int> write,
+        out ulong bytesWritten)
     {
         int totalBytes = pcm.Length * sizeof(short);
+        int offset = 0;
         var handle = GCHandle.Alloc(pcm, GCHandleType.Pinned);
         try
         {
             IntPtr basePtr = handle.AddrOfPinnedObject();
-            int offset = 0;
             while (offset < totalBytes)
             {
                 if ((getActions(sitePtr) & SapiConstants.SPVES_ABORT) != 0)
@@ -1010,10 +1191,16 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                     }
                 }
             }
-            Trace("Speak", $"wrote {offset} of {totalBytes} bytes");
             return SapiConstants.S_OK;
         }
-        finally { handle.Free(); }
+        finally
+        {
+            handle.Free();
+            // Every exit, the abort-while-paced return included: the line is what
+            // the harness sums to check the byte total (review item 35).
+            bytesWritten = (ulong)offset;
+            Trace("Speak", $"wrote {offset} of {totalBytes} bytes");
+        }
     }
 
     /// <summary>
@@ -1024,7 +1211,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     private abstract record SpeakItem;
     /// <param name="SourceCharOffset">Where this fragment starts in the client's text.</param>
     /// <param name="Offsets">Maps an index in <paramref name="Text"/> (rewritten) back into the fragment's source text.</param>
-    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang, TextOffsetMap Offsets) : SpeakItem;
+    /// <param name="Gain">The fragment's own volume (SPVSTATE.Volume, emphasis) as a linear factor.</param>
+    /// <param name="PitchFactor">The fragment's pitch (SPVSTATE.PitchAdj.MiddleAdj) as a frequency ratio.</param>
+    private sealed record SpeakTextItem(string Text, uint SourceCharOffset, int RateAdj, string Lang, TextOffsetMap Offsets,
+        float Gain, double PitchFactor) : SpeakItem;
     private sealed record SpeakSilenceItem(uint Milliseconds) : SpeakItem;
     private sealed record SpeakBookmarkItem(string Name, uint SourceCharOffset) : SpeakItem;
 
@@ -1036,7 +1226,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     /// inside an English document is spoken by the German model without the user
     /// touching a setting.
     /// </summary>
-    private static List<SpeakItem> BuildSpeakPlan(IntPtr pTextFragList, string defaultLang)
+    /// <param name="speakPunctuation">The client passed <c>SPF_NLP_SPEAK_PUNC</c>.</param>
+    private static List<SpeakItem> BuildSpeakPlan(IntPtr pTextFragList, string defaultLang, bool speakPunctuation)
     {
         var items = new List<SpeakItem>();
         if (pTextFragList == IntPtr.Zero) return items;
@@ -1081,7 +1272,34 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             // to the user's configured language.
                             string fragLang = SupertonicLanguages.FromLcid(frag.State.LangID) ?? defaultLang;
                             Trace("BuildSpeakPlan", $"frag LangID=0x{frag.State.LangID:X4} → lang={fragLang}");
-                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, frag.State.RateAdj, fragLang, offsets));
+
+                            // Review item 48: both modes change what is said, so
+                            // they rewrite the spoken text, and their maps chain
+                            // onto the pipeline's so highlights still land on the
+                            // user's characters.
+                            if (frag.State.eAction == SPVACTIONS.SPVA_SpellOut)
+                            {
+                                spoken = SapiTextModes.SpellOut(spoken, fragLang, out var spellMap);
+                                offsets = TextOffsetMap.Chain(spellMap, offsets);
+                            }
+                            else if (speakPunctuation)
+                            {
+                                spoken = SapiTextModes.SpeakPunctuation(spoken, fragLang, out var puncMap);
+                                offsets = TextOffsetMap.Chain(puncMap, offsets);
+                            }
+
+                            // Review item 50: the fragment's own volume, pitch and
+                            // emphasis, which were never read. Volume 0 is taken as
+                            // "not set" rather than as silence: a host that sends
+                            // a zeroed state must not mute a screen reader, and
+                            // <volume level="0"> is the one markup that loses.
+                            uint vol = frag.State.Volume is 0 or > 100 ? 100u : frag.State.Volume;
+                            bool emphasis = frag.State.EmphAdj != 0;
+                            float gain = vol / 100f * (emphasis ? EmphasisGain : 1f);
+                            int rateAdj = frag.State.RateAdj + (emphasis ? EmphasisRateAdj : 0);
+                            double pitch = PitchFactorFor(frag.State.PitchAdj.MiddleAdj);
+                            Trace("BuildSpeakPlan", $"frag action={frag.State.eAction} volume={vol} pitch={frag.State.PitchAdj.MiddleAdj} emph={frag.State.EmphAdj} spoken=\"{Truncate(spoken, 200)}\"");
+                            items.Add(new SpeakTextItem(spoken, frag.ulTextSrcOffset, rateAdj, fragLang, offsets, gain, pitch));
                         }
                     }
                     break;

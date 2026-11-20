@@ -43,6 +43,10 @@ $zipPath = Join-Path $root "dist\VibeSuperTonic-$Version-win.zip"
 
 function Step($msg) { Write-Host ">>> $msg" -ForegroundColor Cyan }
 
+# A ZIP left by an earlier run must not survive a run that fails: an artifact
+# that exists is one somebody can ship, and this one would carry today's date.
+if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+
 # ------------------------------------------------------------------ build
 Step "Publishing Engine (x64) framework-dependent…"
 & dotnet publish "$root\src\VibeSuperTonic.Engine\VibeSuperTonic.Engine.csproj" `
@@ -160,10 +164,13 @@ runs the longer concurrency and recovery suite instead.
 Copy-Item "$root\README.md" "$staging\README.md"
 Copy-Item "$root\LICENSE"   "$staging\LICENSE.txt"
 
-# Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs against)
-if (Test-Path "$root\models-manifest.json") {
-    Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
+# Models manifest (paths + SHA-256 hashes the Control Panel verifies/repairs
+# against). Required: it used to be copied only if present, and a ZIP without it
+# is an install whose "Repair all" can never fetch a model (review item 53).
+if (-not (Test-Path "$root\models-manifest.json")) {
+    throw "models-manifest.json not found at $root — the Status tab fetches and verifies the models against it"
 }
+Copy-Item "$root\models-manifest.json" "$staging\models-manifest.json"
 
 # Benchmark sample text (Twenty Thousand Leagues excerpt — replaceable by user)
 if (Test-Path "$root\samples") {
@@ -224,8 +231,9 @@ Quick install
 -------------
 1. Install the runtimes above — or let the Control Panel do it in step 4.
 2. Run VibeSuperTonic.exe, open the Status tab and press "Repair all".
-3. Accept the UAC prompt (one-time — registers voice tokens to HKLM).
-   From a command prompt, VibeSuperTonic.exe --register does the same.
+3. Answer who should be able to use the voices (see below), then accept the
+   UAC prompt. It is needed either way: Windows keeps its list of voices for
+   the whole machine.
 4. The models will download (~380 MB) on first run.
 5. Open any SAPI client (Balabolka, NVDA, Narrator) — voices appear as
    VibeSuperTonic M1 .. F5.
@@ -233,13 +241,43 @@ Quick install
 If you install a runtime after step 2, press "Repair all" on the Status
 tab again so the newly usable bitness gets registered.
 
-Move folder anywhere. Run VibeSuperTonic.exe at the new location and press
-"Repair all" to update the registry — no admin needed for moves.
+Only you, or every account on this PC
+-------------------------------------
+"Repair all" asks once. The default is only you.
 
-Uninstall:  VibeSuperTonic.exe --unregister  (UAC to clean HKLM)
+  Only you      The voices work in your account. Other accounts on this PC,
+                and the sign-in screen's Narrator, still LIST the voices —
+                that list is machine-wide — but get silence when they pick one.
+                From a command prompt:  VibeSuperTonic.exe --register
+
+  All users     The voices work in every account. Needs administrator rights,
+                and this folder must be somewhere every account can read —
+                for example C:\VibeSuperTonic, not your Desktop, Documents or
+                Downloads, which other accounts cannot open.
+                From a command prompt:  VibeSuperTonic.exe --register --all-users
+
+To change it later, run the other command; --register --this-user goes back
+to only you. The Status tab's "Registered for" row says which one is in force.
+
+Move folder anywhere. Run VibeSuperTonic.exe at the new location and press
+"Repair all" to update the registry. A move needs administrator rights only
+for an all-users install.
+
+From a command prompt, VibeSuperTonic.exe is a windowed program: cmd does not
+wait for it or show its exit code. Use  start /wait VibeSuperTonic.exe --sweep
+and then  echo %errorlevel%  — or in PowerShell
+(Start-Process VibeSuperTonic.exe --sweep -Wait -PassThru).ExitCode
+
+Uninstall:  VibeSuperTonic.exe --unregister  (UAC to clean HKLM; both scopes)
 
 See README.md for full documentation.
 "@ | Out-File "$staging\INSTALL.txt" -Encoding utf8
+
+# ----------------------------------------------------------------- check
+# Before the archive exists, so a failed check leaves no ZIP behind. Each
+# assertion is explained, and was sabotaged once, in check-zip-tree.ps1.
+Step "Checking the composed tree…"
+& "$PSScriptRoot\check-zip-tree.ps1" -Tree $staging -Version $Version
 
 # ----------------------------------------------------------------- zip
 Step "Creating $zipPath…"

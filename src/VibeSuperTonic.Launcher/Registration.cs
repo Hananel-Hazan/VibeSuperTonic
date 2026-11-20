@@ -6,6 +6,20 @@ using VibeSuperTonic.Core.Synthesis;
 namespace VibeSuperTonic.Launcher;
 
 /// <summary>
+/// Who can use the voices once registered. Review item 11, decided 2026-11-09:
+/// the installer asks, and the default is the user who runs it.
+///
+/// <para>The voice tokens are in HKLM either way. Measured 2026-11-20 on
+/// Windows 10 LTSC 2021: a token copied to HKCU\…\Speech\Voices\Tokens is
+/// listed by neither SpVoice (x64, x86) nor System.Speech, so a voice that is
+/// visible at all is visible to every account. What the scope decides is where
+/// the engine's COM class and BaseDir go: HKCU for this user, HKLM as well for
+/// all users — and an account that finds the voice but not the class gets a
+/// voice that is listed and silent.</para>
+/// </summary>
+internal enum RegistrationScope { CurrentUser, AllUsers }
+
+/// <summary>
 /// All Windows registry / SAPI registration logic. Extracted from the original
 /// Program.cs so both CLI flags (--register, --unregister) and the GUI Status
 /// tab's "Repair" button call the same code.
@@ -97,10 +111,35 @@ internal static class Registration
     }
 
     /// <summary>
-    /// Performs a full register pass. Returns 0 on success.
-    /// If HKLM tokens need refresh and we are not elevated, relaunches elevated.
+    /// How the window asks "this user or all users". Set by the Control Panel;
+    /// null on the command line, where <c>--all-users</c> and <c>--this-user</c>
+    /// say it instead. Returns null when the user cancels.
     /// </summary>
-    public static int Register(Action<string>? log = null, bool elevatedChild = false)
+    public static Func<RegistrationScope?>? AskScope { get; set; }
+
+    /// <summary>
+    /// The scope already on this machine: all users when the engine class is in
+    /// HKLM, this user when it is only in HKCU, null when it is in neither.
+    /// </summary>
+    public static RegistrationScope? RegisteredScope()
+    {
+        if (HklmClsidExists()) return RegistrationScope.AllUsers;
+        using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+        using var k = baseKey.OpenSubKey($@"SOFTWARE\Classes\CLSID\{Voices.EngineClsid}");
+        return k is null ? null : RegistrationScope.CurrentUser;
+    }
+
+    /// <summary>
+    /// Performs a full register pass. Returns 0 on success, 5 when the user
+    /// declined the UAC prompt or the scope question.
+    ///
+    /// <para><paramref name="scope"/> null keeps the scope already registered,
+    /// and when there is none asks through <see cref="AskScope"/> — or, with no
+    /// one to ask, takes this user. Elevation is needed for the HKLM voice
+    /// tokens (either scope) and for the HKLM class (all users); this relaunches
+    /// elevated for whichever is out of date.</para>
+    /// </summary>
+    public static int Register(Action<string>? log = null, bool elevatedChild = false, RegistrationScope? scope = null)
     {
         log ??= _ => { };
         var s = Inspect();
@@ -110,23 +149,71 @@ internal static class Registration
             return 2;
         }
 
+        if (scope is null)
+        {
+            scope = RegisteredScope();
+            if (scope is null && !elevatedChild && AskScope is not null)
+            {
+                scope = AskScope();
+                if (scope is null) { log("Registration cancelled."); return 5; }
+            }
+            scope ??= RegistrationScope.CurrentUser;
+        }
+        bool allUsers = scope == RegistrationScope.AllUsers;
+        string scopeFlag = allUsers ? "--all-users" : "--this-user";
+
+        bool hklmClassCurrent = HklmClassCurrent(s);
+        // HKLM work: the tokens, always; the class, to write it (all users) or to
+        // take it away (this user, after an all-users install).
+        bool needHklm = !s.TokensComplete || (allUsers ? !hklmClassCurrent : HklmClsidExists());
+        if (needHklm && !IsElevated())
+        {
+            log(allUsers
+                ? "Registering for all users needs administrator rights — relaunching elevated (UAC)..."
+                : !s.TokensComplete
+                    ? "HKLM voice tokens need refresh — relaunching elevated (UAC)..."
+                    : "Removing the all-users registration needs administrator rights — relaunching elevated (UAC)...");
+            return RelaunchElevated("--register", scopeFlag, "--elevated");
+        }
+
         if (!s.TokensComplete)
         {
-            if (!IsElevated())
-            {
-                log("HKLM voice tokens need refresh — relaunching elevated (UAC)...");
-                return RelaunchElevated("--register", "--elevated");
-            }
             CleanLegacyTokens();
             WriteAllVoiceTokens(s.BaseDir, includeX86: s.X86Available);
             log($"Wrote {Voices.All.Length} voice tokens to HKLM (SAPI5+OneCore, x86 mirror: {(s.X86Available ? "yes" : "skipped")}).");
         }
 
-        WriteHkcuClsid(RegistryView.Registry64, s.X64ComHostPath);
-        if (s.X86Available) WriteHkcuClsid(RegistryView.Registry32, s.X86ComHostPath);
+        if (allUsers)
+        {
+            WriteClsid(RegistryHive.LocalMachine, RegistryView.Registry64, s.X64ComHostPath);
+            if (s.X86Available) WriteClsid(RegistryHive.LocalMachine, RegistryView.Registry32, s.X86ComHostPath);
+            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                using var k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view)
+                    .CreateSubKey(@"SOFTWARE\VibeSuperTonic", writable: true);
+                k.SetValue("BaseDir", s.BaseDir, RegistryValueKind.String);
+            }
+            log($"Engine class and BaseDir written to HKLM: every account on this PC can use the voices.");
+            string profiles = Path.GetDirectoryName(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) ?? "";
+            if (profiles.Length > 0 && s.BaseDir.StartsWith(profiles + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                log($"WARNING: {s.BaseDir} is inside a user profile, which other accounts");
+                log("         usually cannot read. Their voices will be listed and silent.");
+                log("         Move the folder somewhere every account can read (for example");
+                log("         C:\\VibeSuperTonic), run VibeSuperTonic.exe there, and Repair all.");
+            }
+        }
+        else if (HklmClsidExists())
+        {
+            RemoveHklmClass();
+            log("Removed the all-users engine class from HKLM: only this account can use the voices now.");
+        }
+
+        WriteClsid(RegistryHive.CurrentUser, RegistryView.Registry64, s.X64ComHostPath);
+        if (s.X86Available) WriteClsid(RegistryHive.CurrentUser, RegistryView.Registry32, s.X86ComHostPath);
         WriteHkcuSettings(s.BaseDir);
 
-        log($"VibeSuperTonic registered ({Voices.All.Length} voices).");
+        log($"VibeSuperTonic registered ({Voices.All.Length} voices) for {(allUsers ? "all users" : "this user only")}.");
         log($"  HKCU CLSID x64 : {s.X64ComHostPath}");
         log($"  HKCU CLSID x86 : {(s.X86Available ? s.X86ComHostPath : "(skipped)")}");
         log($"  HKCU BaseDir   : {s.BaseDir}");
@@ -155,12 +242,17 @@ internal static class Registration
         DeleteSubKeyTree(RegistryHive.CurrentUser, RegistryView.Default, @"SOFTWARE\VibeSuperTonic");
         log("Removed HKCU entries.");
 
-        if (AnyHklmTokenExists())
+        if (AnyHklmTokenExists() || HklmClsidExists())
         {
             if (!IsElevated())
             {
                 log("HKLM tokens present; relaunching elevated...");
                 return RelaunchElevated("--unregister", "--elevated");
+            }
+            if (HklmClsidExists())
+            {
+                RemoveHklmClass();
+                log("Removed the all-users engine class and BaseDir from HKLM.");
             }
             foreach (var token in Voices.AllTokenNames())
                 foreach (var root in Voices.VoiceTokenRoots)
@@ -305,9 +397,49 @@ internal static class Registration
         }
     }
 
-    private static void WriteHkcuClsid(RegistryView view, string dllPath)
+    public static bool HklmClsidExists()
     {
-        using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, view);
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+            using var k = baseKey.OpenSubKey($@"SOFTWARE\Classes\CLSID\{Voices.EngineClsid}");
+            if (k is not null) return true;
+        }
+        return false;
+    }
+
+    /// <summary>The HKLM class points at this folder's engines, and HKLM's BaseDir is this folder.</summary>
+    private static bool HklmClassCurrent(State s)
+    {
+        bool Matches(RegistryView view, string dll)
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+            using var k = baseKey.OpenSubKey($@"SOFTWARE\Classes\CLSID\{Voices.EngineClsid}\InprocServer32");
+            return string.Equals(k?.GetValue(null) as string, dll, StringComparison.OrdinalIgnoreCase);
+        }
+        bool BaseDirMatches(RegistryView view)
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+            using var k = baseKey.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
+            return string.Equals(k?.GetValue("BaseDir") as string, s.BaseDir, StringComparison.OrdinalIgnoreCase);
+        }
+        return Matches(RegistryView.Registry64, s.X64ComHostPath)
+            && (!s.X86Available || Matches(RegistryView.Registry32, s.X86ComHostPath))
+            && BaseDirMatches(RegistryView.Registry64) && BaseDirMatches(RegistryView.Registry32);
+    }
+
+    private static void RemoveHklmClass()
+    {
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            DeleteSubKeyTree(RegistryHive.LocalMachine, view, $@"SOFTWARE\Classes\CLSID\{Voices.EngineClsid}");
+            DeleteSubKeyTree(RegistryHive.LocalMachine, view, @"SOFTWARE\VibeSuperTonic");
+        }
+    }
+
+    private static void WriteClsid(RegistryHive hive, RegistryView view, string dllPath)
+    {
+        using var baseKey = RegistryKey.OpenBaseKey(hive, view);
         using var clsidKey = baseKey.CreateSubKey($@"SOFTWARE\Classes\CLSID\{Voices.EngineClsid}", writable: true);
         clsidKey.SetValue(null, "VibeSuperTonic SAPI Engine", RegistryValueKind.String);
         using var inprocKey = clsidKey.CreateSubKey("InprocServer32", writable: true);

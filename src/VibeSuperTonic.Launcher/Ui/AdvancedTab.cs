@@ -7,7 +7,7 @@ namespace VibeSuperTonic.Launcher.Ui;
 internal sealed class AdvancedTab : UserControl
 {
     private readonly NumericUpDown _maxChunk, _minChunk, _interChunkSilence, _onnxThreads, _onnxInterOpThreads;
-    private readonly NumericUpDown _synthSilence, _rateClamp;
+    private readonly NumericUpDown _synthSilence, _rateClamp, _tailSilence;
     private readonly CheckBox _useDirectML;
     private readonly CheckBox _gpuOnBattery;
     private readonly Button _save, _reset;
@@ -35,7 +35,8 @@ internal sealed class AdvancedTab : UserControl
         _interChunkSilence = AddNumeric(grid, row++, "Inter-chunk silence (ms)",  0,  500, 10,
             "Audible pause between streamed chunks. Lower = tighter playback, higher = more breathing room.");
         _synthSilence      = AddNumeric(grid, row++, "Synthesis silence (s)",     0,  10,  1,
-            "Silence the model itself inserts between sub-chunks before they're streamed.");
+            "Silence the model itself inserts where it splits a chunk. It splits only chunks longer " +
+            "than 300 characters, so this is heard only with Max chunk chars above 300.");
         _synthSilence.DecimalPlaces = 1; _synthSilence.Increment = 0.1m; _synthSilence.Maximum = 1.0m; _synthSilence.Minimum = 0;
         _rateClamp         = AddNumeric(grid, row++, "Rate clamp ceiling",        11, 15, 1,
             "Hard upper limit on the speed sent to the model. Above ~1.34× the model starts dropping syllables.");
@@ -52,6 +53,11 @@ internal sealed class AdvancedTab : UserControl
             "that shape, which is why there is a button that measures yours.");
         _onnxInterOpThreads = AddNumeric(grid, row++, "ONNX inter-op threads",   1,  16, 1,
             "Threads ORT uses across ops. We run one model at a time, so 1 is correct for almost everyone. Raising it adds scheduler overhead with no benefit for our pipeline.");
+        _tailSilence       = AddNumeric(grid, row++, "Tail silence (ms, -1 = auto)", -1, 2000, 10,
+            "Silence written after each utterance so the sound card's buffer finishes in silence " +
+            "rather than in the last word.\n\n" +
+            "-1 scales it to the utterance: a tenth of its length, between 150 and 700 ms. " +
+            "Raise it if a reader clips the end of short items; lower it for snappier key echo.");
 
         // GPU toggle row — adapter picker removed because DirectML's device_id
         // mapping doesn't reliably match any DXGI enumeration on all systems.
@@ -358,6 +364,7 @@ internal sealed class AdvancedTab : UserControl
         _rateClamp.Value         = (decimal)Math.Clamp(s.RateClampCeiling, 1.10f, 1.50f);
         _onnxThreads.Value       = Clamp(s.OnnxThreads, _onnxThreads);
         _onnxInterOpThreads.Value = Clamp(s.OnnxInterOpThreads, _onnxInterOpThreads);
+        _tailSilence.Value       = Clamp(s.TailSilenceMs < 0 ? -1 : s.TailSilenceMs, _tailSilence);
         _useDirectML.Checked     = s.UseDirectML;
         _gpuOnBattery.Checked    = s.GpuOnBattery;
         _dataDirOverride.Text    = DataPaths.RawDataDirOverride ?? "";
@@ -376,6 +383,7 @@ internal sealed class AdvancedTab : UserControl
         s.RateClampCeiling    = (float)_rateClamp.Value;
         s.OnnxThreads         = (int)_onnxThreads.Value;
         s.OnnxInterOpThreads  = (int)_onnxInterOpThreads.Value;
+        s.TailSilenceMs       = (int)_tailSilence.Value;
         s.UseDirectML         = _useDirectML.Checked;
         s.GpuOnBattery        = _gpuOnBattery.Checked;
         // DirectMLDeviceId left as-is in registry; user controls GPU selection

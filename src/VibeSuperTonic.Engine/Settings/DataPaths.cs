@@ -35,19 +35,28 @@ internal static class DataPaths
     /// relative DataDir paths and as the default location of the data folder.
     /// In a portable install this is the program directory.
     /// </summary>
-    public static string BaseDir
+    public static string BaseDir => RegisteredBaseDir() ?? AppContext.BaseDirectory.TrimEnd('\\');
+
+    /// <summary>
+    /// The install folder the registration recorded: this user's first, then the
+    /// machine's. An all-users registration writes HKLM, which is the only place
+    /// another account — or the sign-in screen's Narrator — can find it
+    /// (review item 11). HKLM is read through the process's own view, so a
+    /// 32-bit host reads WOW6432Node, which the launcher writes too.
+    /// </summary>
+    public static string? RegisteredBaseDir()
     {
-        get
+        foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
         {
             try
             {
-                using var k = Registry.CurrentUser.OpenSubKey(RegRoot);
+                using var k = hive.OpenSubKey(RegRoot);
                 if (k?.GetValue("BaseDir") is string s && !string.IsNullOrWhiteSpace(s) && Directory.Exists(s))
                     return s.TrimEnd('\\');
             }
             catch { }
-            return AppContext.BaseDirectory.TrimEnd('\\');
         }
+        return null;
     }
 
     /// <summary>

@@ -49,7 +49,13 @@ internal sealed class EngineSettings
     /// </summary>
     public bool   GpuOnBattery        { get; set; } = false;
     public int    DirectMLDeviceId    { get; set; } = 0;
-    public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
+    /// <summary>
+    /// Silence appended after each utterance, in ms. Negative (the default)
+    /// scales it to the utterance, 150–700 ms; see <c>SapiEngine.TailPadMs</c>.
+    /// Global only. Review item 51.
+    /// </summary>
+    public int    TailSilenceMs       { get; set; } = -1;
+    public Dictionary<string, VoiceOverride> PerVoice { get; set; } = new();
 
     /// <summary>
     /// Keys this build does not know about, carried through a read/write cycle
@@ -81,15 +87,60 @@ internal sealed class EngineSettings
             DspRate             = pv.DspRate > 0 ? pv.DspRate : DspRate,
             DefaultVoice        = pv.DefaultVoice ?? DefaultVoice,
             VolumeTrimDb        = pv.VolumeTrimDb,
-            MaxChunkChars       = pv.MaxChunkChars > 0 ? pv.MaxChunkChars : MaxChunkChars,
-            MinChunkChars       = pv.MinChunkChars > 0 ? pv.MinChunkChars : MinChunkChars,
-            InterChunkSilenceMs = pv.InterChunkSilenceMs >= 0 ? pv.InterChunkSilenceMs : InterChunkSilenceMs,
-            SynthesisSilenceSec = pv.SynthesisSilenceSec >= 0 ? pv.SynthesisSilenceSec : SynthesisSilenceSec,
-            RateClampCeiling    = pv.RateClampCeiling > 0 ? pv.RateClampCeiling : RateClampCeiling,
-            OnnxThreads         = pv.OnnxThreads,
-            OnnxInterOpThreads  = pv.OnnxInterOpThreads > 0 ? pv.OnnxInterOpThreads : OnnxInterOpThreads,
+            // Tier B: the voice's value only when it names one. A voice entry
+            // used to be a whole EngineSettings, whose initialisers supplied
+            // MaxChunkChars = 200 for a key the file did not have — so every
+            // voice with a Tune-tab preset pinned the Advanced tab's knobs to
+            // their defaults (review item 32).
+            MaxChunkChars       = pv.MaxChunkChars is > 0 and var mx ? mx : MaxChunkChars,
+            MinChunkChars       = pv.MinChunkChars is > 0 and var mn ? mn : MinChunkChars,
+            InterChunkSilenceMs = pv.InterChunkSilenceMs is >= 0 and var ic ? ic : InterChunkSilenceMs,
+            SynthesisSilenceSec = pv.SynthesisSilenceSec is >= 0 and var ss ? ss : SynthesisSilenceSec,
+            RateClampCeiling    = pv.RateClampCeiling is > 0 and var rc ? rc : RateClampCeiling,
+            OnnxThreads         = pv.OnnxThreads ?? OnnxThreads,
+            OnnxInterOpThreads  = pv.OnnxInterOpThreads is > 0 and var io ? io : OnnxInterOpThreads,
+            TailSilenceMs       = TailSilenceMs,
         };
     }
+}
+
+/// <summary>
+/// One voice's entry under <c>PerVoice</c>. The Tune-tab (Tier A) knobs keep
+/// the shapes they always had; the Advanced-tab (Tier B) knobs are nullable,
+/// because a voice that does not name one has not chosen one, and a value type
+/// cannot say so. The launcher writes the same shape.
+/// </summary>
+internal sealed class VoiceOverride
+{
+    public int     TotalStep           { get; set; }
+    public string? Language            { get; set; }
+    public float   EngineSpeed         { get; set; }
+    public float   DspRate             { get; set; }
+    public string? DefaultVoice        { get; set; }
+    public float   VolumeTrimDb        { get; set; }
+
+    public int?    MaxChunkChars       { get; set; }
+    public int?    MinChunkChars       { get; set; }
+    public int?    InterChunkSilenceMs { get; set; }
+    public float?  SynthesisSilenceSec { get; set; }
+    public float?  RateClampCeiling    { get; set; }
+    public int?    OnnxThreads         { get; set; }
+    public int?    OnnxInterOpThreads  { get; set; }
+
+    /// <summary>Carried through unchanged; see <see cref="EngineSettings.Extra"/>.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    /// <summary>
+    /// A pre-portable registry entry. Its Tier B values are dropped: the Tune
+    /// tab that wrote them copied the globals into every voice, so they record
+    /// nothing the user chose for that voice.
+    /// </summary>
+    public static VoiceOverride FromLegacy(EngineSettings s) => new()
+    {
+        TotalStep = s.TotalStep, Language = s.Language, EngineSpeed = s.EngineSpeed,
+        DspRate = s.DspRate, DefaultVoice = s.DefaultVoice, VolumeTrimDb = s.VolumeTrimDb,
+    };
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
@@ -132,27 +183,43 @@ internal static class EngineSettingsCache
         lock (_gate)
         {
             if (_everLoaded && _cachedMtimeTicks == mtimeTicks) return _cached;
-            _cached = LoadFromFileOrLegacyRegistry(path);
+            var loaded = TryLoadFile(path);
+            if (loaded is null && _everLoaded && _loadedFromFile)
+            {
+                // A file this process read successfully is now missing or
+                // unreadable: half-written, hand-edited into invalid JSON, or
+                // briefly absent while a writer replaces it. Keep the settings in
+                // force rather than dropping every voice to the built-in defaults
+                // mid-session (review item 66). The mtime is remembered so the
+                // broken file is not re-parsed on every Speak; the next write
+                // moves it and is read normally.
+                _cachedMtimeTicks = mtimeTicks;
+                return _cached;
+            }
+            _cached = loaded ?? ReadFromLegacyRegistry();
+            _loadedFromFile = loaded is not null;
             _cachedMtimeTicks = mtimeTicks;
             _everLoaded = true;
             return _cached;
         }
     }
 
-    private static EngineSettings LoadFromFileOrLegacyRegistry(string path)
+    /// <summary>Whether <see cref="_cached"/> came from settings.json rather than the legacy registry or defaults.</summary>
+    private static bool _loadedFromFile;
+
+    /// <summary>The parsed file, or null when it is absent or does not parse.</summary>
+    private static EngineSettings? TryLoadFile(string path)
     {
-        if (File.Exists(path))
+        if (!File.Exists(path)) return null;
+        try
         {
-            try
-            {
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                var parsed = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
-                if (parsed is not null) return parsed;
-            }
-            catch { /* fall through to registry fallback */ }
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            var parsed = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
+            if (parsed is not null) return parsed;
         }
-        return ReadFromLegacyRegistry();
+        catch { /* treated as absent */ }
+        return null;
     }
 
     /// <summary>
@@ -178,7 +245,7 @@ internal static class EngineSettingsCache
                     if (voiceKey is null) continue;
                     var perVoice = new EngineSettings();
                     ReadInto(perVoice, voiceKey);
-                    s.PerVoice[name] = perVoice;
+                    s.PerVoice[name] = VoiceOverride.FromLegacy(perVoice);
                 }
             }
         }

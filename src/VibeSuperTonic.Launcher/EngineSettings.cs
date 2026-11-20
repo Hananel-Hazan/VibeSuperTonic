@@ -44,6 +44,11 @@ internal sealed class EngineSettings
     /// </summary>
     public bool GpuOnBattery { get; set; } = false;
     public int DirectMLDeviceId { get; set; } = 0;
+    /// <summary>
+    /// Silence after each utterance, in ms; negative scales it to the utterance
+    /// (150–700 ms). Global only. Same key as the engine's.
+    /// </summary>
+    public int TailSilenceMs { get; set; } = -1;
 
     /// <summary>
     /// Schema version of the on-disk format. Bumped when fields are added or
@@ -52,7 +57,7 @@ internal sealed class EngineSettings
     /// </summary>
     public int SchemaVersion { get; set; } = 0;
 
-    public Dictionary<string, EngineSettings> PerVoice { get; set; } = new();
+    public Dictionary<string, VoiceOverride> PerVoice { get; set; } = new();
 
     /// <summary>
     /// Keys this build does not know about, carried through a read/write cycle
@@ -97,6 +102,75 @@ internal sealed class EngineSettings
     }
 }
 
+/// <summary>
+/// One voice's entry under <c>PerVoice</c>: the Tune-tab (Tier A) knobs, and
+/// the Advanced-tab (Tier B) knobs as nullable values that are absent unless
+/// something set them for this voice.
+///
+/// <para>Until 0.3.0 an entry was a whole <see cref="EngineSettings"/>, and the
+/// Tune tab filled its Tier B fields with copies of the globals. The engine
+/// prefers a voice's value whenever there is one, so every voice with a preset
+/// pinned the Advanced tab's knobs at whatever they were when the preset was
+/// saved: raising Max chunk chars changed nothing for F1, with nothing on screen
+/// to say so (review item 32). Nothing in the window sets Tier B per voice; a
+/// hand-edited file still can, and the engine honours it.</para>
+/// </summary>
+internal sealed class VoiceOverride
+{
+    public QualityPreset Preset { get; set; } = QualityPreset.Balanced;
+    public int TotalStep { get; set; } = 6;
+    public float EngineSpeed { get; set; } = 1.05f;
+    public float DspRate { get; set; } = 1.0f;
+    public string DefaultVoice { get; set; } = "M1";
+    public string Language { get; set; } = SupertonicLanguages.Default;
+    public float VolumeTrimDb { get; set; } = 0f;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? MaxChunkChars { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? MinChunkChars { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? InterChunkSilenceMs { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public float? SynthesisSilenceSec { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public float? RateClampCeiling { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? OnnxThreads { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? OnnxInterOpThreads { get; set; }
+
+    /// <summary>Carried through unchanged; see <see cref="EngineSettings.Extra"/>.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    /// <summary>The Tier A knobs of <paramref name="s"/>, and no Tier B at all.</summary>
+    public static VoiceOverride FromTierA(EngineSettings s) => new()
+    {
+        Preset = s.Preset, TotalStep = s.TotalStep, EngineSpeed = s.EngineSpeed, DspRate = s.DspRate,
+        DefaultVoice = s.DefaultVoice, Language = s.Language, VolumeTrimDb = s.VolumeTrimDb,
+    };
+
+    /// <summary>
+    /// What this voice resolves to: <paramref name="global"/> with this entry's
+    /// knobs on top — the shape the Tune tab shows and edits.
+    /// </summary>
+    public EngineSettings Over(EngineSettings global)
+    {
+        var s = global.Clone();
+        s.Preset = Preset; s.TotalStep = TotalStep; s.EngineSpeed = EngineSpeed; s.DspRate = DspRate;
+        s.DefaultVoice = DefaultVoice; s.Language = Language; s.VolumeTrimDb = VolumeTrimDb;
+        if (MaxChunkChars is { } mx) s.MaxChunkChars = mx;
+        if (MinChunkChars is { } mn) s.MinChunkChars = mn;
+        if (InterChunkSilenceMs is { } ic) s.InterChunkSilenceMs = ic;
+        if (SynthesisSilenceSec is { } ss) s.SynthesisSilenceSec = ss;
+        if (RateClampCeiling is { } rc) s.RateClampCeiling = rc;
+        if (OnnxThreads is { } ot) s.OnnxThreads = ot;
+        if (OnnxInterOpThreads is { } io) s.OnnxInterOpThreads = io;
+        return s;
+    }
+
+    public VoiceOverride Clone()
+    {
+        var c = (VoiceOverride)MemberwiseClone();
+        c.Extra = Extra is null ? null : new Dictionary<string, JsonElement>(Extra);
+        return c;
+    }
+}
+
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
 [JsonSerializable(typeof(EngineSettings))]
 internal partial class EngineSettingsJsonContext : JsonSerializerContext { }
@@ -111,7 +185,7 @@ internal static class EngineSettingsRegistry
     private const string LegacyRegRoot = @"SOFTWARE\VibeSuperTonic\Settings";
     private const string LegacyDefaultSub = "Default";
     private const string LegacyPerVoiceSub = "PerVoice";
-    private const int CurrentSchemaVersion = 6;
+    private const int CurrentSchemaVersion = 7;
     private static readonly object _writeGate = new();
 
     public static EngineSettings Load()
@@ -140,7 +214,7 @@ internal static class EngineSettingsRegistry
         // change (e.g. DspRate 1.0 → 1.4) gets shadowed by that voice's stale 1.0
         // override, with no visible cause. Auto-cleaning keeps "no override" the
         // default state.
-        var prunedPerVoice = new Dictionary<string, EngineSettings>();
+        var prunedPerVoice = new Dictionary<string, VoiceOverride>();
         foreach (var kv in s.PerVoice)
         {
             if (!IsEffectivelyGlobal(kv.Value, s)) prunedPerVoice[kv.Key] = kv.Value;
@@ -150,20 +224,44 @@ internal static class EngineSettingsRegistry
         if (s.SchemaVersion < CurrentSchemaVersion) s.SchemaVersion = CurrentSchemaVersion;
 
         DataPaths.EnsureExists();
-        string path = DataPaths.SettingsFilePath;
-        string tmp = path + ".tmp";
         var bytes = JsonSerializer.SerializeToUtf8Bytes(s, EngineSettingsJsonContext.Default.EngineSettings);
+        WriteReplacing(DataPaths.SettingsFilePath, bytes);
+    }
 
+    /// <summary>
+    /// Write <paramref name="path"/> through a temporary file and a rename, so a
+    /// reader sees the old file or the new one and never neither.
+    ///
+    /// <para>The fallback used to be delete-then-move, for when the rename fails
+    /// under an anti-virus scan — and in that window the file did not exist, so
+    /// every SAPI client reading it then fell back to the built-in defaults
+    /// (review item 66). Now it retries the rename, then tries
+    /// <see cref="File.Replace(string, string, string?)"/>, and if both fail it
+    /// throws with the old file still in place.</para>
+    /// </summary>
+    private static void WriteReplacing(string path, byte[] bytes)
+    {
+        string tmp = path + ".tmp";
         lock (_writeGate)
         {
             File.WriteAllBytes(tmp, bytes);
-            try { File.Move(tmp, path, overwrite: true); }
-            catch
+            Exception? last = null;
+            for (int attempt = 0; attempt < 5; attempt++)
             {
-                // File.Move with overwrite can fail under AV scans; fall back to delete+move.
-                try { if (File.Exists(path)) File.Delete(path); } catch { }
-                File.Move(tmp, path);
+                try { File.Move(tmp, path, overwrite: true); return; }
+                catch (IOException ex) { last = ex; }
+                catch (UnauthorizedAccessException ex) { last = ex; }
+                Thread.Sleep(50 * (attempt + 1));
             }
+            try
+            {
+                if (File.Exists(path)) { File.Replace(tmp, path, destinationBackupFileName: null); return; }
+                File.Move(tmp, path);
+                return;
+            }
+            catch (Exception ex) { last = ex; }
+            try { File.Delete(tmp); } catch { }
+            throw new IOException($"Could not replace {path}; the previous file is unchanged.", last);
         }
     }
 
@@ -200,19 +298,8 @@ internal static class EngineSettingsRegistry
     private static void ArmRestore(EngineSettings snapshot)
     {
         DataPaths.EnsureExists();
-        string path = PendingRestorePath;
-        string tmp = path + ".tmp";
         var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, EngineSettingsJsonContext.Default.EngineSettings);
-        lock (_writeGate)
-        {
-            File.WriteAllBytes(tmp, bytes);
-            try { File.Move(tmp, path, overwrite: true); }
-            catch
-            {
-                try { if (File.Exists(path)) File.Delete(path); } catch { }
-                File.Move(tmp, path);
-            }
-        }
+        WriteReplacing(PendingRestorePath, bytes);
     }
 
     internal static void DisarmRestore()
@@ -266,22 +353,21 @@ internal static class EngineSettingsRegistry
     /// True when the per-voice entry has the same effective values as the global
     /// snapshot — meaning the override is doing nothing useful and should be pruned.
     /// </summary>
-    private static bool IsEffectivelyGlobal(EngineSettings pv, EngineSettings global) =>
+    private static bool IsEffectivelyGlobal(VoiceOverride pv, EngineSettings global) =>
         pv.TotalStep           == global.TotalStep
         && pv.EngineSpeed      == global.EngineSpeed
         && pv.DspRate          == global.DspRate
         && pv.DefaultVoice     == global.DefaultVoice
         && pv.Language         == global.Language
         && pv.VolumeTrimDb     == global.VolumeTrimDb
-        && pv.MaxChunkChars    == global.MaxChunkChars
-        && pv.MinChunkChars    == global.MinChunkChars
-        && pv.InterChunkSilenceMs == global.InterChunkSilenceMs
-        && pv.SynthesisSilenceSec == global.SynthesisSilenceSec
-        && pv.RateClampCeiling == global.RateClampCeiling
-        && pv.OnnxThreads      == global.OnnxThreads
-        && pv.OnnxInterOpThreads == global.OnnxInterOpThreads
-        && pv.UseDirectML      == global.UseDirectML
-        && pv.DirectMLDeviceId == global.DirectMLDeviceId;
+        // An absent Tier B value IS the global one.
+        && (pv.MaxChunkChars       ?? global.MaxChunkChars)       == global.MaxChunkChars
+        && (pv.MinChunkChars       ?? global.MinChunkChars)       == global.MinChunkChars
+        && (pv.InterChunkSilenceMs ?? global.InterChunkSilenceMs) == global.InterChunkSilenceMs
+        && (pv.SynthesisSilenceSec ?? global.SynthesisSilenceSec) == global.SynthesisSilenceSec
+        && (pv.RateClampCeiling    ?? global.RateClampCeiling)    == global.RateClampCeiling
+        && (pv.OnnxThreads         ?? global.OnnxThreads)         == global.OnnxThreads
+        && (pv.OnnxInterOpThreads  ?? global.OnnxInterOpThreads)  == global.OnnxInterOpThreads;
 
     /// <summary>
     /// One-shot per-build migration. Applies pending behavior changes:
@@ -308,6 +394,12 @@ internal static class EngineSettingsRegistry
     ///            who then sets the global language to German would find one
     ///            voice stubbornly speaking English with no visible cause.
     ///            Re-stamp every existing per-voice entry with the global value.
+    ///   v6 → v7: per-voice entries become <see cref="VoiceOverride"/>, whose
+    ///            Tier B knobs are absent unless set. Every entry written before
+    ///            this build carries copies of the globals there — the Tune tab
+    ///            put them in — so they are dropped, and the Advanced tab's
+    ///            values reach every voice again (review item 32). So are the
+    ///            per-voice DirectML keys, which the engine never read per voice.
     /// Idempotent — re-running is a no-op once SchemaVersion == CurrentSchemaVersion.
     /// </summary>
     public static void EnsureMigrated()
@@ -333,6 +425,25 @@ internal static class EngineSettingsRegistry
         if (schema < 6)
         {
             foreach (var pv in s.PerVoice.Values) pv.Language = s.Language;
+        }
+        if (schema < 7)
+        {
+            foreach (var pv in s.PerVoice.Values)
+            {
+                pv.MaxChunkChars = null;
+                pv.MinChunkChars = null;
+                pv.InterChunkSilenceMs = null;
+                pv.SynthesisSilenceSec = null;
+                pv.RateClampCeiling = null;
+                pv.OnnxThreads = null;
+                pv.OnnxInterOpThreads = null;
+                if (pv.Extra is not null)
+                {
+                    foreach (var k in new[] { "UseDirectML", "DirectMLDeviceId", "GpuOnBattery", "SchemaVersion", "PerVoice" })
+                        pv.Extra.Remove(k);
+                    if (pv.Extra.Count == 0) pv.Extra = null;
+                }
+            }
         }
         // schema < 4: just persist to disk so we own the data.
         // schema < 5: the VocoderMode field is gone — the Save() below drops it
@@ -403,6 +514,7 @@ internal static class EngineSettingsRegistry
                 case "usedirectml":         s.UseDirectML = bool.Parse(value); break;
                 case "gpuonbattery":        s.GpuOnBattery = bool.Parse(value); break;
                 case "directmldeviceid":    s.DirectMLDeviceId = int.Parse(value, CultureInfo.InvariantCulture); break;
+                case "tailsilencems":       s.TailSilenceMs = int.Parse(value, CultureInfo.InvariantCulture); break;
                 default:               error = $"Unknown key: {key}"; return false;
             }
             Save(s);
@@ -434,7 +546,9 @@ internal static class EngineSettingsRegistry
                     if (voiceKey is null) continue;
                     var perVoice = new EngineSettings();
                     ReadInto(perVoice, voiceKey);
-                    s.PerVoice[name] = perVoice;
+                    // Tier A only: the registry-era Tune tab copied the globals
+                    // into every voice's Tier B, exactly as v7 undoes for JSON.
+                    s.PerVoice[name] = VoiceOverride.FromTierA(perVoice);
                 }
             }
             // Preserve old SchemaVersion so EnsureMigrated knows which steps to apply.

@@ -10,7 +10,7 @@ using VibeSuperTonic.Core.Text;
 
 namespace VibeSuperTonic.TestHarness;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly Guid EngineClsid = new("F2A8C7B1-1234-5678-9ABC-DEF012345678");
     private static readonly Guid IID_ISpTTSEngine = new("A74D7C8E-4CC5-4F2F-A6EB-804DEE18500E");
@@ -24,6 +24,14 @@ internal static class Program
         {
             return RunStressSuite();
         }
+        if (args.Contains("--batch5"))
+        {
+            // Step 12 alone: the batch 5 cases take minutes, and iterating on
+            // one engine fix should not mean re-running steps 1-11 each time.
+            int at = Array.IndexOf(args, "--batch5");
+            if (at + 1 < args.Length) B5Filter = args[at + 1];
+            return Step12_Batch5();
+        }
         int failures = 0;
         failures += Step1_CoCreateAndQI();
         failures += Step2_EnumerateVoices();
@@ -36,6 +44,7 @@ internal static class Program
         failures += Step9_PronunciationOffsets();
         failures += Step10_PlannerMatchesEngine();
         failures += Step11_PlaybackClockAndScheduler();
+        failures += Step12_Batch5();
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "ALL TESTS PASSED" : $"{failures} TEST(S) FAILED");
         return failures;
@@ -547,9 +556,8 @@ internal static class Program
         try
         {
             using var k = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
-            if (k is null) return null;
-            string? baseDir = k.GetValue("BaseDir") as string;
-            string? raw = k.GetValue("DataDir") as string;
+            string? baseDir = RegisteredBaseDir();
+            string? raw = k?.GetValue("DataDir") as string;
             if (string.IsNullOrWhiteSpace(baseDir)) return null;
 
             string dir = string.IsNullOrWhiteSpace(raw)
@@ -593,11 +601,21 @@ internal static class Program
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    private static string GetBaseDirFromRegistry()
+    private static string GetBaseDirFromRegistry() =>
+        RegisteredBaseDir() ?? AppContext.BaseDirectory.TrimEnd('\\');
+
+    /// <summary>
+    /// HKCU, then HKLM — the engine's order, so the harness also runs on an
+    /// account that only has the all-users registration (review item 11).
+    /// </summary>
+    private static string? RegisteredBaseDir()
     {
-        using var k = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
-        if (k?.GetValue("BaseDir") is string s && !string.IsNullOrWhiteSpace(s)) return s.TrimEnd('\\');
-        return AppContext.BaseDirectory.TrimEnd('\\');
+        foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
+        {
+            using var k = hive.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
+            if (k?.GetValue("BaseDir") is string s && !string.IsNullOrWhiteSpace(s)) return s.TrimEnd('\\');
+        }
+        return null;
     }
 
     private static string GetDataDirFromRegistry()

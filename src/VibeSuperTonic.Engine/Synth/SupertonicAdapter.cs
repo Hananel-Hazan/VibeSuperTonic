@@ -64,8 +64,13 @@ internal sealed class SupertonicAdapter
     // it as a synthetic device-loss — the existing catch path disposes the
     // session, sets the latch as appropriate, and retries on CPU on attempt 1.
     // 30 s is roomy for legitimate CPU synth of the longest legal chunk
-    // (~200 chars) on slow hardware.
-    private const int SynthCallWatchdogMs = 30_000;
+    // (~200 chars) on slow hardware. Internal because the engine's own ceiling
+    // (SapiEngine.SynthHardTimeoutMs) is derived from it and must outlast it.
+    internal const int SynthCallWatchdogMs = 30_000;
+    // What a CPU session reload may take after the watchdog drops a GPU session:
+    // up to 20 s measured on slow hardware (review item 34). Part of the same
+    // ceiling — the reload and the retry both happen inside one chunk's wait.
+    internal const int CpuReloadBudgetMs = 20_000;
     // Dispose backpressure: if more than this many native disposes are
     // already pending, a chronically sick DML driver is stuck in cleanup.
     // Queue no further dispose tasks — leak the handle instead.
@@ -145,6 +150,18 @@ internal sealed class SupertonicAdapter
         _lastDeviceEvent = "Reset requested — DirectML re-enabled. Next Speak will retry GPU.";
     }
 
+    /// <summary>
+    /// Requests a session drop and nothing else: the DML latch and the loss
+    /// window stay as they are. What the engine's own hang ceiling uses — a hang
+    /// is evidence against the GPU, and <see cref="RequestReset"/>, which is the
+    /// user's "Reset selected", clears exactly that evidence (review item 34).
+    /// </summary>
+    public static void RequestSessionRebuild()
+    {
+        Interlocked.Exchange(ref _resetRequestedFlag, 1);
+        _lastDeviceEvent = "Session rebuild requested after a synth hang; DirectML latch unchanged.";
+    }
+
     private readonly object _styleGate = new();
     private readonly string _voiceId;
     private Style? _style;
@@ -153,11 +170,11 @@ internal sealed class SupertonicAdapter
 
     private static string GetBaseDirOrThrow()
     {
-        using var k = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\VibeSuperTonic");
-        var baseDir = k?.GetValue("BaseDir") as string;
-        if (string.IsNullOrEmpty(baseDir) || !Directory.Exists(baseDir))
-            throw new InvalidOperationException($"VibeSuperTonic BaseDir not configured or missing: '{baseDir}'");
-        return baseDir!;
+        // HKCU, then HKLM for an all-users registration (review item 11).
+        var baseDir = DataPaths.RegisteredBaseDir();
+        if (string.IsNullOrEmpty(baseDir))
+            throw new InvalidOperationException("VibeSuperTonic BaseDir not configured or missing (neither HKCU nor HKLM records an existing folder)");
+        return baseDir;
     }
 
     /// <summary>
@@ -481,8 +498,11 @@ internal sealed class SupertonicAdapter
         }
     }
 
+    /// <param name="silenceSec">Silence the model inserts where its own splitter
+    /// cuts the text (SynthesisSilenceSec). The SDK's default, 0.3 s, is what every
+    /// call got before 0.3.0, whatever the Advanced tab said (review item 33).</param>
     public short[] Synthesize(string text, int totalStep = 8, float speed = DefaultSpeed,
-        CancellationToken cancellationToken = default, string? lang = null)
+        CancellationToken cancellationToken = default, string? lang = null, float silenceSec = 0.3f)
     {
         // Normalize here rather than trusting the caller: `lang` originates in
         // settings.json (user-editable) or a SAPI client's xml:lang (arbitrary
@@ -553,6 +573,7 @@ internal sealed class SupertonicAdapter
                     var totalStepLocal = totalStep;
                     var speedLocal = speed;
                     var langLocal = langCode;
+                    var silenceLocal = silenceSec;
                     Task<(float[] wav, float[] duration)> callTask = Task.Run(() =>
                     {
                         if (injectHang)
@@ -564,7 +585,7 @@ internal sealed class SupertonicAdapter
                             _testHangRelease.Wait(TimeSpan.FromMinutes(5), ct);
                         }
                         return ttsLocal.Call(textLocal, langLocal, styleLocal, totalStepLocal, speedLocal,
-                            cancellationToken: ct, runOptions: runOptions);
+                            silenceDuration: silenceLocal, cancellationToken: ct, runOptions: runOptions);
                     }, cancellationToken);
 
                     if (!callTask.Wait(SynthCallWatchdogMs))

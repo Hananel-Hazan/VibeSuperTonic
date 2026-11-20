@@ -55,6 +55,7 @@ internal static class Checks
         results.Add(HkcuClsidX86Check(state));
         results.Add(Sapi32BitCheck(state));
         results.Add(BaseDirRecordedCheck(state));
+        results.Add(ScopeCheck());
         results.Add(ModelsCheck(state));
         results.Add(VoiceStylesCheck(state));
         results.Add(EngineDllWritableCheck(state));
@@ -388,6 +389,28 @@ internal static class Checks
             int rc = Registration.Register(msg => log?.Report(msg));
             return rc == 0;
         }, ct));
+
+    /// <summary>
+    /// Says who can use the voices, because the answer is invisible otherwise:
+    /// with a this-user registration, another account lists the voices (the
+    /// tokens are machine-wide) and gets silence (review item 11).
+    /// </summary>
+    private static CheckResult ScopeCheck()
+    {
+        var scope = Registration.RegisteredScope();
+        return new(
+            "Registered for",
+            CheckSeverity.Info,
+            Ok: true,
+            Detail: scope switch
+            {
+                RegistrationScope.AllUsers => "all users of this PC",
+                RegistrationScope.CurrentUser => "this user only — other accounts see the voices but cannot use them",
+                _ => "not registered yet",
+            },
+            FixHint: "To change it: VibeSuperTonic.exe --register --all-users, or --register --this-user.",
+            Repair: null);
+    }
 
     private static CheckResult BaseDirRecordedCheck(Registration.State s) => new(
         "HKCU BaseDir tracking",

@@ -232,7 +232,7 @@ internal sealed class TuneTab : UserControl
             if (_scope.SelectedIndex > 0)
             {
                 var voiceId = Voices.All[_scope.SelectedIndex - 1].Id;
-                target = s.PerVoice.TryGetValue(voiceId, out var pv) ? pv : (EngineSettings)s.Clone();
+                target = s.PerVoice.TryGetValue(voiceId, out var pv) ? pv.Over(s) : s.Clone();
                 if (!s.PerVoice.ContainsKey(voiceId)) target.Preset = s.Preset; // start from global
             }
             _totalStep.Value   = Math.Clamp(target.TotalStep, _totalStep.Minimum, _totalStep.Maximum);
@@ -264,37 +264,41 @@ internal sealed class TuneTab : UserControl
     private void SaveSettings()
     {
         var s = EngineSettingsRegistry.Load();
-        var snapshot = new EngineSettings
-        {
-            TotalStep = _totalStep.Value,
-            EngineSpeed = _engineSpeed.Value / 100f,
-            DspRate = _dspRate.Value / 100f,
-            VolumeTrimDb = _volumeTrim.Value,
-            DefaultVoice = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id,
-            Language = SupertonicLanguages.All[Math.Max(0, _language.SelectedIndex)].Code,
-            Preset = CurrentPreset(),
-            // Tier B knobs preserved from existing settings
-            MaxChunkChars = s.MaxChunkChars,
-            MinChunkChars = s.MinChunkChars,
-            InterChunkSilenceMs = s.InterChunkSilenceMs,
-            SynthesisSilenceSec = s.SynthesisSilenceSec,
-            RateClampCeiling = s.RateClampCeiling,
-            OnnxThreads = s.OnnxThreads,
-            OnnxInterOpThreads = s.OnnxInterOpThreads,
-            UseDirectML = s.UseDirectML,
-            DirectMLDeviceId = s.DirectMLDeviceId,
-        };
+        // This tab's knobs (Tier A) over everything else as it stands: the
+        // Advanced tab's values, GpuOnBattery, TailSilenceMs, the schema version
+        // and keys another host wrote. Built from scratch, as it was until 0.3.0,
+        // a global save quietly reset the ones nobody listed.
+        var snapshot = s.Clone();
+        snapshot.TotalStep = _totalStep.Value;
+        snapshot.EngineSpeed = _engineSpeed.Value / 100f;
+        snapshot.DspRate = _dspRate.Value / 100f;
+        snapshot.VolumeTrimDb = _volumeTrim.Value;
+        snapshot.DefaultVoice = Voices.All[Math.Max(0, _defaultVoice.SelectedIndex)].Id;
+        snapshot.Language = SupertonicLanguages.All[Math.Max(0, _language.SelectedIndex)].Code;
+        snapshot.Preset = CurrentPreset();
 
         if (_scope.SelectedIndex == 0)
         {
-            // Global write — preserve per-voice overrides.
-            snapshot.PerVoice = s.PerVoice;
+            // Global write — per-voice overrides come along in the clone.
             EngineSettingsRegistry.Save(snapshot);
         }
         else
         {
+            // A voice gets this tab's knobs and nothing else. Copying the Tier B
+            // globals in as well — what this did until 0.3.0 — pinned them for
+            // that voice, so the Advanced tab stopped reaching it (review item 32).
             var voiceId = Voices.All[_scope.SelectedIndex - 1].Id;
-            s.PerVoice[voiceId] = snapshot;
+            s.PerVoice.TryGetValue(voiceId, out var existing);
+            var entry = VoiceOverride.FromTierA(snapshot);
+            if (existing is not null)
+            {
+                // Keep anything a hand edit set for this voice.
+                entry.MaxChunkChars = existing.MaxChunkChars; entry.MinChunkChars = existing.MinChunkChars;
+                entry.InterChunkSilenceMs = existing.InterChunkSilenceMs; entry.SynthesisSilenceSec = existing.SynthesisSilenceSec;
+                entry.RateClampCeiling = existing.RateClampCeiling; entry.OnnxThreads = existing.OnnxThreads;
+                entry.OnnxInterOpThreads = existing.OnnxInterOpThreads; entry.Extra = existing.Extra;
+            }
+            s.PerVoice[voiceId] = entry;
             EngineSettingsRegistry.Save(s);
         }
         LoadFromSettings();

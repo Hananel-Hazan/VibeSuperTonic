@@ -57,6 +57,19 @@ internal static class Program
                 return 2;
             }
 
+            // Known words in a shape that does nothing: `--set onnxthreads` with no
+            // '=', a value flag with nothing after it, `--voice M1` with no command
+            // for it to modify. Each used to pass the check above and fall through
+            // to the window — the defect W2 fixed for unknown flags, again
+            // (review item 31).
+            if (TryFindMalformedArguments(args, out var why))
+            {
+                Console.Error.WriteLine($"VibeSuperTonic: {why}");
+                Console.Error.WriteLine();
+                Console.Error.Write(UsageText());
+                return 2;
+            }
+
             if (HasFlag(args, "--help") || HasFlag(args, "-h") || HasFlag(args, "-?"))
             {
                 Console.Write(UsageText());
@@ -94,7 +107,10 @@ internal static class Program
                 return Registration.Unregister(Console.WriteLine, elevatedChild: HasFlag(args, "--elevated"));
 
             if (HasFlag(args, "--register"))
-                return Registration.Register(Console.WriteLine, elevatedChild: HasFlag(args, "--elevated"));
+                return Registration.Register(Console.WriteLine, elevatedChild: HasFlag(args, "--elevated"),
+                    scope: HasFlag(args, "--all-users") ? RegistrationScope.AllUsers
+                         : HasFlag(args, "--this-user") ? RegistrationScope.CurrentUser
+                         : null);
 
             if (HasFlag(args, "--repair"))
                 return RunRepairAsync().GetAwaiter().GetResult();
@@ -140,7 +156,7 @@ internal static class Program
     /// <summary>Flags that stand alone.</summary>
     private static readonly string[] KnownFlags =
     {
-        "--register", "--unregister", "--elevated", "--repair",
+        "--register", "--unregister", "--elevated", "--repair", "--all-users", "--this-user",
         "--bench", "--sweep", "--no-gpu", "--force",
         "--config", "--version", "--help", "-h", "-?",
     };
@@ -177,6 +193,67 @@ internal static class Program
         return false;
     }
 
+    /// <summary>
+    /// Options that only mean something beside a command, and the commands they
+    /// modify. Alone they used to open the GUI.
+    /// </summary>
+    private static readonly (string Option, string[] Commands)[] Modifiers =
+    {
+        ("--voice",    new[] { "--bench", "--sweep" }),
+        ("--words",    new[] { "--bench" }),
+        ("--text",     new[] { "--bench" }),
+        ("--no-gpu",   new[] { "--sweep" }),
+        ("--force",    new[] { "--sweep" }),
+        ("--elevated", new[] { "--register", "--unregister" }),
+        ("--all-users", new[] { "--register" }),
+        ("--this-user", new[] { "--register" }),
+    };
+
+    /// <summary>
+    /// The first argument that is known but cannot do anything as given. Runs
+    /// after <see cref="TryFindUnknownArgument"/>, so every word here is one this
+    /// build understands.
+    /// </summary>
+    private static bool TryFindMalformedArguments(string[] args, out string? why)
+    {
+        bool Has(string flag) => args.Any(a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            if (!ValueFlags.Contains(a, StringComparer.OrdinalIgnoreCase)) continue;
+            if (i + 1 >= args.Length)
+            {
+                why = $"{a} needs a value";
+                return true;
+            }
+            if (a.Equals("--set", StringComparison.OrdinalIgnoreCase) && args[i + 1].IndexOf('=') <= 0)
+            {
+                why = $"--set needs <key>=<value>, got '{args[i + 1]}'";
+                return true;
+            }
+            i++;
+        }
+
+        foreach (var (option, commands) in Modifiers)
+        {
+            if (Has(option) && !commands.Any(Has))
+            {
+                why = $"{option} only applies to {string.Join(" or ", commands)}";
+                return true;
+            }
+        }
+
+        if (Has("--all-users") && Has("--this-user"))
+        {
+            why = "--all-users and --this-user cannot both be given";
+            return true;
+        }
+
+        why = null;
+        return false;
+    }
+
     private static string UsageText() =>
         $"""
         VibeSuperTonic {VersionInfo.Own()} — SAPI5 neural voices
@@ -187,8 +264,12 @@ internal static class Program
           --config               Print what inference will use, and why.
           --help, -h, -?         This text.
 
-          --register             Register the voices for this user.
-          --unregister           Remove the registration.
+          --register             Register the voices. Keeps the scope already
+                                 registered; on a first install, this user only.
+              --all-users        For every account on this PC (administrator).
+              --this-user        For this account only. Other accounts then list
+                                 the voices but cannot use them.
+          --unregister           Remove the registration, both scopes.
           --repair               Run every Status check and fix what it can,
                                  including measuring this machine on first run.
 
@@ -208,6 +289,11 @@ internal static class Program
 
         Exit codes: 0 success, 1 failure, 2 bad arguments (and, for --sweep, a
         machine too busy to measure).
+
+        This is a windowed program, so a command prompt does not wait for it and
+        does not see its exit code. To wait and read the code:
+          cmd:         start /wait VibeSuperTonic.exe --sweep & echo %errorlevel%
+          PowerShell:  (Start-Process VibeSuperTonic.exe --sweep -Wait -PassThru).ExitCode
 
         """;
 

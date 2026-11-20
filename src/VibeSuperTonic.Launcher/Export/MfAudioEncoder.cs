@@ -230,12 +230,6 @@ internal static class MfAudioEncoder
         return PickClosest(bps, supported);
     }
 
-    private static int ClampMp3Bitrate(int bps)
-    {
-        int[] supported = { 96_000, 128_000, 160_000, 192_000, 256_000, 320_000 };
-        return PickClosest(bps, supported);
-    }
-
     private static int PickClosest(int target, int[] choices)
     {
         int best = choices[0];

@@ -28,7 +28,32 @@ internal sealed class MainForm : Form
         tabs.TabPages.Add(MakeTabPage("About",          new AboutTab()));
         Controls.Add(tabs);
 
+        // The installer's question (review item 11, decided 2026-11-09): asked
+        // when a Repair registers a machine that has no registration yet. The
+        // Repair runs on a worker thread; the dialog belongs to this window.
+        Registration.AskScope = () => (RegistrationScope?)Invoke(new Func<RegistrationScope?>(AskRegistrationScope));
+
         Shown += (_, _) => WarnIfThirtyTwoBitBroken();
+    }
+
+    private RegistrationScope? AskRegistrationScope()
+    {
+        var answer = MessageBox.Show(this,
+            "Who should be able to use the VibeSuperTonic voices on this PC?\n\n" +
+            "Yes — all users. Every account, and the sign-in screen's Narrator. Needs administrator " +
+            "rights, and this folder must be somewhere every account can read (for example " +
+            "C:\\VibeSuperTonic, not your Desktop or Downloads).\n\n" +
+            "No — only me (recommended). Other accounts will see the voices in their lists but " +
+            "cannot speak with them.\n\n" +
+            "Either way, Windows asks once for administrator rights to list the voices.",
+            "Register VibeSuperTonic",
+            MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+        return answer switch
+        {
+            DialogResult.Yes => RegistrationScope.AllUsers,
+            DialogResult.No => RegistrationScope.CurrentUser,
+            _ => null,
+        };
     }
 
     /// <summary>

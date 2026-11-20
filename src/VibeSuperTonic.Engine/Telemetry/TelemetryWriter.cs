@@ -41,6 +41,7 @@ internal static class TelemetryWriter
     private static readonly object _gate = new();
     private static readonly int _pid = Environment.ProcessId;
     private static readonly string _processName = SafeProcessName();
+    private static readonly Process _self = Process.GetCurrentProcess();
 
     private static bool _exitHandlerRegistered;
     private static System.Threading.Timer? _resetPoll;
@@ -90,7 +91,11 @@ internal static class TelemetryWriter
         {
             EnsureInitialized(sessionsDir, resetMarker);
 
-            var proc = Process.GetCurrentProcess();
+            // One Process for the life of the host, refreshed per tick. A fresh
+            // GetCurrentProcess() each tick allocated a Process (and a handle)
+            // per update that nothing disposed (review item 68).
+            var proc = _self;
+            proc.Refresh();
             long nowCpuTicks = proc.TotalProcessorTime.Ticks;
             long nowWallMs = Environment.TickCount64;
             double cpuPct = 0;

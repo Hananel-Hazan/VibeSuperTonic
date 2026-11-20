@@ -19,6 +19,10 @@ internal static class SapiConstants
     public const uint SPVES_RATE = 1 << 2;
     public const uint SPVES_VOLUME = 1 << 3;
 
+    // SPEAKFLAGS (sapi.h). SAPI passes the SPF_NLP_* bits through to the engine:
+    // a screen reader set to "all punctuation" asks for it with this one.
+    public const uint SPF_NLP_SPEAK_PUNC = 1 << 6;
+
     // SPEVENTENUM values from sapi.h
     public const ushort SPEI_START_INPUT_STREAM = 1;
     public const ushort SPEI_END_INPUT_STREAM = 2;
