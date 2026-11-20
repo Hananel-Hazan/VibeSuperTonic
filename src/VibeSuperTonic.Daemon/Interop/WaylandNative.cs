@@ -52,6 +52,7 @@ internal static unsafe class WaylandNative
     [DllImport(WL)] internal static extern int    wl_display_flush(IntPtr display);
     [DllImport(WL)] internal static extern uint   wl_proxy_get_version(IntPtr proxy);
     [DllImport(WL)] internal static extern int    wl_proxy_add_listener(IntPtr proxy, IntPtr impl, IntPtr data);
+    [DllImport(WL)] internal static extern void   wl_proxy_destroy(IntPtr proxy);
     [DllImport(WL)] internal static extern IntPtr wl_proxy_marshal_array_flags(
         IntPtr proxy, uint opcode, IntPtr iface, uint version, uint flags, IntPtr args);
 
@@ -82,7 +83,8 @@ internal static unsafe class WaylandNative
     private static IntPtr _registryListener, _deviceListener, _offerListener;
 
     // Callback state. Static because [UnmanagedCallersOnly] cannot capture; guarded
-    // by Gate, which is also what makes one-capture-at-a-time true rather than hoped.
+    // by Gate, which a Session holds for its whole life: one session at a time,
+    // true rather than hoped.
     private static uint _managerName, _managerVersion, _seatName, _seatVersion;
     private static bool _sawManager, _sawSeat, _finished;
     private static IntPtr _primaryOffer, _clipboardOffer;
@@ -145,91 +147,219 @@ internal readonly record struct ReceiveResult(string Text, bool TimedOut, bool S
 
     /// <summary>
     /// Read one selection. <paramref name="primary"/> false reads the clipboard.
-    ///
-    /// <para>Connects and disconnects per call rather than holding a session
-    /// open. That is deliberate and it is the audio-device lesson applied before
-    /// it could bite: a long-lived handle to a compositor that can restart is a
-    /// stale handle waiting to happen, and this costs a few milliseconds against
-    /// a 300 ms budget — measured at 30 ms including process start, so a fraction
-    /// of that in-process.</para>
+    /// One connection for one read; a press that reads more than once opens a
+    /// <see cref="Session"/> instead.
     /// </summary>
     internal static WaylandCapture Capture(bool primary, ReceiveBudget budget)
     {
-        lock (Gate)
-        {
-            IntPtr display = wl_display_connect(null);
-            if (display == IntPtr.Zero)
-                return new WaylandCapture(false, false, false, null, null);
+        using var session = Session.Open();
+        return session.Read(primary, budget);
+    }
 
+    /// <summary>
+    /// One connection to the compositor, held for one press and then closed.
+    ///
+    /// <para><b>Per press, not per daemon.</b> A long-lived handle to a compositor
+    /// that can restart is a stale handle waiting to happen, so nothing outlives
+    /// the press. But one press can read many times: AutoCopy reads the clipboard
+    /// before Ctrl+C and then polls it every 40 ms for up to a second, and until
+    /// 2026-11-20 each of those reads connected, walked the registry and bound the
+    /// manager and the seat anew, 25 connections for one key (review item 86).</para>
+    ///
+    /// <para><b>Every proxy is destroyed before the disconnect</b> (review item 57).
+    /// <c>wl_display_disconnect</c> frees the display and not the proxies created
+    /// on it, so each capture used to leave the registry, the seat, the manager,
+    /// the device and every offer behind. Measured over 1,000 live captures on
+    /// Plasma 6, 2026-11-20: the malloc heap grew 4.1 MB, about 4 kB a capture.
+    /// Offers the compositor replaces while the session is open are destroyed as
+    /// they are replaced, which the protocol asks of a client anyway.</para>
+    ///
+    /// <para>Holds <see cref="Gate"/> from <see cref="Open"/> to
+    /// <see cref="Dispose"/>, because the event handlers write static state. Open
+    /// and dispose it on one thread, with a <c>using</c>.</para>
+    /// </summary>
+    internal sealed class Session : IDisposable
+    {
+        private IntPtr _display, _registry, _seat, _manager, _device;
+        private readonly WaylandCapture? _failed;
+        private int _reads;
+        private bool _disposed;
+
+        private Session(WaylandCapture? failed) => _failed = failed;
+
+        /// <summary>Connect, bind and get the data device. A failure is kept and every read returns it.</summary>
+        public static Session Open()
+        {
+            Monitor.Enter(Gate);
+            Session? s = null;
             try
             {
-                Build();
-                ResetState();
+                IntPtr display = wl_display_connect(null);
+                if (display == IntPtr.Zero)
+                    return new Session(new WaylandCapture(false, false, false, null, null));
 
-                IntPtr regArgs = Zeroed(IntPtr.Size);
-                IntPtr registry = wl_proxy_marshal_array_flags(
-                    display, WlDisplayGetRegistry, _wlRegistryIface,
-                    wl_proxy_get_version(display), 0, regArgs);
-                Marshal.FreeHGlobal(regArgs);
-                if (registry == IntPtr.Zero)
-                    return new WaylandCapture(true, false, false, null, "no wl_registry");
-
-                wl_proxy_add_listener(registry, _registryListener, IntPtr.Zero);
-                wl_display_roundtrip(display);
-
-                if (!_sawManager || !_sawSeat)
-                    return new WaylandCapture(true, false, false, null, null);
-
-                IntPtr manager = Bind(registry, _managerName, _ifaceManager,
-                                      "ext_data_control_manager_v1", Math.Min(_managerVersion, 1u));
-                IntPtr seat = Bind(registry, _seatName, _wlSeatIface, "wl_seat", Math.Min(_seatVersion, 1u));
-                if (manager == IntPtr.Zero || seat == IntPtr.Zero)
-                    return new WaylandCapture(true, true, false, null, "bind failed");
-
-                // device = manager.get_data_device(seat)  — opcode 1, "no"
-                IntPtr devArgs = Zeroed(IntPtr.Size * 2);
-                Marshal.WriteIntPtr(devArgs, 0, IntPtr.Zero);       // new_id placeholder
-                Marshal.WriteIntPtr(devArgs, IntPtr.Size, seat);
-                IntPtr device = wl_proxy_marshal_array_flags(
-                    manager, 1, _ifaceDevice, wl_proxy_get_version(manager), 0, devArgs);
-                Marshal.FreeHGlobal(devArgs);
-                if (device == IntPtr.Zero)
-                    return new WaylandCapture(true, true, false, null, "get_data_device returned null");
-
-                wl_proxy_add_listener(device, _deviceListener, IntPtr.Zero);
-
-                // Two roundtrips: the first carries data_offer and the burst of
-                // `offer` events naming its MIME types, the second guarantees the
-                // selection/primary_selection event that says which offer is
-                // current has arrived. One is usually enough, and "usually" is not
-                // a property worth shipping in the path behind a hotkey.
-                wl_display_roundtrip(display);
-                wl_display_roundtrip(display);
-
-                if (_finished)
-                    return new WaylandCapture(true, true, false, null,
-                        "another data-control client took over the seat");
-
-                IntPtr chosen = primary ? _primaryOffer : _clipboardOffer;
-                if (chosen == IntPtr.Zero)
-                    return new WaylandCapture(true, true, false, null, null);
-
-                var offered = OfferMimes.TryGetValue(chosen, out var m) ? m : new List<string>();
-                string? mime = PickTextMime(offered);
-                if (mime is null)
-                    return new WaylandCapture(true, true, true, null,
-                        offered.Count == 0
-                            ? "the selection offered no types at all"
-                            : $"the selection offers no text type (offered: {string.Join(", ", offered)})");
-
-                var received = Receive(display, chosen, mime, budget);
-                return new WaylandCapture(true, true, true, received.Text, null, received.TimedOut);
+                s = new Session(null) { _display = display };
+                var failed = s.Bind();
+                return failed is null ? s : s.Fail(failed.Value);
             }
-            finally
+            catch
             {
-                wl_display_disconnect(display);
+                s?.Release();
+                Monitor.Exit(Gate);
+                throw;
             }
         }
+
+        /// <summary>Tear down what <see cref="Bind"/> built and keep only the reason.</summary>
+        private Session Fail(WaylandCapture why)
+        {
+            Release();
+            return new Session(why);
+        }
+
+        private WaylandCapture? Bind()
+        {
+            Build();
+            ResetState();
+
+            IntPtr regArgs = Zeroed(IntPtr.Size);
+            _registry = wl_proxy_marshal_array_flags(
+                _display, WlDisplayGetRegistry, _wlRegistryIface,
+                wl_proxy_get_version(_display), 0, regArgs);
+            Marshal.FreeHGlobal(regArgs);
+            if (_registry == IntPtr.Zero)
+                return new WaylandCapture(true, false, false, null, "no wl_registry");
+
+            wl_proxy_add_listener(_registry, _registryListener, IntPtr.Zero);
+            wl_display_roundtrip(_display);
+
+            if (!_sawManager || !_sawSeat)
+                return new WaylandCapture(true, false, false, null, null);
+
+            _manager = WaylandNative.Bind(_registry, _managerName, _ifaceManager,
+                                          "ext_data_control_manager_v1", Math.Min(_managerVersion, 1u));
+            _seat = WaylandNative.Bind(_registry, _seatName, _wlSeatIface, "wl_seat", Math.Min(_seatVersion, 1u));
+            if (_manager == IntPtr.Zero || _seat == IntPtr.Zero)
+                return new WaylandCapture(true, true, false, null, "bind failed");
+
+            // device = manager.get_data_device(seat)  — opcode 1, "no"
+            IntPtr devArgs = Zeroed(IntPtr.Size * 2);
+            Marshal.WriteIntPtr(devArgs, 0, IntPtr.Zero);       // new_id placeholder
+            Marshal.WriteIntPtr(devArgs, IntPtr.Size, _seat);
+            _device = wl_proxy_marshal_array_flags(
+                _manager, 1, _ifaceDevice, wl_proxy_get_version(_manager), 0, devArgs);
+            Marshal.FreeHGlobal(devArgs);
+            if (_device == IntPtr.Zero)
+                return new WaylandCapture(true, true, false, null, "get_data_device returned null");
+
+            wl_proxy_add_listener(_device, _deviceListener, IntPtr.Zero);
+            return null;
+        }
+
+        /// <summary>
+        /// The selection as it is now. Later reads in the same session see every
+        /// change the compositor has announced since the previous one.
+        /// </summary>
+        public WaylandCapture Read(bool primary, ReceiveBudget budget)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_failed is { } failed) return failed;
+
+            // The first read: two roundtrips. The first carries data_offer and the
+            // burst of `offer` events naming its MIME types, the second guarantees
+            // the selection/primary_selection event that says which offer is
+            // current has arrived. One is usually enough, and "usually" is not a
+            // property worth shipping in the path behind a hotkey. A later read
+            // needs one: the compositor sends a change as one burst, before the
+            // reply to our sync.
+            int trips = _reads++ == 0 ? 2 : 1;
+            for (int i = 0; i < trips; i++)
+                if (wl_display_roundtrip(_display) < 0)
+                    return new WaylandCapture(true, true, false, null,
+                        "the connection to the compositor failed");
+
+            if (_finished)
+                return new WaylandCapture(true, true, false, null,
+                    "another data-control client took over the seat");
+
+            DestroyReplacedOffers();
+
+            IntPtr chosen = primary ? _primaryOffer : _clipboardOffer;
+            if (chosen == IntPtr.Zero)
+                return new WaylandCapture(true, true, false, null, null);
+
+            var offered = OfferMimes.TryGetValue(chosen, out var m) ? m : new List<string>();
+            string? mime = PickTextMime(offered);
+            if (mime is null)
+                return new WaylandCapture(true, true, true, null,
+                    offered.Count == 0
+                        ? "the selection offered no types at all"
+                        : $"the selection offers no text type (offered: {string.Join(", ", offered)})");
+
+            var received = Receive(_display, chosen, mime, budget);
+            return new WaylandCapture(true, true, true, received.Text, null, received.TimedOut);
+        }
+
+        /// <summary>Offers that are neither selection any more. Nothing can read them again.</summary>
+        private static void DestroyReplacedOffers()
+        {
+            List<IntPtr>? stale = null;
+            foreach (IntPtr offer in OfferMimes.Keys)
+                if (offer != _primaryOffer && offer != _clipboardOffer)
+                    (stale ??= new()).Add(offer);
+            if (stale is null) return;
+            foreach (IntPtr offer in stale)
+            {
+                DestroyRequest(offer, OfferDestroy);
+                OfferMimes.Remove(offer);
+            }
+        }
+
+        /// <summary>
+        /// Every proxy this session created, children first, then the connection.
+        /// The destroy requests free the client's side; the compositor drops its
+        /// side when the connection closes, so they need not be flushed.
+        /// </summary>
+        private void Release()
+        {
+            if (_display == IntPtr.Zero) return;
+
+            foreach (IntPtr offer in OfferMimes.Keys) DestroyRequest(offer, OfferDestroy);
+            OfferMimes.Clear();
+            _primaryOffer = _clipboardOffer = IntPtr.Zero;
+
+            if (_device != IntPtr.Zero) DestroyRequest(_device, DeviceDestroy);
+            if (_manager != IntPtr.Zero) DestroyRequest(_manager, ManagerDestroy);
+            // wl_seat is bound at version 1, which has no release request, and
+            // wl_registry has none at all: both are freed on the client side only.
+            if (_seat != IntPtr.Zero) wl_proxy_destroy(_seat);
+            if (_registry != IntPtr.Zero) wl_proxy_destroy(_registry);
+            _device = _manager = _seat = _registry = IntPtr.Zero;
+
+            wl_display_disconnect(_display);
+            _display = IntPtr.Zero;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try { Release(); }
+            finally { Monitor.Exit(Gate); }
+        }
+    }
+
+    // Destructor opcodes, by array position in the tables Build() fills in.
+    private const uint OfferDestroy = 1, DeviceDestroy = 1, ManagerDestroy = 2;
+    private const uint WlMarshalFlagDestroy = 1;
+
+    /// <summary>A protocol destroy request, which also frees the proxy (WL_MARSHAL_FLAG_DESTROY).</summary>
+    private static void DestroyRequest(IntPtr proxy, uint opcode)
+    {
+        IntPtr none = Zeroed(IntPtr.Size);
+        wl_proxy_marshal_array_flags(proxy, opcode, IntPtr.Zero, wl_proxy_get_version(proxy),
+                                     WlMarshalFlagDestroy, none);
+        Marshal.FreeHGlobal(none);
     }
 
     /// <summary>

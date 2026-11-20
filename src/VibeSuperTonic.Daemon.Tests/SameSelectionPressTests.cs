@@ -123,6 +123,64 @@ public sealed class SameSelectionPressTests : IDisposable
         Assert.Equal("The second window's paragraph.", _session.CurrentText);
     }
 
+    /// <summary>
+    /// The terminal and the editor a reading is stopped from, with AutoCopy on.
+    /// <see cref="ICopyKey.Send"/> counts what would have been Ctrl+C.
+    /// </summary>
+    private sealed class CopyDesktop : ICopyKey
+    {
+        public string? Primary;
+        public string? Clipboard;
+        public int KeysSent;
+
+        public CopyKeyResult Send()
+        {
+            KeysSent++;
+            return new CopyKeyResult(true);       // a terminal with nothing highlighted copies nothing
+        }
+
+        public WaylandSelectionSource Source() =>
+            new(false,
+                primary => new Interop.WaylandNative.WaylandCapture(
+                    Connected: true, ProtocolPresent: true,
+                    HadOffer: (primary ? Primary : Clipboard) is not null,
+                    Text: primary ? Primary : Clipboard, Error: null),
+                this, copyWaitMs: 60);
+    }
+
+    /// <summary>
+    /// Review item 8, through the daemon. The press that stops a reading is the
+    /// one whose capture equals the text playing, which is exactly when AutoCopy
+    /// fires; it pressed Ctrl+C into the focused window before the daemon decided
+    /// to stop. A terminal takes that as an interrupt.
+    /// </summary>
+    [Fact]
+    public async Task With_AutoCopy_the_stopping_press_sends_no_key()
+    {
+        var desktop = new CopyDesktop { Primary = "make -j8 && ./run-the-long-job", Clipboard = "Earlier." };
+        var synth = new UntilCancelled();
+        using var session = new SpeechSession(synth, new Sink(), new SpeechSessionOptions(PrimeMs: 10));
+        var config = new HostConfig(Path.Combine(_root, "data"), Path.Combine(_root, "models"));
+        config.Reload(force: true);
+        using var server = new DaemonServer(new DaemonOptions(Version: "test"), config, synth, session, desktop.Source());
+
+        var first = server.Invoke(new Request { Verb = RequestVerb.Read });
+        Assert.True(first.Ok, first.Error);
+        Assert.Equal(ToggleAction.Speak, first.Action);
+        Assert.Equal("make -j8 && ./run-the-long-job", session.CurrentText);
+        int keysBefore = desktop.KeysSent;       // the daemon's first press counts as unchanged
+
+        Pause();
+        var second = server.Invoke(new Request { Verb = RequestVerb.Read });
+
+        Assert.Equal(ToggleAction.Stop, second.Action);
+        Assert.Equal(keysBefore, desktop.KeysSent);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (session.State != SpeechState.Idle && DateTime.UtcNow < deadline) await Task.Delay(10);
+        Assert.Equal(SpeechState.Idle, session.State);
+    }
+
     [Fact]
     public void A_press_on_different_text_interrupts_and_reads_it()
     {

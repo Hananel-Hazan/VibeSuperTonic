@@ -35,6 +35,13 @@ internal sealed class TrayIcon : IDisposable
     private const string ItemInterface = "org.kde.StatusNotifierItem";
 
     private readonly Func<Request, Response> _invoke;
+    /// <summary>
+    /// Clicks still run one at a time, in the order made, as they did on the bus
+    /// loop. Without it a second click made to cancel a slow capture ran beside
+    /// the first, took the Speak path too, and with AutoCopy sent a second Ctrl+C
+    /// (the batch 2 review of item 58).
+    /// </summary>
+    private readonly SemaphoreSlim _clicks = new(1, 1);
     private readonly Func<bool> _uiAttached;
     private readonly Action<string> _log;
 
@@ -146,12 +153,8 @@ internal sealed class TrayIcon : IDisposable
                 return;
             }
 
-            Status = $"registered with {watcher} as {busName}";
+            Registered(watcher, busName, await OwnerOfAsync(connection, watcher));
             _log($"tray icon {Status}");
-
-            _watcher = watcher;
-            _busName = busName;
-            _watcherOwner = await OwnerOfAsync(connection, watcher);
             _ = Task.Run(() => FollowWatcherAsync(connection, _stopping.Token));
 
             // A tray whose bus connection dies looks exactly like a tray that was
@@ -160,7 +163,7 @@ internal sealed class TrayIcon : IDisposable
             // register: the failure has to reach somewhere a person will look.
             _ = connection.DisconnectedAsync().ContinueWith(t =>
             {
-                Status = $"tray icon lost the session bus: {t.Result?.Message ?? "disconnected"}";
+                Status = LostBusStatus(t);
                 _log(Status);
             }, TaskScheduler.Default);
         }
@@ -267,7 +270,7 @@ internal sealed class TrayIcon : IDisposable
 
     // --------------------------------------------------------------- the menu
 
-    private IReadOnlyList<MenuRow> Rows() =>
+    internal IReadOnlyList<MenuRow> Rows() =>
     [
         // The toggle verb, labelled for what the next click does. The daemon
         // decides what a toggle means — the tray is as stateless about it as
@@ -315,20 +318,40 @@ internal sealed class TrayIcon : IDisposable
         }
     }
 
-    private void Invoke(RequestVerb verb)
+    /// <summary>
+    /// A tray click's verb, run off the bus.
+    ///
+    /// <para><b>On the thread pool, not on the D-Bus receive loop</b> (review item
+    /// 58). The menu's and the icon's handlers run synchronously on the
+    /// connection's reader, and Toggle captures the selection, which waits up to
+    /// two seconds on a busy owner and, with AutoCopy, another second on the
+    /// clipboard. Every other call on the connection, the panel's property reads
+    /// included, waited behind it. The click is answered at once; the returned
+    /// task is for the tests.</para>
+    ///
+    /// <para><b>No <c>$DISPLAY</c></b> (review item 22). This process's own one is
+    /// from the session the daemon started in, which may have ended; the daemon
+    /// gives a request without one the display the latest client reported, which
+    /// is the current session's.</para>
+    /// </summary>
+    internal Task Invoke(RequestVerb verb) => Task.Run(async () =>
     {
-        // $DISPLAY from this process's own environment, which is the same
-        // fallback the daemon already applies to a request that arrives without
-        // one. A daemon started outside the session has neither, and the
-        // selection capture will say so.
-        var response = _invoke(new Request
+        await _clicks.WaitAsync().ConfigureAwait(false);
+        try
         {
-            Verb = verb,
-            Display = verb == RequestVerb.Toggle ? Environment.GetEnvironmentVariable("DISPLAY") : null,
-        });
-
-        if (!response.Ok) _log($"tray {verb}: {response.Error}");
-    }
+            var response = _invoke(new Request { Verb = verb });
+            if (!response.Ok) _log($"tray {verb}: {response.Error}");
+        }
+        catch (Exception ex)
+        {
+            // Off the bus now, so nothing would ever observe it.
+            _log($"tray {verb} failed: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            _clicks.Release();
+        }
+    });
 
     /// <summary>
     /// The one menu row that is not a verb, because opening a window is not
@@ -444,15 +467,9 @@ internal sealed class TrayIcon : IDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(15), token);
-
-                string? owner = await OwnerOfAsync(connection, _watcher!);
-                if (owner == _watcherOwner) continue;
-
-                _watcherOwner = owner;
-                if (owner is null) continue;                  // gone; wait for it to come back
-
-                await RegisterAsync(connection, _busName!);
-                _log("tray icon re-registered: the status watcher restarted");
+                await FollowOnceAsync(
+                    () => OwnerOfAsync(connection, _watcher!),
+                    () => RegisterAsync(connection, _busName!));
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
@@ -462,6 +479,65 @@ internal sealed class TrayIcon : IDisposable
                 _log($"tray: could not follow the watcher: {ex.GetType().Name}: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>A registration that the watcher accepted, and what status reports for it.</summary>
+    internal void Registered(string watcher, string busName, string? watcherOwner)
+    {
+        _watcher = watcher;
+        _busName = busName;
+        _watcherOwner = watcherOwner;
+        Status = $"registered with {watcher} as {busName}";
+    }
+
+    /// <summary>
+    /// One look at the watcher, and <see cref="Status"/> kept true to it (review
+    /// item 60). It used to stay "registered" for as long as the watcher was gone,
+    /// so <c>status</c> described an icon nobody could see, which is the failure
+    /// the field exists to report. A re-registration the watcher refuses is tried
+    /// again on the next look rather than taken as done.
+    /// </summary>
+    internal async Task FollowOnceAsync(Func<Task<string?>> ownerOf, Func<Task<string?>> register)
+    {
+        string? owner = await ownerOf();
+        if (owner == _watcherOwner) return;
+
+        if (owner is null)
+        {
+            _watcherOwner = null;
+            Status = $"no tray icon: the status watcher {_watcher} left the session bus; "
+                   + "registering again when it returns";
+            _log(Status);
+            return;
+        }
+
+        string? watcher = await register();
+        if (watcher is null)
+        {
+            _watcherOwner = null;                              // so the next look tries again
+            Status = $"no tray icon: the status watcher returned and refused {_busName}; trying again";
+            _log(Status);
+            return;
+        }
+
+        Registered(watcher, _busName!, owner);
+        _log("tray icon re-registered: the status watcher restarted");
+    }
+
+    /// <summary>
+    /// What status says once the bus connection has ended. Reads the task without
+    /// <c>Result</c>: on a faulted task that throws inside the continuation, and
+    /// the status kept saying "registered" (review item 60).
+    /// </summary>
+    internal static string LostBusStatus(Task<Exception?> disconnected)
+    {
+        string why = disconnected.Status switch
+        {
+            TaskStatus.RanToCompletion => disconnected.Result?.Message ?? "disconnected",
+            TaskStatus.Faulted => disconnected.Exception!.GetBaseException().Message,
+            _ => "disconnected",
+        };
+        return $"tray icon lost the session bus: {why}";
     }
 
     // ---------------------------------------------------------------- the bus

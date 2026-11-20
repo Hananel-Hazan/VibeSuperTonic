@@ -77,9 +77,11 @@ public static class ExportRunner
         FfmpegTools? ffmpeg,
         Func<bool>? cancelled = null,
         Action<long>? progress = null,
-        ExportStaging? staging = null)
+        ExportStaging? staging = null,
+        int bitrateKbps = ExportFormats.DefaultBitrateKbps)
     {
         ArgumentNullException.ThrowIfNull(readLine);
+        if (!ExportFormats.Bitrates.Contains(bitrateKbps)) return Fail($"{bitrateKbps} kbit/s is not an offered bitrate");
 
         string full;
         try { full = Path.GetFullPath(outPath); }
@@ -130,7 +132,7 @@ public static class ExportRunner
             var error = new StringWriter();
             ExportOutcome outcome = encoder is null
                 ? WriteWav(readLine, temp, error, cancelled, progress)
-                : Encode(readLine, ffmpeg!, format, encoder, temp, error, cancelled, progress);
+                : Encode(readLine, ffmpeg!, format, encoder, temp, error, cancelled, progress, bitrateKbps);
 
             if (outcome.Status != ExportStatus.Done) return outcome;
 
@@ -265,7 +267,7 @@ public static class ExportRunner
 
     private static ExportOutcome Encode(
         Func<string?> readLine, FfmpegTools ffmpeg, ExportFormat format, string encoder, string temp,
-        StringWriter error, Func<bool>? cancelled, Action<long>? progress)
+        StringWriter error, Func<bool>? cancelled, Action<long>? progress, int bitrateKbps)
     {
         var psi = new ProcessStartInfo(ffmpeg.Path)
         {
@@ -275,7 +277,7 @@ public static class ExportRunner
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        foreach (string arg in FfmpegTools.BuildArgs(format, encoder, temp)) psi.ArgumentList.Add(arg);
+        foreach (string arg in FfmpegTools.BuildArgs(format, encoder, temp, bitrateKbps)) psi.ArgumentList.Add(arg);
 
         Process? process;
         try { process = Process.Start(psi); }
@@ -332,11 +334,16 @@ public static class ExportRunner
 
             process.WaitForExit();                      // also drains the async readers
 
-            if (code == 0 && guarded.Fault is null && cancelled?.Invoke() != true && process.ExitCode != 0)
+            if (code == 0 && cancelled?.Invoke() != true && process.ExitCode != 0)
             {
-                string why;
-                lock (ffmpegErrors) why = ffmpegErrors.Count > 0 ? ffmpegErrors[^1] : $"exit code {process.ExitCode}";
-                return Fail($"ffmpeg failed: {why}");
+                string? why;
+                lock (ffmpegErrors) why = ffmpegErrors.Count > 0 ? ffmpegErrors[^1] : null;
+                // An ffmpeg that exited early makes our write fail with "Broken
+                // pipe"; its own stderr is the reason, so it wins over the fault.
+                // With no stderr, a fault still reads as the write failure (we
+                // may have killed ffmpeg ourselves because of it).
+                if (why is not null || guarded.Fault is null)
+                    return Fail($"ffmpeg failed: {why ?? $"exit code {process.ExitCode}"}");
             }
 
             return Judge(code, guarded, samples, error, cancelled, () =>

@@ -68,8 +68,14 @@ public sealed record FfmpegTools(string Path, IReadOnlySet<string> Encoders)
     /// daemon's render produced, on stdin; the container is named with
     /// <c>-f</c> because the output is a temp file whose extension says nothing.
     /// </summary>
-    public static IReadOnlyList<string> BuildArgs(ExportFormat format, string encoder, string outputPath)
+    public static IReadOnlyList<string> BuildArgs(
+        ExportFormat format, string encoder, string outputPath,
+        int bitrateKbps = ExportFormats.DefaultBitrateKbps)
     {
+        if (!ExportFormats.Bitrates.Contains(bitrateKbps))
+            throw new ArgumentOutOfRangeException(nameof(bitrateKbps), bitrateKbps, "not an offered bitrate");
+        string rate = bitrateKbps + "k";
+
         if (format == ExportFormat.Wav)
             throw new ArgumentException("WAV is written by this process, not ffmpeg", nameof(format));
         if (!System.IO.Path.IsPathRooted(outputPath))
@@ -87,11 +93,11 @@ public sealed record FfmpegTools(string Path, IReadOnlySet<string> Encoders)
         switch (format)
         {
             case ExportFormat.Mp3:
-                args.AddRange(["-b:a", "128k", "-f", "mp3"]);
+                args.AddRange(["-b:a", rate, "-f", "mp3"]);
                 break;
             case ExportFormat.Aac:
                 // ipod is ffmpeg's .m4a muxer: audio-only MP4 with the right brand.
-                args.AddRange(["-b:a", "128k", "-movflags", "+faststart", "-f", "ipod"]);
+                args.AddRange(["-b:a", rate, "-movflags", "+faststart", "-f", "ipod"]);
                 break;
             case ExportFormat.Flac:
                 args.AddRange(["-f", "flac"]);

@@ -51,6 +51,8 @@ public sealed class ExportTab : UserControl
     };
     private readonly ComboBox _voice = new() { Width = 320 };
     private readonly ComboBox _format = new() { Width = 260 };
+    private readonly ComboBox _bitrate = new() { Width = 110 };
+    private readonly TextBlock _bitrateLabel = Ui.Label("Bitrate");
     private readonly TextBlock _formatNote = Ui.Label("");
     private readonly TextBlock _status = Ui.Label("");
     private readonly ProgressBar _progress = new() { IsIndeterminate = true, IsVisible = false };
@@ -85,6 +87,8 @@ public sealed class ExportTab : UserControl
             (f, _) => new TextBlock { Text = ExportFormats.DisplayName(f) + Suffix(f) });
         _format.SelectedIndex = 0;
         _format.SelectionChanged += (_, _) => UpdateFormatNote();
+        _bitrate.ItemsSource = ExportFormats.Bitrates.Select(b => $"{b} kbit/s").ToList();
+        _bitrate.SelectedIndex = ExportFormats.Bitrates.ToList().IndexOf(ExportFormats.DefaultBitrateKbps);
 
         var load = new Button { Content = "Load text file…" };
         load.Click += async (_, _) => await LoadFileAsync();
@@ -110,7 +114,7 @@ public sealed class ExportTab : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 8,
-                    Children = { Ui.Label("Voice"), _voice, Ui.Label("Format"), _format },
+                    Children = { Ui.Label("Voice"), _voice, Ui.Label("Format"), _format, _bitrateLabel, _bitrate },
                 },
                 _formatNote,
                 new StackPanel
@@ -156,9 +160,17 @@ public sealed class ExportTab : UserControl
 
     private ExportFormat ChosenFormat => _format.SelectedItem is ExportFormat f ? f : ExportFormat.Wav;
 
+    private int ChosenBitrate =>
+        _bitrate.SelectedIndex >= 0 && _bitrate.SelectedIndex < ExportFormats.Bitrates.Count
+            ? ExportFormats.Bitrates[_bitrate.SelectedIndex]
+            : ExportFormats.DefaultBitrateKbps;
+
     private void UpdateFormatNote()
     {
         _formatNote.Text = FfmpegTools.Unavailable(ChosenFormat, _ffmpeg, _bundled) ?? "";
+        bool lossy = ExportFormats.HasBitrate(ChosenFormat);
+        _bitrate.IsVisible = lossy;
+        _bitrateLabel.IsVisible = lossy;
         _formatNote.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
     }
 
@@ -287,6 +299,7 @@ public sealed class ExportTab : UserControl
         _status.Text = "Rendering…";
 
         var ffmpeg = _ffmpeg;
+        int bitrate = ChosenBitrate;
         int rate = (_voices.FirstOrDefault(v => v.Id == ChosenVoice) ?? _voices.FirstOrDefault(v => v.IsDefault))
             ?.SampleRate ?? 22050;
         ExportOutcome outcome = await Task.Run(() =>
@@ -297,7 +310,8 @@ public sealed class ExportTab : UserControl
                     session.ReadLine, format, path, ffmpeg,
                     () => _cancelRequested,
                     samples => Dispatcher.UIThread.Post(() =>
-                        _status.Text = $"Rendering… {samples / (double)rate:F0} s of audio so far"));
+                        _status.Text = $"Rendering… {samples / (double)rate:F0} s of audio so far"),
+                    bitrateKbps: bitrate);
             }
             finally
             {

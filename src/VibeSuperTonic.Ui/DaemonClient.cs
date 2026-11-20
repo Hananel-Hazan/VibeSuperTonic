@@ -139,14 +139,24 @@ public sealed class DaemonClient
         using Socket? socket = Connect();
         if (socket is null) return null;
 
-        await using var stream = new NetworkStream(socket, ownsSocket: false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+        // A daemon that exits between the write and the read is "no daemon to
+        // ask", as the contract above says. Callers are async-void handlers, where
+        // an escaping IOException ends the process (review item 25).
+        try
+        {
+            await using var stream = new NetworkStream(socket, ownsSocket: false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-        await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
-        string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
+            await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
+            string? line = await reader.ReadLineAsync(token).ConfigureAwait(false);
 
-        return line is null ? null : Protocol.TryDecode<Response>(line);
+            return line is null ? null : Protocol.TryDecode<Response>(line);
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -173,32 +183,39 @@ public sealed class DaemonClient
         using Socket? socket = Connect();
         if (socket is null) return null;
 
-        await using var stream = new NetworkStream(socket, ownsSocket: false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
-
-        await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
-
-        while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+        try
         {
-            if (Protocol.TryDecode<Response>(line) is not { } reply) continue;
+            await using var stream = new NetworkStream(socket, ownsSocket: false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            await using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-            // Progress replies carry a row, or a byte count, and nothing else;
-            // the final one carries the payload, or a failure. That is the shape
-            // vst-ctl relies on too, and it is what lets this loop end without a
-            // sentinel message. Both streaming verbs are listed here rather than
-            // testing "is any payload null", so that adding a third is a
-            // deliberate edit instead of an accident of field ordering.
-            if (reply.Progress is not null || reply.VoiceProgress is not null)
+            await writer.WriteLineAsync(Protocol.Encode(request)).ConfigureAwait(false);
+
+            while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
             {
-                onReply(reply);
-                continue;
+                if (Protocol.TryDecode<Response>(line) is not { } reply) continue;
+
+                // Progress replies carry a row, or a byte count, and nothing else;
+                // the final one carries the payload, or a failure. That is the shape
+                // vst-ctl relies on too, and it is what lets this loop end without a
+                // sentinel message. Both streaming verbs are listed here rather than
+                // testing "is any payload null", so that adding a third is a
+                // deliberate edit instead of an accident of field ordering.
+                if (reply.Progress is not null || reply.VoiceProgress is not null)
+                {
+                    onReply(reply);
+                    continue;
+                }
+
+                return reply;
             }
 
-            return reply;
+            return null;
         }
-
-        return null;
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

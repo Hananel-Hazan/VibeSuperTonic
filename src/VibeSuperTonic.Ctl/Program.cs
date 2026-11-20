@@ -64,32 +64,28 @@ const int AutoStartCeilingMs = 30000;
 // saving of one second.
 const int AfterExitGraceMs = 1500;
 
-if (args.Length == 0 || args[0] is "--help" or "-h")
+var parsed = CtlArgs.Parse(args);
+switch (parsed.Outcome)
 {
-    PrintUsage();
-    return args.Length == 0 ? 2 : 0;
+    case CtlOutcome.Usage:
+        PrintUsage();
+        return 2;
+    case CtlOutcome.Help:
+        PrintUsage();
+        return 0;
+    case CtlOutcome.Error:
+        // An unknown option, a bad value or a missing verb is refused with a
+        // message and exit 2 (never an exception: out of NativeAOT that is
+        // SIGABRT). The parser is Core/Ipc/CtlArgs.cs, where it is tested.
+        Console.Error.WriteLine(parsed.Error);
+        if (parsed.ShowUsage) PrintUsage();
+        return 2;
 }
 
-// `--` ENDS THE OPTIONS: everything after it is text, whatever it looks like.
-// Every flag below is looked for in `options` only, never in `args`. Until
-// 2026-10-04 they were searched for anywhere, and any argument beginning with
-// "--" was dropped from the positionals, so `render "--version"` printed a
-// version where a WAV belonged and `render -- "-- signed, Bob"` spoke
-// "signed, Bob". Text comes from whatever window has focus, so a flag that
-// can be matched inside it is a flag a web page can set.
-int endOfOptions = Array.IndexOf(args, "--");
-string[] options = endOfOptions >= 0 ? args[..endOfOptions] : args;
-string[] afterOptions = endOfOptions >= 0 ? args[(endOfOptions + 1)..] : [];
-
-// Answered here, before the verb check, because it is a question about this
-// binary rather than a request to the daemon — asking a daemon its version to
-// learn this one's would defeat the purpose. Note which flag this is: until
-// 2026-08-18 `vst-ctl --version` was the exact input that reached the empty
-// positional array below and turned into SIGABRT. It now has a meaning.
-//
-// build/pack-tar.sh runs this on the SHIPPED ELF and refuses to build an archive
-// whose three binaries disagree, which is what makes this more than cosmetic.
-if (options.Contains("--version"))
+// Answered before the verb check, because they are questions about this binary
+// rather than requests to the daemon. build/pack-tar.sh runs --version on the
+// SHIPPED ELF and refuses an archive whose three binaries disagree.
+if (parsed.Outcome == CtlOutcome.Version)
 {
     Console.WriteLine(
         Assembly.GetEntryAssembly()
@@ -100,12 +96,10 @@ if (options.Contains("--version"))
     return 0;
 }
 
-// Which formats `render --out` can write here, and with which ffmpeg. Also a
-// question about this install rather than the daemon, so no daemon is involved.
-// pack-snap.sh and pack-flatpak.sh ask it INSIDE the sandbox: it is the only
-// check that FfmpegDetector, under real confinement, finds the ffmpeg the
-// package carries. Exit 0 only when every format is available.
-if (options.Contains("--export-formats"))
+// Which formats `render --out` can write here, and with which ffmpeg.
+// pack-snap.sh and pack-flatpak.sh ask it INSIDE the sandbox. Exit 0 only when
+// every format is available.
+if (parsed.Outcome == CtlOutcome.ExportFormats)
 {
     FfmpegTools? tools = FfmpegDetector.Detect();
     string? bundled = FfmpegDetector.BundledPath();
@@ -129,244 +123,27 @@ if (options.Contains("--export-formats"))
     return unavailable == 0 ? 0 : 1;
 }
 
-bool noStart = options.Contains("--no-start");
-
-// `diagnostics` only. --json prints the snapshot as one line for jq (the default
-// is a table for a person); --text asks the daemon to include a truncated snippet
-// of the words being read, which is OFF otherwise because this output is what
-// people paste into bug reports.
-bool asJson = options.Contains("--json");
-bool withText = options.Contains("--text");
-bool force = options.Contains("--force");
-
-// Trap 7: the voices are a SECOND licence axis, separate from the engine's, and
-// each voice differs. The daemon refuses an install without this, and names the
-// terms in the refusal so the accepting is deliberate rather than discovered.
-bool acceptLicence = options.Contains("--accept-licence") || options.Contains("--accept-license")
-                     || options.Contains("--yes") || options.Contains("-y");
-
-// --voice takes a value, so its argument has to come out of the positional list
-// as well as the flag itself — otherwise the voice id is spoken as text, which
-// is exactly what happened while this was being written.
-string? voice = null;
-int voiceAt = Array.IndexOf(options, "--voice");
-if (voiceAt >= 0)
-{
-    if (voiceAt + 1 >= options.Length || options[voiceAt + 1].StartsWith("--", StringComparison.Ordinal))
-    {
-        Console.Error.WriteLine("--voice needs a voice id, e.g. `--voice en_US-lessac-medium`");
-        return 2;
-    }
-    voice = options[voiceAt + 1];
-}
-
-// --language, and it exists for exactly one caller. Supertonic is ONE model set
-// over 31 languages and takes the language per utterance, so a Speech Dispatcher
-// module told `language=de` on every SET has no way to honour it without this:
-// the daemon has read Request.Language since Phase 4 and vst-ctl was simply
-// never able to set it. A Piper voice needs nothing here — the model IS the
-// language — and the module sends none for one.
-string? language = null;
-int langAt = Array.IndexOf(options, "--language");
-if (langAt >= 0)
-{
-    if (langAt + 1 >= options.Length || options[langAt + 1].StartsWith("--", StringComparison.Ordinal))
-    {
-        Console.Error.WriteLine("--language needs a code, e.g. `--language de`");
-        return 2;
-    }
-    language = options[langAt + 1];
-}
-
-// --rate, the screen reader's, -100..100. Only `render` reads it: the hotkey
-// speaks at whatever settings.json says, and a rate on the press path would be a
-// second place the speed is decided. It is a per-utterance adjustment because
-// that is what speechd sends — a SET that can arrive between any two messages —
-// and writing it to settings.json would make Orca's slider edit the file the
-// Tune tab owns.
-int? rate = null;
-int rateAt = Array.IndexOf(options, "--rate");
-if (rateAt >= 0)
-{
-    if (rateAt + 1 >= options.Length
-        || !int.TryParse(options[rateAt + 1], System.Globalization.NumberStyles.Integer,
-                         System.Globalization.CultureInfo.InvariantCulture, out int parsedRate))
-    {
-        Console.Error.WriteLine("--rate needs a whole number from -100 to 100, e.g. `--rate 30`");
-        return 2;
-    }
-    rate = parsedRate;
-}
-
-// --volume, the screen reader's, -100..100, and `render` only for the same
-// reason --rate is: the hotkey plays at the level settings.json trims it to, and
-// a second place deciding loudness would let the two disagree. Applied by the
-// daemon as a gain (SpeechRate.SpeechdVolumeScale).
-int? volume = null;
-int volumeAt = Array.IndexOf(options, "--volume");
-if (volumeAt >= 0)
-{
-    if (volumeAt + 1 >= options.Length
-        || !int.TryParse(options[volumeAt + 1], System.Globalization.NumberStyles.Integer,
-                         System.Globalization.CultureInfo.InvariantCulture, out int parsedVolume))
-    {
-        Console.Error.WriteLine("--volume needs a whole number from -100 to 100, e.g. `--volume -20`");
-        return 2;
-    }
-    volume = parsedVolume;
-}
-
-// --marks: report SSML <mark> positions on stderr, one `@vst-mark` line each
-// (MarkLine). `render` only. Off by default so a plain render's stderr stays
-// what it was: free text that only appears when something went wrong.
-bool marks = options.Contains("--marks");
-
-// --text-stdin: the text is stdin, read to its end, rather than the arguments.
-// `render` and `speak` only. It exists for the Speech Dispatcher module, whose
-// messages are a whole document at a time: Linux refuses one argument over
-// 128 KiB (MAX_ARG_STRLEN), and the exec failing with E2BIG took the espeak
-// fallback down with it, so a long document was silence. A flag rather than
-// "-" as the text, because "-" is something a screen reader really does read.
-bool textFromStdin = options.Contains("--text-stdin");
-
-// render's destination. "-" is stdout, which is what a Speech Dispatcher module
-// asks for: the module's whole job is `... | $PLAY_COMMAND`, and a temp file in
-// the middle of that is latency a screen reader pays on every utterance.
-string outPath = "-";
-int outAt = Array.IndexOf(options, "--out");
-if (outAt >= 0)
-{
-    if (outAt + 1 >= options.Length || options[outAt + 1].StartsWith("--", StringComparison.Ordinal))
-    {
-        Console.Error.WriteLine("--out needs a path, or - for stdout");
-        return 2;
-    }
-    outPath = options[outAt + 1];
-}
-
-// --format wav|mp3|aac|flac, for `render --out FILE`. Without it the format is
-// the file name's extension, and WAV when that says nothing (the behaviour
-// before this option existed). MP3, AAC and FLAC are encoded by the system's
-// ffmpeg: there is no encoder in .NET, and none is bundled.
-ExportFormat? exportFormat = null;
-int formatAt = Array.IndexOf(options, "--format");
-if (formatAt >= 0)
-{
-    exportFormat = formatAt + 1 < options.Length ? ExportFormats.Parse(options[formatAt + 1]) : null;
-    if (exportFormat is null)
-    {
-        Console.Error.WriteLine("--format needs one of: wav, mp3, aac, flac");
-        return 2;
-    }
-    if (outPath == "-" && exportFormat != ExportFormat.Wav)
-    {
-        Console.Error.WriteLine($"--format {options[formatAt + 1]} needs --out FILE; only WAV can go to stdout");
-        return 2;
-    }
-}
-else if (outPath != "-")
-{
-    exportFormat = ExportFormats.FromPath(outPath);
-}
-
-// -1 for "no --voice", and the guard matters: without it the excluded index is
-// 0, which is the VERB, and every command without --voice fails as "unknown
-// verb: <the text>".
-int voiceValueAt = voiceAt >= 0 ? voiceAt + 1 : -1;
-int outValueAt = outAt >= 0 ? outAt + 1 : -1;
-int formatValueAt = formatAt >= 0 ? formatAt + 1 : -1;
-int langValueAt = langAt >= 0 ? langAt + 1 : -1;
-// -100 does not start with "--", so without excluding its index a negative rate
-// is spoken as text — the same trap --voice documents one option above.
-int rateValueAt = rateAt >= 0 ? rateAt + 1 : -1;
-int volumeValueAt = volumeAt >= 0 ? volumeAt + 1 : -1;
-var positional = options
-    .Where((a, i) => !a.StartsWith("--", StringComparison.Ordinal)
-                     && i != voiceValueAt && i != outValueAt && i != langValueAt
-                     && i != rateValueAt && i != formatValueAt && i != volumeValueAt)
-    .Concat(afterOptions)
-    .ToArray();
-
-// Every argument was an option, so there is no verb to run. This is checked
-// rather than left to positional[0]: an IndexOutOfRangeException out of a
-// NativeAOT binary is SIGABRT, a core file and exit 134 — which is what
-// `vst-ctl --version`, or one mistyped flag, produced before this line existed.
-// Same shape as the daemon's over-long socket path, and the same conclusion:
-// a refusal a person can read beats a crash a person has to interpret.
-if (positional.Length == 0)
-{
-    Console.Error.WriteLine($"no verb in: {string.Join(' ', args)}");
-    PrintUsage();
-    return 2;
-}
-
-// `voice install <id>` and `voice remove <id>` are two words, and the wire verb
-// is one. Folded here rather than adding VoiceInstall/VoiceRemove as things a
-// user types: "voice" is the noun the Voices tab uses and the pair reads as a
-// pair, which `voiceinstall` never would.
-string? voiceSubject = null;
-if (string.Equals(positional[0], "voice", StringComparison.OrdinalIgnoreCase))
-{
-    if (positional.Length < 2)
-    {
-        Console.Error.WriteLine("voice needs an action: `voice install <id>` or `voice remove <id>`");
-        return 2;
-    }
-
-    string action = positional[1].ToLowerInvariant();
-    if (action is not ("install" or "remove"))
-    {
-        Console.Error.WriteLine($"unknown voice action: {positional[1]} (install, remove)");
-        return 2;
-    }
-
-    // The id may arrive as the third positional or as --voice; both read
-    // naturally and neither should be the one that fails.
-    voiceSubject = positional.Length > 2 ? positional[2] : voice;
-    if (string.IsNullOrWhiteSpace(voiceSubject))
-    {
-        Console.Error.WriteLine($"voice {action} needs a voice id — `vst-ctl voices` lists them");
-        return 2;
-    }
-
-    positional = new[] { action == "install" ? "voiceinstall" : "voiceremove" };
-}
-
-if (!Enum.TryParse<RequestVerb>(positional[0], ignoreCase: true, out var verb))
-{
-    Console.Error.WriteLine($"unknown verb: {positional[0]}");
-    return 2;
-}
-
-// seek's argument is a number, not text. Without this it would be joined into
-// Text and the daemon would speak the digits.
-int? seekOffset = null;
-if (verb == RequestVerb.Seek)
-{
-    if (positional.Length < 2 || !int.TryParse(positional[1], out int parsed))
-    {
-        Console.Error.WriteLine("seek needs a character offset, e.g. `vst-ctl seek 42`");
-        return 2;
-    }
-    seekOffset = parsed;
-}
+bool noStart = parsed.NoStart;
+bool asJson = parsed.AsJson;
+bool withText = parsed.WithText;
+bool force = parsed.Force;
+bool acceptLicence = parsed.AcceptLicence;
+string? voice = parsed.Voice;
+string? language = parsed.Language;
+int? rate = parsed.Rate;
+int? volume = parsed.Volume;
+bool marks = parsed.Marks;
+bool textFromStdin = parsed.TextFromStdin;
+string outPath = parsed.OutPath;
+ExportFormat? exportFormat = parsed.ExportFormat;
+string[] positional = parsed.Positional;
+string? voiceSubject = parsed.VoiceSubject;
+RequestVerb verb = parsed.Verb;
+int? seekOffset = parsed.SeekOffset;
 
 string? stdinText = null;
 if (textFromStdin)
 {
-    if (verb is not (RequestVerb.Render or RequestVerb.Speak))
-    {
-        Console.Error.WriteLine("--text-stdin is for `render` and `speak`");
-        return 2;
-    }
-
-    // Two sources of text would leave one of them silently unspoken.
-    if (positional.Length > 1)
-    {
-        Console.Error.WriteLine("--text-stdin and text on the command line: give one or the other");
-        return 2;
-    }
-
     // UTF-8 whatever the locale, and no BOM sniffing: the module writes plain
     // UTF-8, and a text that really begins with U+FEFF should not lose it.
     using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false),
@@ -621,19 +398,33 @@ using (var reader = new StreamReader(stream, Encoding.UTF8))
     // The connection now belongs to the event stream. One JSON object per line,
     // flushed as it arrives, so `vst-ctl subscribe | jq` works the way anyone
     // would expect it to.
-    using var interrupted = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; interrupted.Cancel(); };
+    // Shut the socket down on Ctrl+C or SIGTERM: ReadLine() below blocks and
+    // never looks at a token, so with an idle daemon a flag would go unnoticed
+    // until the next event (item 20). RunRender does the same.
+    bool interrupted = false;
+    void Interrupt()
+    {
+        interrupted = true;
+        try { socket.Shutdown(SocketShutdown.Both); }
+        catch (SocketException) { /* already gone */ }
+        catch (ObjectDisposedException) { /* already gone */ }
+    }
+
+    using var sigint = PosixSignalRegistration.Create(
+        PosixSignal.SIGINT, ctx => { ctx.Cancel = true; Interrupt(); });
+    using var sigterm = PosixSignalRegistration.Create(
+        PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; Interrupt(); });
 
     try
     {
-        while (!interrupted.IsCancellationRequested)
+        while (!interrupted)
         {
             string? evt = reader.ReadLine();
-            if (evt is null) break;              // daemon went away
+            if (evt is null) break;              // daemon went away, or we shut down
             Console.WriteLine(evt);
         }
     }
-    catch (IOException) { /* daemon went away mid-line */ }
+    catch (IOException) { /* daemon went away mid-line, or the shutdown above */ }
 
     return 0;
 }
@@ -669,7 +460,8 @@ static void PrintUsage() =>
           shutdown     stop the daemon; the next hotkey press starts it again
 
         Options:
-          --voice ID   speak with this voice — a Supertonic style (M1) or an
+          --voice ID   (`--voice=ID` works too, for every option with a value)
+                       speak with this voice — a Supertonic style (M1) or an
                        installed Piper voice (en_US-lessac-medium), which also
                        chooses the engine
           --language C speak Supertonic in this language (de, fr, ja); a Piper
@@ -695,7 +487,7 @@ static void PrintUsage() =>
                        nothing, -100 is silence.
           --marks      with an SSML document, report each <mark> on stderr as
                        `@vst-mark <sample> <percent-encoded-name>`. `render` only.
-          --text-stdin read the text from stdin, to its end, instead of the
+          --text-stdin (or --stdin) read the text from stdin, to its end, instead of the
                        arguments. `render` and `speak` only; no length limit.
           --           end of options: everything after it is text, even
                        `vst-ctl render -- --version`

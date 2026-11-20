@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -62,6 +63,9 @@ public sealed class VoicesTab : UserControl
     public VoicesTab(DaemonClient client)
     {
         _client = client;
+        AutomationProperties.SetName(_search, "Search voices");
+        AutomationProperties.SetName(_language, "Filter by language");
+        AutomationProperties.SetName(_quality, "Filter by quality");
 
         var refresh = new Button { Content = "Refresh" };
         refresh.Click += async (_, _) => await RefreshAsync();
@@ -209,6 +213,7 @@ public sealed class VoicesTab : UserControl
                     Text = v.IsDefault ? "●" : "○",
                     Width = 14,
                     VerticalAlignment = VerticalAlignment.Center,
+                    [AutomationProperties.NameProperty] = v.IsDefault ? "default voice" : "not the default voice",
                 },
                 Column(v.Id, IdWidth - 22, v.IsDefault ? FontWeight.Bold : FontWeight.Normal),
                 Column(string.Join(" · ", bits), InstalledDetailsWidth, opacity: 0.7),
@@ -233,6 +238,7 @@ public sealed class VoicesTab : UserControl
                 : Enumerable.Range(0, v.Speakers.Value).Select(i => i.ToString()).ToList();
 
             speakers = new ComboBox { ItemsSource = names, Width = 160 };
+            AutomationProperties.SetName(speakers, $"Speaker for {v.Id}");
             speakers.SelectedIndex = VibeSuperTonic.Core.Synthesis.VoicePicker.SpeakerIndex(v);
             buttons.Children.Add(speakers);
         }
@@ -255,11 +261,13 @@ public sealed class VoicesTab : UserControl
         if (speakers is not null)
         {
             var use = new Button { Content = "Use" };
+            AutomationProperties.SetName(use, $"Use {v.Id}");
             use.Click += async (_, _) => await UseAsync(Chosen());
             buttons.Children.Add(use);
         }
 
         var sample = new Button { Content = "Sample" };
+        AutomationProperties.SetName(sample, $"Sample {v.Id}");
         sample.Click += async (_, _) => await _client.SendAsync(new Request
         {
             Verb = RequestVerb.Speak,
@@ -274,6 +282,7 @@ public sealed class VoicesTab : UserControl
         if (v.Engine == "piper")
         {
             var remove = new Button { Content = "Remove" };
+            AutomationProperties.SetName(remove, $"Remove {v.Id}");
             remove.Click += async (_, _) => await RemoveAsync(v);
             buttons.Children.Add(remove);
         }
@@ -298,9 +307,11 @@ public sealed class VoicesTab : UserControl
         if (!string.IsNullOrEmpty(v.Licence)) ToolTip.SetTip(licence, v.Licence);
 
         var progress = new ProgressBar { Width = 160, Minimum = 0, Maximum = 1, IsVisible = false };
+        AutomationProperties.SetName(progress, $"Download progress for {v.Id}");
         var progressText = Ui.Label("");
 
         var install = new Button { Content = "Download" };
+        AutomationProperties.SetName(install, $"Download {v.Id}");
         install.Click += async (_, _) => await InstallAsync(v, install, progress, progressText);
 
         // FIXED COLUMNS, and the button before the licence. The licence text runs

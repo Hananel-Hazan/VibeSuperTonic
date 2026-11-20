@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -68,6 +69,9 @@ public sealed class ReaderTab : UserControl
     private readonly TextBlock _state = new() { FontWeight = FontWeight.SemiBold };
     private readonly ListBox _history = new() { Height = 120 };
 
+    /// <summary>The full text of each "Recently read" row, same order as the rows.</summary>
+    private readonly List<string> _historyTexts = [];
+
     /// <summary>The text of the last utterance, for the Export tab to offer.</summary>
     public string Document => _document;
 
@@ -100,6 +104,21 @@ public sealed class ReaderTab : UserControl
         // Tunnel, so the click is seen before the control's own selection
         // handling consumes it.
         _text.AddHandler(PointerPressedEvent, OnTextPressed, RoutingStrategies.Tunnel);
+
+        // The keyboard path to the same verb (review item 46): move the caret with
+        // Shift+arrows or select, then press Enter to read from there.
+        _text.Focusable = true;
+        AutomationProperties.SetName(_text, "Text being read");
+        AutomationProperties.SetName(_history, "Recently read. Press Enter to read the selected one again");
+        AutomationProperties.SetName(_scroller, "Text being read, scrollable");
+        _text.KeyDown += OnTextKeyDown;
+        _history.DoubleTapped += async (_, _) => await ReadHistoryAsync();
+        _history.KeyDown += async (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            await ReadHistoryAsync();
+        };
 
         Content = new DockPanel
         {
@@ -224,8 +243,12 @@ public sealed class ReaderTab : UserControl
         if (remember && text.Length > 0)
         {
             _history.Items.Insert(0, Summarize(text));
+            _historyTexts.Insert(0, text);
             while (_history.Items.Count > HistoryLimit)
+            {
                 _history.Items.RemoveAt(_history.Items.Count - 1);
+                _historyTexts.RemoveAt(_historyTexts.Count - 1);
+            }
         }
     }
 
@@ -325,5 +348,22 @@ public sealed class ReaderTab : UserControl
         int offset = _sliceStart + hit.TextPosition;
 
         await _client.SendAsync(new Request { Verb = RequestVerb.Seek, Offset = offset });
+    }
+
+    /// <summary>Enter on the text: seek to the selection start (or caret) — the click's keyboard twin.</summary>
+    private async void OnTextKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || _document.Length == 0) return;
+        e.Handled = true;
+        int local = Math.Max(0, Math.Min(_text.SelectionStart, _text.SelectionEnd));
+        await _client.SendAsync(new Request { Verb = RequestVerb.Seek, Offset = _sliceStart + local });
+    }
+
+    /// <summary>Read the selected "Recently read" row again, as typed text.</summary>
+    private async Task ReadHistoryAsync()
+    {
+        int i = _history.SelectedIndex;
+        if (i < 0 || i >= _historyTexts.Count) return;
+        await _client.SendAsync(new Request { Verb = RequestVerb.Speak, Text = _historyTexts[i] });
     }
 }

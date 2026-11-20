@@ -29,14 +29,14 @@ namespace VibeSuperTonic.Daemon;
 public sealed class WaylandSelectionSource : ISelectionSource
 {
     private readonly bool _clipboardFallback;
-    private readonly Func<bool, WaylandNative.WaylandCapture> _capture;
+    private readonly Func<ISelectionReader> _open;
     private readonly ICopyKey? _copyKey;
 
     public WaylandSelectionSource(bool clipboardFallback = false)
-        : this(clipboardFallback, primary => WaylandNative.Capture(primary, Budget)) { }
+        : this(clipboardFallback, (ICopyKey?)null) { }
 
     internal WaylandSelectionSource(bool clipboardFallback, ICopyKey? copyKey)
-        : this(clipboardFallback, primary => WaylandNative.Capture(primary, Budget), copyKey) { }
+        : this(clipboardFallback, () => new SessionReader(), copyKey) { }
 
     /// <summary>
     /// The seam the tests use. The real capture needs a compositor, a seat and an
@@ -47,11 +47,42 @@ public sealed class WaylandSelectionSource : ISelectionSource
     internal WaylandSelectionSource(
         bool clipboardFallback, Func<bool, WaylandNative.WaylandCapture> capture,
         ICopyKey? copyKey = null, int copyWaitMs = CopyWaitMs)
+        : this(clipboardFallback, () => new FuncReader(capture), copyKey, copyWaitMs) { }
+
+    /// <summary>
+    /// The same seam one level down: what opens the connection a press reads
+    /// through, so a test can count connections as well as reads.
+    /// </summary>
+    internal WaylandSelectionSource(
+        bool clipboardFallback, Func<ISelectionReader> open,
+        ICopyKey? copyKey = null, int copyWaitMs = CopyWaitMs)
     {
         _clipboardFallback = clipboardFallback;
-        _capture = capture;
+        _open = open;
         _copyKey = copyKey;
         _copyWaitMs = copyWaitMs;
+    }
+
+    /// <summary>
+    /// Reads selections through one connection. A press opens one, reads PRIMARY
+    /// and the clipboard through it as often as it needs, and disposes it.
+    /// </summary>
+    internal interface ISelectionReader : IDisposable
+    {
+        WaylandNative.WaylandCapture Read(bool primary);
+    }
+
+    private sealed class SessionReader : ISelectionReader
+    {
+        private readonly WaylandNative.Session _session = WaylandNative.Session.Open();
+        public WaylandNative.WaylandCapture Read(bool primary) => _session.Read(primary, Budget);
+        public void Dispose() => _session.Dispose();
+    }
+
+    private sealed class FuncReader(Func<bool, WaylandNative.WaylandCapture> capture) : ISelectionReader
+    {
+        public WaylandNative.WaylandCapture Read(bool primary) => capture(primary);
+        public void Dispose() { }
     }
 
     /// <summary>R-9, and the same number the X11 source caps at.</summary>
@@ -64,9 +95,42 @@ public sealed class WaylandSelectionSource : ISelectionSource
     /// </summary>
     internal static WaylandNative.ReceiveBudget Budget => WaylandNative.ReceiveBudget.Default;
 
-    public SelectionResult Capture(string? display = null)
+    public SelectionResult Capture(string? display = null) => Capture(display, (string?)null);
+
+    /// <summary>
+    /// Capture, knowing what is being read now. <paramref name="reading"/> is the
+    /// text of the reading in progress, or null when idle.
+    ///
+    /// <para><b>A press on the text already playing never presses Ctrl+C</b>
+    /// (review item 8). The daemon stops a reading when the press captures the
+    /// same text, and AutoCopy fires exactly when PRIMARY has not changed since
+    /// the last press, which is that case. So stopping a reading in a terminal
+    /// sent it Ctrl+C, an interrupt to whatever ran there, and in an editor it
+    /// overwrote the clipboard, all before the daemon decided the press meant
+    /// stop. PRIMARY is compared with <paramref name="reading"/> first, and a
+    /// match is returned as it is, without a key.</para>
+    ///
+    /// <para>Not covered, because it cannot be told apart: a reading that came
+    /// from AutoCopy itself (PRIMARY stale, the text from Ctrl+C). The next
+    /// press there may be a new highlight in an application that never publishes
+    /// one, and the copy is the only way to find out.</para>
+    /// </summary>
+    public SelectionResult Capture(string? display, string? reading) =>
+        Capture(display, () => reading);
+
+    /// <summary>
+    /// As above, with what is playing asked for <b>after</b> this press holds the
+    /// Wayland connection, not before. A second press made while the first is
+    /// still in its AutoCopy poll waits for the connection; sampled before that
+    /// wait it would see "idle", miss the reading the first press started, and
+    /// send Ctrl+C on what is in fact a stop (the batch 2 review).
+    /// </summary>
+    public SelectionResult Capture(string? display, Func<string?> reading)
     {
-        var got = _capture(true);
+        // One connection for the whole press (review item 86): PRIMARY, the
+        // clipboard before Ctrl+C, and every poll after it.
+        using var reader = _open();
+        var got = reader.Read(true);
 
         if (!got.Connected)
             return SelectionResult.None(
@@ -86,12 +150,12 @@ public sealed class WaylandSelectionSource : ISelectionSource
         // path there is no "you selected the same thing again" ambiguity here.
         if (!got.HadOffer && got.Error is null)
         {
-            if (TryAutoCopy(null) is { } autoCopied) return autoCopied;
+            if (TryAutoCopy(reader, null) is { } autoCopied) return autoCopied;
 
             if (!_clipboardFallback)
                 return SelectionResult.None("nothing is selected.");
 
-            var clip = _capture(false);
+            var clip = reader.Read(false);
             if (!clip.HadOffer || string.IsNullOrEmpty(clip.Text))
                 return SelectionResult.None("nothing is selected, and the clipboard is empty.");
 
@@ -135,9 +199,10 @@ public sealed class WaylandSelectionSource : ISelectionSource
                 $"the application stopped sending part way through, so only the first " +
                 $"{got.Text!.Length} characters were read");
 
-        if (TryAutoCopy(got.Text!) is { } autoCopy) return autoCopy;
+        if (IsBeingRead(got.Text!, reading())) RememberPrimary(got.Text!);
+        else if (TryAutoCopy(reader, got.Text!) is { } autoCopy) return autoCopy;
 
-        if (_clipboardFallback && CopiedSinceSelected(got.Text!) is { } copied)
+        if (_clipboardFallback && CopiedSinceSelected(reader, got.Text!) is { } copied)
             return Cap(copied,
                 "read from the clipboard, because the selection has not changed since " +
                 "the last read and something was copied since");
@@ -175,7 +240,30 @@ public sealed class WaylandSelectionSource : ISelectionSource
     /// copy is identical), and otherwise this returns null so the ordinary rules
     /// run — Ctrl+C with nothing highlighted must not make the press fail.</para>
     /// </summary>
-    private SelectionResult? TryAutoCopy(string? primary)
+    /// <summary>
+    /// Whether PRIMARY is the text being read, compared as the daemon will compare
+    /// it: after the R-9 cap, because the reading holds the capped text.
+    /// </summary>
+    private static bool IsBeingRead(string primary, string? reading) =>
+        reading is not null
+        && string.Equals(TextCap.Apply(primary, MaxChars, out _), reading, StringComparison.Ordinal);
+
+    /// <summary>
+    /// What <see cref="TryAutoCopy"/> records about a press it was not allowed to
+    /// act on, so the press after it compares against this one.
+    /// </summary>
+    private void RememberPrimary(string primary)
+    {
+        lock (_autoLock)
+        {
+            if (_autoSeen && !string.Equals(primary, _autoLastPrimary, StringComparison.Ordinal))
+                _autoLastCopied = null;                 // as TryAutoCopy forgets it on a change
+            _autoSeen = true;
+            _autoLastPrimary = primary;
+        }
+    }
+
+    private SelectionResult? TryAutoCopy(ISelectionReader reader, string? primary)
     {
         if (_copyKey is null) return null;
 
@@ -187,7 +275,7 @@ public sealed class WaylandSelectionSource : ISelectionSource
             if (!unchanged) { _autoLastCopied = null; return null; }
         }
 
-        string? before = ClipboardText();
+        string? before = ClipboardText(reader);
         var sent = _copyKey.Send();
         if (!sent.Sent)
         {
@@ -200,7 +288,7 @@ public sealed class WaylandSelectionSource : ISelectionSource
         long deadline = Environment.TickCount64 + _copyWaitMs;
         while (true)
         {
-            string? now = ClipboardText();
+            string? now = ClipboardText(reader);
             if (now is not null && !string.Equals(now, before, StringComparison.Ordinal)) { text = now; break; }
             if (Environment.TickCount64 >= deadline) break;
             Thread.Sleep(CopyPollMs);
@@ -218,9 +306,9 @@ public sealed class WaylandSelectionSource : ISelectionSource
         return Cap(text, "read by pressing Ctrl+C for you, because the selection had not changed");
     }
 
-    private string? ClipboardText()
+    private static string? ClipboardText(ISelectionReader reader)
     {
-        var clip = _capture(false);
+        var clip = reader.Read(false);
         return clip.HadOffer && clip.Error is null && !clip.TimedOut && !string.IsNullOrEmpty(clip.Text)
             ? clip.Text : null;
     }
@@ -252,9 +340,9 @@ public sealed class WaylandSelectionSource : ISelectionSource
     /// The first press after the daemon starts has nothing to compare against
     /// and reads PRIMARY too.</para>
     /// </summary>
-    private string? CopiedSinceSelected(string primary)
+    private string? CopiedSinceSelected(ISelectionReader reader, string primary)
     {
-        var clip = _capture(false);
+        var clip = reader.Read(false);
         bool clipFailed = clip.Error is not null || clip.TimedOut;
         string? clipText = clip.HadOffer && !string.IsNullOrEmpty(clip.Text) ? clip.Text : null;
 

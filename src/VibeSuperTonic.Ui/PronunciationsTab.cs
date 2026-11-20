@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Controls;
@@ -70,6 +71,11 @@ public sealed class PronunciationsTab : UserControl
         _client = client;
 
         _list.SelectionChanged += (_, _) => ShowSelected();
+        AutomationProperties.SetName(_list, "Pronunciation rules");
+        AutomationProperties.SetName(_match, "Match: the text to replace");
+        AutomationProperties.SetName(_replace, "Replace with");
+        AutomationProperties.SetName(_notes, "Notes");
+        AutomationProperties.SetName(_sample, "Sample text to preview the rules on");
 
         foreach (var box in new[] { _match, _replace, _notes })
         {

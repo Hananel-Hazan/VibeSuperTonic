@@ -609,6 +609,31 @@ These reach a user as silence, a wrong voice, or a release that cannot be built.
 107. **`HandleInit` (`SpeechdModule.cs:202`) owes no reply**, so an exception there leaves
     INIT unanswered and speechd drops the module. Not a regression of batch 1.
 
+### Added after batch 2's review pass (2026-11-20)
+
+Two other findings of that pass were fixed in batch 2 itself: what is playing is now asked
+for after a press holds the Wayland connection, and tray clicks run one at a time again.
+
+108. **Item 8's fix costs a press on a new highlight in an application that publishes
+    none.** While a reading that came from PRIMARY plays, highlighting in PdfCraft and
+    pressing finds PRIMARY equal to the reading, sends no Ctrl+C, and stops; a second
+    press then copies and reads. Inherent in item 8's design (the alternative is Ctrl+C
+    into a terminal on every stop). CONFIRMED by reading; a decision, not a bug.
+109. **A Wayland session reused across polls destroys offers that are neither
+    selection** (`Interop/WaylandNative.cs` around the poll's roundtrip). A compositor that
+    sends `data_offer` and `selection` in two event-loop turns would have the new offer
+    destroyed between them, and AutoCopy would miss the copy. KWin sends both together.
+    PLAUSIBLE, untested on other compositors.
+110. **Item 44 is not fixed.** Avalonia 11.3.20 never claims PRIMARY (the atom appears only
+    in its predefined table), so without AutoCopy our window's selection cannot reach the
+    daemon; with AutoCopy, Ctrl+C reaches our window like any other. Comparing the capture
+    with the Reader's text would refuse a real re-read. A fix belongs in the UI, telling
+    the daemon when our own window has focus.
+111. **Avalonia 11.3 exposes no AT-SPI on Linux** (no `atspi` or `org.a11y` in the 11.3.20
+    Avalonia, X11, FreeDesktop or Desktop assemblies, checked 2026-11-20). Item 45's
+    automation names help Windows UIA; on Linux the accessible surfaces are `vst-ctl` and
+    the Speech Dispatcher module, and `INSTALL.txt` should say so.
+
 ## 9. Checked and found sound
 
 Protocol parsing and peer-credential checks on the daemon socket; stop and interrupt

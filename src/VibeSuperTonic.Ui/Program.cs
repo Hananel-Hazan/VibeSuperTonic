@@ -111,6 +111,14 @@ internal sealed class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Backstop (review item 25): an exception escaping an async-void handler
+        // is logged and the window stays open, instead of the process ending.
+        Avalonia.Threading.Dispatcher.UIThread.UnhandledException += (_, e) =>
+        {
+            Console.Error.WriteLine($"vibesupertonic-ui: unhandled {e.Exception}");
+            e.Handled = true;
+        };
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow(_client);

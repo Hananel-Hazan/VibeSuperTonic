@@ -115,6 +115,12 @@ jobs:
       - name: Build Linux solution
         run: dotnet build VibeSuperTonic.linux.slnx -c Release --nologo
 
+      # X11SelectionSourceTests start their own X server and return without
+      # asserting when none exists, which on a bare runner is a green test that
+      # proved nothing.
+      - name: Install Xvfb for the X11 capture tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       # Was guarded on the directory existing, so it would activate by itself
       # when Phase 1 landed Core.Tests. It has: the guard is now permanently true
       # and only obscures a failure to restore.

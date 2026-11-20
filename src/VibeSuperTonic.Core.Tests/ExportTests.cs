@@ -89,10 +89,30 @@ public sealed class ExportTests : IDisposable
     [InlineData("a/b.WAV", ExportFormat.Wav)]
     [InlineData("x.mp3", ExportFormat.Mp3)]
     [InlineData("x.m4a", ExportFormat.Aac)]
-    [InlineData("x.aac", ExportFormat.Aac)]
     [InlineData("x.flac", ExportFormat.Flac)]
     public void The_extension_names_the_format(string path, ExportFormat expected) =>
         Assert.Equal(expected, ExportFormats.FromPath(path));
+
+    [Fact]
+    public void Dot_aac_is_not_claimed_because_the_aac_output_is_an_mp4_container()
+    {
+        Assert.Null(ExportFormats.FromPath("x.aac"));
+        Assert.Equal("ipod", FfmpegTools.BuildArgs(ExportFormat.Aac, "aac", "/o")[^2]);
+    }
+
+    [Fact]
+    public void The_bitrate_reaches_ffmpeg_for_mp3_and_aac_and_defaults_to_128k()
+    {
+        foreach (var (format, encoder) in new[] { (ExportFormat.Mp3, "libmp3lame"), (ExportFormat.Aac, "aac") })
+        {
+            var def = FfmpegTools.BuildArgs(format, encoder, "/o");
+            Assert.Equal("128k", def[def.ToList().IndexOf("-b:a") + 1]);
+            var hi = FfmpegTools.BuildArgs(format, encoder, "/o", 192);
+            Assert.Equal("192k", hi[hi.ToList().IndexOf("-b:a") + 1]);
+        }
+        Assert.DoesNotContain("-b:a", FfmpegTools.BuildArgs(ExportFormat.Flac, "flac", "/o", 192));
+        Assert.Throws<ArgumentOutOfRangeException>(() => FfmpegTools.BuildArgs(ExportFormat.Mp3, "libmp3lame", "/o", 1));
+    }
 
     [Fact]
     public void An_unknown_extension_is_not_guessed_as_anything()
@@ -456,6 +476,8 @@ public sealed class ExportTests : IDisposable
         var outcome = ExportRunner.Run(Lines(lots), ExportFormat.Mp3, target, dead);
 
         Assert.Equal(ExportStatus.Failed, outcome.Status);
+        Assert.Contains("boom", outcome.Message);                // ffmpeg's own stderr line...
+        Assert.DoesNotContain("Broken pipe", outcome.Message);   // ...not our failed write to its stdin
         Assert.Equal("bin-fake-ffmpeg", Leftovers());
     }
 

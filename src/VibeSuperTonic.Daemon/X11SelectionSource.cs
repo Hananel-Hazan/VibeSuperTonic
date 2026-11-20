@@ -96,17 +96,28 @@ public sealed class X11SelectionSource : ISelectionSource
                 $"could not open X display {name}. If this is a remote or su'd " +
                 "session, the daemon may not be authorised to connect to it.");
 
+        var link = ServerLink.Watch(dpy);
         try
         {
-            return CaptureFrom(dpy);
+            SelectionResult result = CaptureFrom(dpy, link);
+
+            // A server that died before the conversions were even asked turns
+            // up as "nothing is selected" or an unreadable property, and both
+            // would send the user looking in the wrong place.
+            return link.Lost && !result.Ok ? ServerLost : result;
         }
         finally
         {
             X11Native.XCloseDisplay(dpy);
+            link.Dispose();     // after the close: the close itself can raise the IO error
         }
     }
 
-    private SelectionResult CaptureFrom(IntPtr dpy)
+    private static readonly SelectionResult ServerLost = SelectionResult.None(
+        "the connection to the X display was lost during the capture — the X server " +
+        "stopped or restarted. Press again once the session is back.");
+
+    private SelectionResult CaptureFrom(IntPtr dpy, ServerLink link)
     {
         IntPtr primary = X11Native.XInternAtom(dpy, "PRIMARY", false);
         IntPtr owner = X11Native.XGetSelectionOwner(dpy, primary);
@@ -133,7 +144,7 @@ public sealed class X11SelectionSource : ISelectionSource
 
         try
         {
-            return Decide(dpy, window, primary, owner);
+            return Decide(dpy, window, primary, owner, link);
         }
         finally
         {
@@ -144,9 +155,48 @@ public sealed class X11SelectionSource : ISelectionSource
     /// <summary>
     /// Work out which selection holds what the user meant, then read it.
     /// </summary>
-    private SelectionResult Decide(IntPtr dpy, IntPtr window, IntPtr primary, IntPtr owner)
+    /// <remarks>
+    /// <para><b>Every conversion shares one deadline</b> (review items 61 and
+    /// 87, 2026-11-20). PRIMARY's TIMESTAMP and its UTF8_STRING, and CLIPBOARD's
+    /// TIMESTAMP under the fallback, are all asked before any reply is awaited.
+    /// They used to be asked one after another, each with its own 2 s wait, so
+    /// a busy owner cost 4 s per press and 6 s with the fallback, against 2 s on
+    /// Wayland. Measured against an owner that never answers, under a private
+    /// Xwayland: 4001 ms before, about 2000 ms after.</para>
+    ///
+    /// <para>CLIPBOARD's <em>text</em> is still asked only once the decision
+    /// says to read it: that is the opt-in's promise (see the class remarks),
+    /// and a timestamp says nothing about what was copied. It is asked inside
+    /// the same deadline, and is reached only when both owners have already
+    /// answered, so in practice it is quick.</para>
+    /// </remarks>
+    private SelectionResult Decide(IntPtr dpy, IntPtr window, IntPtr primary, IntPtr owner, ServerLink link)
     {
-        uint? primaryTime = SelectionTime(dpy, window, primary);
+        IntPtr timestamp = X11Native.XInternAtom(dpy, "TIMESTAMP", false);
+        IntPtr utf8 = X11Native.XInternAtom(dpy, "UTF8_STRING", false);
+        var replies = new Conversations(dpy, window, link);
+
+        replies.Ask(primary, timestamp, X11Native.XInternAtom(dpy, "VST_SELECTION_TIME", false));
+        replies.Ask(primary, utf8, X11Native.XInternAtom(dpy, "VST_SELECTION", false));
+
+        IntPtr clipboard = X11Native.None;
+        IntPtr clipOwner = X11Native.None;
+
+        if (_clipboardFallback)
+        {
+            clipboard = X11Native.XInternAtom(dpy, "CLIPBOARD", false);
+            clipOwner = X11Native.XGetSelectionOwner(dpy, clipboard);
+
+            // Our own clipboard would be no more use than our own selection.
+            if (clipOwner != X11Native.None && !OwnerIsThisProcess(dpy, clipOwner))
+                replies.Ask(clipboard, timestamp, X11Native.XInternAtom(dpy, "VST_CLIPBOARD_TIME", false));
+            else
+                clipOwner = X11Native.None;
+        }
+
+        replies.Send();
+
+        uint? primaryTime = SelectionTime(replies, dpy, window, primary, timestamp);
 
         // An owner that will not answer TIMESTAMP tells us nothing about
         // freshness, and guessing would put a misleading notice on a perfectly
@@ -156,31 +206,29 @@ public sealed class X11SelectionSource : ISelectionSource
         if (primaryTime is not uint stampTime)
         {
             _lastPrimary = null;
-            return ReadSelection(dpy, window, primary);
+            return ReadSelection(replies, primary, utf8);
         }
 
         var stamp = new SelectionStamp((ulong)owner.ToInt64(), stampTime);
         SelectionStamp? clipboardStamp = null;
-        IntPtr clipboard = X11Native.None;
 
-        if (_clipboardFallback)
+        if (clipOwner != X11Native.None
+            && SelectionTime(replies, dpy, window, clipboard, timestamp) is uint clipTime)
         {
-            clipboard = X11Native.XInternAtom(dpy, "CLIPBOARD", false);
-            IntPtr clipOwner = X11Native.XGetSelectionOwner(dpy, clipboard);
-
-            // Our own clipboard would be no more use than our own selection.
-            if (clipOwner != X11Native.None && !OwnerIsThisProcess(dpy, clipOwner)
-                && SelectionTime(dpy, window, clipboard) is uint clipTime)
-            {
-                clipboardStamp = new SelectionStamp((ulong)clipOwner.ToInt64(), clipTime);
-            }
+            clipboardStamp = new SelectionStamp((ulong)clipOwner.ToInt64(), clipTime);
         }
 
         SelectionUse use = SelectionFreshness.Decide(
             stamp, _lastPrimary, clipboardStamp, _clipboardFallback);
 
+        if (use == SelectionUse.Clipboard)
+        {
+            replies.Ask(clipboard, utf8, X11Native.XInternAtom(dpy, "VST_CLIPBOARD", false));
+            replies.Send();
+        }
+
         SelectionResult result = ReadSelection(
-            dpy, window, use == SelectionUse.Clipboard ? clipboard : primary);
+            replies, use == SelectionUse.Clipboard ? clipboard : primary, utf8);
 
         // Recorded whichever selection was read, and only on a read that got
         // that far: the comparison is about PRIMARY's claim, not about what we
@@ -216,20 +264,16 @@ public sealed class X11SelectionSource : ISelectionSource
     }
 
     /// <summary>
-    /// Ask <paramref name="selection"/> when its owner acquired it.
+    /// The answer to the TIMESTAMP already asked of <paramref name="selection"/>:
+    /// when its owner acquired it.
     ///
     /// <para>ICCCM requires every owner to answer TIMESTAMP, but "requires" is
     /// not "does", so a null return has to mean "unknown" rather than "old".</para>
     /// </summary>
-    private static uint? SelectionTime(IntPtr dpy, IntPtr window, IntPtr selection)
+    private static uint? SelectionTime(
+        Conversations replies, IntPtr dpy, IntPtr window, IntPtr selection, IntPtr timestamp)
     {
-        IntPtr timestamp = X11Native.XInternAtom(dpy, "TIMESTAMP", false);
-        IntPtr property = X11Native.XInternAtom(dpy, "VST_SELECTION_TIME", false);
-
-        X11Native.XConvertSelection(dpy, selection, timestamp, property, window, X11Native.CurrentTime);
-        X11Native.XFlush(dpy);
-
-        if (!WaitForSelectionNotify(dpy, window, timestamp, out XEvent reply)
+        if (!replies.TryAwait(selection, timestamp, out XEvent reply)
             || reply.Property == X11Native.None)
             return null;
 
@@ -259,18 +303,13 @@ public sealed class X11SelectionSource : ISelectionSource
     }
 
     /// <summary>
-    /// Convert one selection to UTF-8 text and read the result.
+    /// Read the answer to the UTF8_STRING conversion already asked of
+    /// <paramref name="selection"/>.
     /// </summary>
-    private static SelectionResult ReadSelection(IntPtr dpy, IntPtr window, IntPtr selection)
+    private static SelectionResult ReadSelection(Conversations replies, IntPtr selection, IntPtr utf8)
     {
-        IntPtr utf8 = X11Native.XInternAtom(dpy, "UTF8_STRING", false);
-        IntPtr target = X11Native.XInternAtom(dpy, "VST_SELECTION", false);
-
-        X11Native.XConvertSelection(dpy, selection, utf8, target, window, X11Native.CurrentTime);
-        X11Native.XFlush(dpy);
-
-        if (!WaitForSelectionNotify(dpy, window, utf8, out XEvent reply))
-            return SelectionResult.None(
+        if (!replies.TryAwait(selection, utf8, out XEvent reply))
+            return replies.ServerLost ? ServerLost : SelectionResult.None(
                 $"the window holding the selection did not answer within " +
                 $"{Timeout.TotalMilliseconds / 1000.0:0.#} s. It is most likely busy — browsers " +
                 "and Electron apps stall their event loop for hundreds of milliseconds at a " +
@@ -283,54 +322,76 @@ public sealed class X11SelectionSource : ISelectionSource
             return SelectionResult.None(
                 "the application holding the selection could not provide it as text.");
 
-        return ReadProperty(dpy, window, reply.Property);
+        return ReadProperty(replies.Display, replies.Window, reply.Property);
     }
 
     /// <summary>
-    /// Pump events until the SelectionNotify for <paramref name="expectedTarget"/>
-    /// arrives or the deadline passes.
+    /// The conversions of one capture: asked together, answered in any order,
+    /// all under one deadline.
     /// </summary>
     /// <remarks>
-    /// The target has to be matched, not just the requestor. A capture now makes
-    /// two conversions on this one window — TIMESTAMP, then UTF8_STRING — and
-    /// the first reply is still queued when the second is issued. Matching on
-    /// the requestor alone hands the text read the timestamp's reply, whose
-    /// property is four bytes of server time that decode as plausible garbage
-    /// rather than as an error. Found while writing the equivalent probe in
-    /// Python, where it produced exactly that: ten characters of noise where the
-    /// selection should have been.
+    /// <para>A reply is matched on <b>selection and target</b>, not on the
+    /// requestor alone. Several conversions are in flight on this one window at
+    /// once, and matching on the requestor hands the text read the timestamp's
+    /// reply, whose property is four bytes of server time that decode as
+    /// plausible garbage rather than as an error — found while writing the
+    /// equivalent probe in Python, where it produced exactly that: ten
+    /// characters of noise where the selection should have been. A reply that
+    /// arrives while another is awaited is kept, not dropped, because its owner
+    /// will not send it twice.</para>
+    ///
+    /// <para>The deadline is the capture's, not the wait's. A wait that finds
+    /// it passed still drains what is already queued before giving up, so a
+    /// reply that arrived during an earlier wait is never lost to the clock.</para>
     /// </remarks>
-    private static bool WaitForSelectionNotify(
-        IntPtr dpy, IntPtr window, IntPtr expectedTarget, out XEvent reply)
+    private sealed class Conversations(IntPtr dpy, IntPtr window, ServerLink link)
     {
-        long deadline = Environment.TickCount64 + (long)Timeout.TotalMilliseconds;
-        reply = default;
+        private readonly long _deadline = Environment.TickCount64 + (long)Timeout.TotalMilliseconds;
+        private readonly List<XEvent> _arrived = [];
 
-        while (Environment.TickCount64 < deadline)
+        public IntPtr Display => dpy;
+        public IntPtr Window => window;
+        public bool ServerLost => link.Lost;
+
+        public void Ask(IntPtr selection, IntPtr target, IntPtr property) =>
+            X11Native.XConvertSelection(dpy, selection, target, property, window, X11Native.CurrentTime);
+
+        public void Send() => X11Native.XFlush(dpy);
+
+        public bool TryAwait(IntPtr selection, IntPtr target, out XEvent reply)
         {
-            // XNextEvent blocks with no timeout, which on an unanswered request
-            // would hang the daemon rather than the press. Only ever called
-            // once XPending has confirmed something is queued.
-            if (X11Native.XPending(dpy) == 0)
+            while (true)
             {
+                // XNextEvent blocks with no timeout, which on an unanswered
+                // request would hang the daemon rather than the press. Only ever
+                // called once XPending has confirmed something is queued.
+                while (!link.Lost && X11Native.XPending(dpy) > 0)
+                {
+                    X11Native.XNextEvent(dpy, out XEvent e);
+
+                    // Ours specifically: this connection is private to this
+                    // capture, but a stray event should not be taken for an answer.
+                    if (e.Type == X11Native.SelectionNotify && e.Requestor == window)
+                        _arrived.Add(e);
+                }
+
+                for (int i = 0; i < _arrived.Count; i++)
+                {
+                    if (_arrived[i].Selection != selection || _arrived[i].Target != target) continue;
+                    reply = _arrived[i];
+                    _arrived.RemoveAt(i);
+                    return true;
+                }
+
+                if (link.Lost || Environment.TickCount64 >= _deadline)
+                {
+                    reply = default;
+                    return false;
+                }
+
                 Thread.Sleep(2);
-                continue;
-            }
-
-            X11Native.XNextEvent(dpy, out XEvent e);
-
-            // Ours specifically: this connection is private to this call, but a
-            // stray event on it should not be mistaken for the answer.
-            if (e.Type == X11Native.SelectionNotify
-                && e.Requestor == window
-                && e.Target == expectedTarget)
-            {
-                reply = e;
-                return true;
             }
         }
-
-        return false;
     }
 
     private static SelectionResult ReadProperty(IntPtr dpy, IntPtr window, IntPtr property)
@@ -471,6 +532,117 @@ public sealed class X11SelectionSource : ISelectionSource
 
             _errorHandler = static (_, _) => 0;   // report nothing, and above all do not exit
             X11Native.XSetErrorHandler(_errorHandler);
+            InstallIoHandlers();
         }
     }
+
+    // --------------------------------------------------------------- IO errors
+
+    /// <summary>
+    /// Keeps the daemon alive when the X server goes away mid-capture.
+    ///
+    /// <para><b>The protocol-error handler above does not cover this.</b> A
+    /// server that dies or restarts — a logout, an Xwayland the compositor
+    /// restarted — is an <em>IO</em> error, and libX11 answers it by calling
+    /// <c>exit(1)</c>. So a press at the wrong moment ended the daemon with one
+    /// stderr line, "X connection to :N broken", and nothing in its own log.
+    /// Observed on 2026-11-20 by killing a private Xwayland 300 ms into a
+    /// capture: the test host died with exactly that line.</para>
+    ///
+    /// <para><b>It takes two handlers, and both are needed.</b> Measured with
+    /// libX11 1.8.13 by a C probe that killed its server: with only a per-display
+    /// <c>XSetIOErrorExitHandler</c>, the default <em>IO</em> handler still
+    /// exits by itself; with a returning <c>XSetIOErrorHandler</c> as well, the
+    /// process survives both <c>XSync</c> and <c>XCloseDisplay</c> on the dead
+    /// display, which Xlib has marked dead so later calls return at once. Before
+    /// libX11 1.7 there is no exit handler, Xlib calls <c>exit</c> the moment the
+    /// IO handler returns, and the only escape is a <c>longjmp</c> managed code
+    /// cannot do; there the export is absent and nothing here is installed, so
+    /// capture behaves as it did before. Which libX11 each distro above the
+    /// glibc floor ships was not checked.</para>
+    ///
+    /// <para><b>The IO handler is process-global and the exit handler is not</b>,
+    /// so the IO handler acts only on displays this class opened and passes every
+    /// other one to the handler it replaced — the tray's connection keeps exactly
+    /// the behaviour it had. Same caveat as <see cref="EnsureErrorHandlerInstalled"/>:
+    /// if Avalonia installs its own IO handler after this one, it wins, and an X
+    /// server death mid-capture is fatal again.</para>
+    /// </summary>
+    private sealed class ServerLink : IDisposable
+    {
+        private readonly IntPtr _dpy;
+
+        /// <summary>Set, on the capturing thread, when Xlib reports the connection dead.</summary>
+        public volatile bool Lost;
+
+        private ServerLink(IntPtr dpy) => _dpy = dpy;
+
+        public static ServerLink Watch(IntPtr dpy)
+        {
+            var link = new ServerLink(dpy);
+            if (!IoHandlersInstalled) return link;
+
+            Watched[dpy] = link;
+            XSetIOErrorExitHandler(dpy, ExitHandler, IntPtr.Zero);
+            return link;
+        }
+
+        /// <summary>
+        /// After <c>XCloseDisplay</c>, which can itself raise the error. Removes
+        /// only this link: once freed, the address can be another capture's.
+        /// </summary>
+        public void Dispose() =>
+            Watched.TryRemove(new KeyValuePair<IntPtr, ServerLink>(_dpy, this));
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, ServerLink> Watched = new();
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int IOErrorHandler(IntPtr display);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void IOErrorExitHandler(IntPtr display, IntPtr userData);
+
+    // Static, so the delegates outlive every display they are installed on.
+    // Nothing may throw across these native frames.
+    private static readonly IOErrorHandler IoHandler = static dpy =>
+    {
+        if (Watched.TryGetValue(dpy, out ServerLink? link))
+        {
+            link.Lost = true;
+            return 0;
+        }
+        return _previousIoHandler?.Invoke(dpy) ?? 0;
+    };
+
+    private static readonly IOErrorExitHandler ExitHandler = static (dpy, _) =>
+    {
+        // Returning is the point: the default here calls exit(1).
+        if (Watched.TryGetValue(dpy, out ServerLink? link)) link.Lost = true;
+    };
+
+    private static IOErrorHandler? _previousIoHandler;
+    private static bool IoHandlersInstalled;
+
+    /// <summary>Called once, under <see cref="ErrorHandlerGate"/>.</summary>
+    private static void InstallIoHandlers()
+    {
+        if (!NativeLibrary.TryLoad("libX11.so.6", out IntPtr lib)
+            || !NativeLibrary.TryGetExport(lib, "XSetIOErrorExitHandler", out _))
+            return;
+
+        IntPtr previous = XSetIOErrorHandler(IoHandler);
+        if (previous != IntPtr.Zero)
+            _previousIoHandler = Marshal.GetDelegateForFunctionPointer<IOErrorHandler>(previous);
+        IoHandlersInstalled = true;
+    }
+
+    // Declared here rather than in X11Native so the export check above and the
+    // calls that depend on it stay side by side.
+    [DllImport("libX11.so.6")]
+    private static extern IntPtr XSetIOErrorHandler(IOErrorHandler handler);
+
+    [DllImport("libX11.so.6")]
+    private static extern void XSetIOErrorExitHandler(
+        IntPtr display, IOErrorExitHandler handler, IntPtr userData);
 }

@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Avalonia;
@@ -166,7 +167,15 @@ public sealed class TuneTab : UserControl
     {
         _client = client;
 
+        AutomationProperties.SetName(_provider, "Execution provider");
+        AutomationProperties.SetName(_voice, "Voice");
+        AutomationProperties.SetName(_engine, "Engine");
+        AutomationProperties.SetName(_voiceLanguage, "Voice language");
+        AutomationProperties.SetName(_speaker, "Speaker");
+        AutomationProperties.SetName(_scope, "These settings apply to");
+
         var language = new TextBox { Width = 120 };
+        AutomationProperties.SetName(language, "Language");
         _fields["Language"] = language;
         language.TextChanged += (_, _) => { if (!_loading) _state.Typed("Language", language.Text); };
 
@@ -185,6 +194,13 @@ public sealed class TuneTab : UserControl
         _speaker.SelectionChanged += (_, _) => { if (!_loading) _voiceTouched = true; };
 
         _scope.SelectionChanged += (_, _) => { if (!_loading) ApplyScope(); };
+
+        // The same pending-edit rule the text boxes have, for the controls the
+        // refresh on every tab attach used to overwrite from the file (item 24).
+        _autoCopy.IsCheckedChanged += (_, _) => { if (!_loading) _togglesTouched = true; };
+        _clipboardFallback.IsCheckedChanged += (_, _) => { if (!_loading) _togglesTouched = true; };
+        _gpuOnBattery.IsCheckedChanged += (_, _) => { if (!_loading) _togglesTouched = true; };
+        _provider.SelectionChanged += (_, _) => { if (!_loading) _togglesTouched = true; };
         _clearScope.Click += async (_, _) => await ClearScopeAsync();
 
         var grid = new StackPanel { Spacing = 8 };
@@ -240,6 +256,7 @@ public sealed class TuneTab : UserControl
         foreach (var (key, label, hint) in Numbers)
         {
             var box = new TextBox { Width = 120 };
+            AutomationProperties.SetName(box, label);
             box.TextChanged += (_, _) => { if (!_loading) _state.Typed(key, box.Text); };
             _fields[key] = box;
             grid.Children.Add(Row(label, box, hint));
@@ -279,7 +296,14 @@ public sealed class TuneTab : UserControl
         // The one button that discards on purpose, so it clears the flag first —
         // otherwise the refresh it triggers would politely keep the very edits
         // the user just asked to throw away.
-        revert.Click += async (_, _) => { _state.Discard(); ShowFields(); await RefreshAsync(); };
+        revert.Click += async (_, _) =>
+        {
+            _state.Discard();
+            _togglesTouched = false;
+            _voiceTouched = false;
+            ShowFields();
+            await RefreshAsync();
+        };
 
         // WIRED IN PHASE 8B, and it was an exit criterion: parity does not
         // permit a dead control to reach v1. It calls the same verb `vst-ctl
@@ -413,7 +437,10 @@ public sealed class TuneTab : UserControl
         // The picker cascade ends in ApplyScope, which is the ONE place the
         // boxes are filled — from whatever scope is selected, which is what this
         // read cannot know and must not assume.
-        await RefreshVoicePickerAsync(c.Voice);
+        // A voice picked here and not yet saved survives the refresh: rebuilding
+        // the cascade from the file would put the old voice back (item 24).
+        if (_voiceTouched) ApplyScope();
+        else await RefreshVoicePickerAsync(c.Voice);
 
         // Blank means "not set in the file", and the placeholder shows what the
         // daemon is using instead. An empty box that silently means 8 would make
@@ -431,13 +458,18 @@ public sealed class TuneTab : UserControl
         _fields["SynthesisSilenceSec"].Watermark = "0.3";
         _fields["OnnxInterOpThreads"].Watermark = "1";
 
-        _clipboardFallback.IsChecked = root.Bool("ClipboardFallback") ?? false;
-        _autoCopy.IsChecked = root.Bool("AutoCopy") ?? false;
-        _gpuOnBattery.IsChecked = root.Bool("GpuOnBattery") ?? false;
-        _provider.SelectedItem = root.String("Provider") is { Length: > 0 } p
-                                 && new[] { "auto", "cpu", "gpu" }.Contains(p)
-            ? p
-            : "auto";
+        if (!_togglesTouched)
+        {
+            _loading = true;
+            _clipboardFallback.IsChecked = root.Bool("ClipboardFallback") ?? false;
+            _autoCopy.IsChecked = root.Bool("AutoCopy") ?? false;
+            _gpuOnBattery.IsChecked = root.Bool("GpuOnBattery") ?? false;
+            _provider.SelectedItem = root.String("Provider") is { Length: > 0 } p
+                                     && new[] { "auto", "cpu", "gpu" }.Contains(p)
+                ? p
+                : "auto";
+            _loading = false;
+        }
 
         _status.Text = $"read from {_settingsPath}"
                      + (c.DataDirWritable ? "" : " — this data directory is NOT writable, so a save will fail");
@@ -499,6 +531,12 @@ public sealed class TuneTab : UserControl
     /// the user came here to change.</para>
     /// </summary>
     private bool _voiceTouched;
+
+    /// <summary>
+    /// The three checkboxes and the provider have been changed here and not
+    /// saved. A refresh keeps them, like the text boxes and the voice.
+    /// </summary>
+    private bool _togglesTouched;
 
     /// <summary>
     /// The settings file as last read. Held so the scope selector can show what
@@ -888,6 +926,8 @@ public sealed class TuneTab : UserControl
         catch (Exception ex) { _status.Text = $"could not write {_settingsPath}: {ex.Message}"; return; }
 
         _state.Committed();
+        _togglesTouched = false;
+        _voiceTouched = false;
         _status.Text = "saved — waiting for the daemon to pick it up…";
 
         // Ask the daemon rather than asserting. `reload` is a verb vst-ctl has,

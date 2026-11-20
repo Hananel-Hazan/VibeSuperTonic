@@ -628,7 +628,8 @@ public sealed partial class DaemonServer : IDisposable
     /// <summary>
     /// Capture the selection in the session the latest client reported, not the
     /// one this daemon started in. A press's own <c>$DISPLAY</c> wins; the tray's
-    /// requests carry none and take the latest report. On X11 the cookie file
+    /// requests carry none (TrayIcon.Invoke, review item 22) and take the latest
+    /// report. On X11 the cookie file
     /// follows too; see <see cref="NativeXAuthority"/>.
     /// </summary>
     private SelectionResult CaptureSelection(Request request)
@@ -638,6 +639,13 @@ public sealed partial class DaemonServer : IDisposable
             ? request.Display
             : session.GetValueOrDefault("DISPLAY");
         if (_selection is X11SelectionSource && NativeXAuthority.Apply(session) is { } changed) Log(changed);
+
+        // The Wayland source is told what is playing, so a press on that text,
+        // which ReadSelection turns into a stop, never has AutoCopy press Ctrl+C
+        // first (review item 8). Null when idle: there is nothing to stop.
+        if (_selection is WaylandSelectionSource wayland)
+            return wayland.Capture(display,
+                () => _session.State != SpeechState.Idle ? _session.CurrentText : null);
         return _selection.Capture(display);
     }
 

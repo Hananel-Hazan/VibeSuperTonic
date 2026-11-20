@@ -51,6 +51,13 @@ public static class ExportFormats
         _ => throw new ArgumentOutOfRangeException(nameof(format)),
     };
 
+    /// <summary>Bitrates (kbit/s) offered for MP3 and AAC. WAV and FLAC have none.</summary>
+    public static readonly IReadOnlyList<int> Bitrates = [64, 96, 128, 160, 192, 256];
+
+    public const int DefaultBitrateKbps = 128;
+
+    public static bool HasBitrate(ExportFormat format) => format is ExportFormat.Mp3 or ExportFormat.Aac;
+
     public static bool NeedsFfmpeg(ExportFormat format) => format != ExportFormat.Wav;
 
     /// <summary>
@@ -63,7 +70,10 @@ public static class ExportFormats
         {
             ".wav" => ExportFormat.Wav,
             ".mp3" => ExportFormat.Mp3,
-            ".m4a" or ".aac" or ".mp4" => ExportFormat.Aac,
+            // Not ".aac": that name means a raw ADTS stream, while the Aac format is
+            // an MP4 container (ffmpeg's ipod muxer; the minimal bundled ffmpeg has
+            // no adts muxer), so it would be an .m4a under the wrong name.
+            ".m4a" or ".mp4" => ExportFormat.Aac,
             ".flac" => ExportFormat.Flac,
             _ => null,
         };

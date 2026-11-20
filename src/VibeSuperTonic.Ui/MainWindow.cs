@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -140,6 +141,7 @@ public sealed class MainWindow : Window
                 new TabItem { Header = "About", Content = new AboutTab() },
             },
         };
+        AutomationProperties.SetName(_tabs, "VibeSuperTonic sections");
 
         // Take the user to the sweep rather than running it invisibly: it costs
         // about a minute and the daemon cannot speak while it runs, so it must
