@@ -166,6 +166,7 @@ internal static class Registration
         // HKLM work: the tokens, always; the class, to write it (all users) or to
         // take it away (this user, after an all-users install).
         bool needHklm = !s.TokensComplete || (allUsers ? !hklmClassCurrent : HklmClsidExists());
+        bool hklmDoneByChild = false;
         if (needHklm && !IsElevated())
         {
             log(allUsers
@@ -173,17 +174,29 @@ internal static class Registration
                 : !s.TokensComplete
                     ? "HKLM voice tokens need refresh — relaunching elevated (UAC)..."
                     : "Removing the all-users registration needs administrator rights — relaunching elevated (UAC)...");
-            return RelaunchElevated("--register", scopeFlag, "--elevated");
+            int rc = RelaunchElevated("--register", scopeFlag, "--elevated");
+            if (rc != 0) return rc;
+            // The elevated child did the HKLM work. Its HKCU is not necessarily
+            // ours: on a standard account the UAC prompt takes an administrator's
+            // password, and the child then runs as that administrator, writing
+            // the engine class and BaseDir into the administrator's HKCU. Write
+            // this account's own below, or a "this user" install leaves the user
+            // who ran it with voices that are listed and silent.
+            hklmDoneByChild = true;
         }
 
-        if (!s.TokensComplete)
+        if (!hklmDoneByChild && !s.TokensComplete)
         {
             CleanLegacyTokens();
             WriteAllVoiceTokens(s.BaseDir, includeX86: s.X86Available);
             log($"Wrote {Voices.All.Length} voice tokens to HKLM (SAPI5+OneCore, x86 mirror: {(s.X86Available ? "yes" : "skipped")}).");
         }
 
-        if (allUsers)
+        if (hklmDoneByChild)
+        {
+            // The HKLM class, BaseDir and tokens were the child's; it logged them.
+        }
+        else if (allUsers)
         {
             WriteClsid(RegistryHive.LocalMachine, RegistryView.Registry64, s.X64ComHostPath);
             if (s.X86Available) WriteClsid(RegistryHive.LocalMachine, RegistryView.Registry32, s.X86ComHostPath);

@@ -190,20 +190,45 @@ internal static class EngineSettingsRegistry
 
     public static EngineSettings Load()
     {
-        string path = DataPaths.SettingsFilePath;
-        if (File.Exists(path))
+        // No file, or one that does not parse: legacy registry, else built-in defaults.
+        return TryLoadFile(DataPaths.SettingsFilePath) ?? ReadFromLegacyRegistry();
+    }
+
+    /// <summary>The parsed file, or null when it is absent or does not parse.</summary>
+    private static EngineSettings? TryLoadFile(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
         {
-            try
-            {
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                var parsed = JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
-                if (parsed is not null) return parsed;
-            }
-            catch { /* fall through to legacy / defaults */ }
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return JsonSerializer.Deserialize(fs, EngineSettingsJsonContext.Default.EngineSettings);
         }
-        // No file yet — try legacy registry, else built-in defaults.
-        return ReadFromLegacyRegistry();
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// A settings.json that exists and does not parse: hand-edited into invalid
+    /// JSON, or truncated. <see cref="Load"/> answers defaults for it, so anything
+    /// that saves what it loaded would replace the user's file with defaults.
+    /// </summary>
+    private static bool FileExistsButBroken(string path) => File.Exists(path) && TryLoadFile(path) is null;
+
+    /// <summary>
+    /// Before a save replaces a file that does not parse, keep a copy beside it
+    /// (settings.json.broken-yyyyMMdd-HHmmss), so a hand edit with one stray
+    /// comma is repairable rather than gone.
+    /// </summary>
+    private static void PreserveIfBroken(string path)
+    {
+        if (!FileExistsButBroken(path)) return;
+        try
+        {
+            string copy = $"{path}.broken-{DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}";
+            File.Copy(path, copy, overwrite: true);
+            DiagLog.Write($"settings.json did not parse; kept a copy at {copy} before saving.");
+        }
+        catch (Exception ex) { DiagLog.Write($"settings.json did not parse and could not be copied aside: {ex.Message}"); }
     }
 
     public static void Save(EngineSettings s)
@@ -225,6 +250,7 @@ internal static class EngineSettingsRegistry
 
         DataPaths.EnsureExists();
         var bytes = JsonSerializer.SerializeToUtf8Bytes(s, EngineSettingsJsonContext.Default.EngineSettings);
+        PreserveIfBroken(DataPaths.SettingsFilePath);
         WriteReplacing(DataPaths.SettingsFilePath, bytes);
     }
 
@@ -407,6 +433,17 @@ internal static class EngineSettingsRegistry
         DataPaths.EnsureExists();
         string path = DataPaths.SettingsFilePath;
         bool fileExists = File.Exists(path);
+
+        // A file that does not parse is not schema 0. Migrating it would run
+        // every step on the defaults Load() answers and save them over the
+        // user's file, on every start of the Control Panel (review item 66,
+        // the launcher's half). Leave it for the user to repair; the engine
+        // keeps its last good settings meanwhile.
+        if (fileExists && FileExistsButBroken(path))
+        {
+            DiagLog.Write($"settings.json does not parse; not migrating it: {path}");
+            return;
+        }
 
         var s = Load();
         int schema = fileExists ? s.SchemaVersion : 0;

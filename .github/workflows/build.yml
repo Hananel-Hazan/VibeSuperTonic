@@ -84,7 +84,10 @@ jobs:
         run: dotnet publish src/VibeSuperTonic.Launcher/VibeSuperTonic.Launcher.csproj -c Release -r win-x64 --nologo
 
       - name: Compose release ZIP
-        run: ./build/pack-zip.ps1 -Version "ci-${{ github.sha }}"
+        # No -Version: the ZIP is named after <VstVersion>, which is what the
+        # binaries report and what check-zip-tree.ps1 requires. The commit id
+        # stays in the artifact name below.
+        run: ./build/pack-zip.ps1
         shell: pwsh
 
       - name: Upload ZIP artifact
