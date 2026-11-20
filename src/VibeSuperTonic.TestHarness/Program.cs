@@ -20,6 +20,9 @@ internal static partial class Program
 
     private static int Main(string[] args)
     {
+        // Internal: the child process of Step 12's item 67 case.
+        if (args.Length == 2 && args[0] == "--b5-stdout-probe")
+            return B5StdoutProbe(args[1]);
         if (args.Contains("--stress"))
         {
             return RunStressSuite();

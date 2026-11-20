@@ -44,6 +44,11 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
     // totalStep=8; give it ~3× that before we give up on graceful unwind.
     private const int SynthCancelGraceMs = 750;
 
+    // Test hook: a nonzero value replaces SynthHardTimeoutMs for the next waits,
+    // so the harness can drive the hang path in seconds rather than 85 (Step 12,
+    // item 34). Zero in production; set only by reflection.
+    internal static int _testSynthHardTimeoutMs;
+
     // Ultimate-fallback voice id when neither the SAPI token nor the Control Panel
     // setting provides one. SetObjectToken normally beats this; the Control Panel's
     // Default\DefaultVoice setting is the second-tier fallback.
@@ -446,7 +451,8 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                             int waitedMs = 0;
                             bool completed = false;
                             bool aborted = false;
-                            while (waitedMs < SynthHardTimeoutMs)
+                            int ceilingMs = _testSynthHardTimeoutMs > 0 ? _testSynthHardTimeoutMs : SynthHardTimeoutMs;
+                            while (waitedMs < ceilingMs)
                             {
                                 if (currentSynth.Wait(50)) { completed = true; break; }
                                 waitedMs += 50;
@@ -1250,9 +1256,14 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                 case SPVACTIONS.SPVA_Pronounce:
                     if (!string.IsNullOrEmpty(text))
                     {
-                        // SpellOut/Pronounce are SAPI-level overrides; rules still
-                        // apply since the user wrote the rule expecting it to fire
-                        // regardless of how the fragment was tagged.
+                        // Pronounce is a SAPI-level override and the rules still
+                        // apply to it, since the user wrote the rule expecting it to
+                        // fire regardless of how the fragment was tagged. SpellOut
+                        // is the exception: what is spelled is the letters the user
+                        // wrote, so the rules are skipped and only the line-break
+                        // join and the sanitizer run. Spelled after the rules, a
+                        // rule "SAPI" → "sappy" made <spell>SAPI</spell> say
+                        // "S, A, P, P, Y" (the Fable review of 5A, risk 1).
                         // Strip invisible characters (control chars, zero-width
                         // marks, private-use) that have non-deterministically
                         // wedged the synth in the field. Done before chunking so
@@ -1263,7 +1274,9 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
                         // change length — rules substitute, the sanitizer strips —
                         // so without the map every later boundary offset is wrong by
                         // the accumulated delta (R-2).
-                        string spoken = SynthTextPipeline.Prepare(text, pron, pronCompiled, out var offsets);
+                        bool spelled = frag.State.eAction == SPVACTIONS.SPVA_SpellOut;
+                        string spoken = SynthTextPipeline.Prepare(text,
+                            spelled ? null : pron, spelled ? null : pronCompiled, out var offsets);
                         if (!string.IsNullOrEmpty(spoken))
                         {
                             // FromLcid returns null both for "fragment carries no

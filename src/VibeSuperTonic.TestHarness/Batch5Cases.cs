@@ -60,6 +60,7 @@ internal static partial class Program
             fail += B5Case("item 66  a broken settings.json keeps the last good settings", () => B5_BrokenSettings(ctx));
             fail += B5Case("item 48  SPF_NLP_SPEAK_PUNC names the punctuation", () => B5_SpeakPunctuation(ctx));
             fail += B5Case("item 48  <spell> is spoken letter by letter", () => B5_SpellOut(ctx));
+            fail += B5Case("item 48  <spell> spells what was written, not what a rule makes of it", () => B5_SpellIgnoresRules(ctx));
             fail += B5Case("item 50  <volume level=25> is quieter", () => B5_SapiVolume(ctx));
             fail += B5Case("item 50  SSML <prosody volume=x-soft> is quieter", () => B5_SsmlVolume(ctx));
             fail += B5Case("item 50  <pitch middle=10> is higher", () => B5_Pitch(ctx));
@@ -70,6 +71,7 @@ internal static partial class Program
             fail += B5Case("item 35  the byte total after an abort is the bytes written", () => B5_AbortByteTotal(ctx));
             fail += B5Case("item 30  bookmark names are not leaked", () => B5_BookmarkLeak(ctx));
             fail += B5Case("item 34  the hang ceiling outlasts watchdog + CPU retry, keeps the latch", () => B5_HangCeiling());
+            fail += B5Case("item 67  the SDK's lines stay out of a console host's stdout", () => B5_StdoutStaysClean(ctx));
             fail += B5Case("item 33  SynthesisSilenceSec reaches the model", () => B5_SynthesisSilence(ctx));
             fail += B5Case("item 32  Tier B is global unless a voice sets it", () => B5_TierBPerVoice(ctx));
             fail += B5Case("item 32  migration drops Tier B copied into per-voice entries", () => B5_TierBMigration(ctx));
@@ -349,6 +351,42 @@ internal static partial class Program
         return (ok, $"\"{spoken}\"");
     }
 
+    /// <summary>
+    /// The Fable review of 5A, risk 1: spell-out ran after the pronunciation
+    /// rules, so a rule "SAPI" → "sappy" made &lt;spell&gt;SAPI&lt;/spell&gt; say
+    /// "S, A, P, P, Y". The rule is installed for this case only, and the plain
+    /// "SAPI" in the same markup shows it is in force.
+    /// </summary>
+    private static (bool, string) B5_SpellIgnoresRules(B5 c)
+    {
+        string path = Path.Combine(Path.GetDirectoryName(c.SettingsPath)!, "pronunciations.json");
+        string? backup = File.Exists(path) ? File.ReadAllText(path) : null;
+        try
+        {
+            File.WriteAllText(path, """
+            {
+              "Enabled": true,
+              "Rules": [
+                { "Enabled": true, "Match": "SAPI", "Replace": "sappy", "WholeWord": true, "CaseSensitive": false, "Notes": "harness spell-out probe" }
+              ]
+            }
+            """);
+            Thread.Sleep(200);
+            long mark = c.Mark();
+            SapiToFile("<spell>SAPI</spell> and SAPI", SPF_IS_XML, c.Wav("spell-rule.wav"));
+            string spoken = Spoken(c.Since(mark));
+            bool ok = spoken.Contains("S, A, P, I", StringComparison.Ordinal)
+                   && !spoken.Contains("S, A, P, P, Y", StringComparison.Ordinal)
+                   && spoken.Contains("sappy", StringComparison.Ordinal);
+            return (ok, $"\"{spoken}\" (want the letters S, A, P, I, and the rule's \"sappy\" outside the spell)");
+        }
+        finally
+        {
+            if (backup is not null) File.WriteAllText(path, backup);
+            else File.Delete(path);
+        }
+    }
+
     private const string Sentence = "This sentence is spoken twice, and only one of them is changed.";
 
     private static (bool, string) B5_SapiVolume(B5 c)
@@ -567,6 +605,14 @@ internal static partial class Program
 
     private static (bool, string) B5_HangCeiling()
     {
+        // SAPI loads the engine into this process on the first Speak; run alone
+        // (--batch5 "item 34") nothing has spoken yet.
+        using (var warm = new SpeechSynthesizer())
+        {
+            warm.SelectVoice(TargetVoice);
+            warm.SetOutputToNull();
+            warm.Speak("Warm up.");
+        }
         Assembly? engine = AppDomain.CurrentDomain.GetAssemblies()
             .FirstOrDefault(a => a.GetName().Name == "VibeSuperTonic.Engine");
         if (engine is null) return (false, "engine assembly not loaded in this process");
@@ -581,24 +627,132 @@ internal static partial class Program
         int reload = Const(adapter, "CpuReloadBudgetMs");
         bool order = ceiling > 0 && watchdog > 0 && reload > 0 && ceiling >= 2 * watchdog + reload;
 
+        // The hang path itself, not just the constants (the Fable review of 5A
+        // found the first version of this case checked only those). A test-only
+        // override shortens the ceiling to 2 s; a hang is injected into the next
+        // synthesis with the DirectML latch set, so the engine reaches the
+        // ceiling's reset for real. RequestSessionRebuild keeps the latch and
+        // queues a rebuild; RequestReset — what the hang path called before
+        // item 34 — clears it, which is what this case catches.
         var latch = adapter.GetField("_useDmlLatchedOff", any);
-        var rebuild = adapter.GetMethod("RequestSessionRebuild", any);
-        bool kept = false;
-        string latchDetail;
-        if (latch is null || rebuild is null)
+        var resetFlag = adapter.GetField("_resetRequestedFlag", any);
+        var injectHang = adapter.GetField("_testInjectHangOnNextCall", any);
+        var hangRelease = adapter.GetField("_testHangRelease", any)?.GetValue(null) as ManualResetEventSlim;
+        var ceilingOverride = sapi.GetField("_testSynthHardTimeoutMs", any);
+        if (latch is null || resetFlag is null || injectHang is null || hangRelease is null || ceilingOverride is null)
+            return (false, $"ceiling {ceiling} ms; a test hook is missing (latch, reset flag, hang injection or _testSynthHardTimeoutMs)");
+
+        bool kept, rebuildQueued;
+        long elapsedMs;
+        string spoke;
+        try
         {
-            latchDetail = "no RequestSessionRebuild on the adapter: the ceiling's reset is RequestReset, which clears the latch";
-        }
-        else
-        {
+            hangRelease.Reset();
+            ceilingOverride.SetValue(null, 2000);
             latch.SetValue(null, true);
-            rebuild.Invoke(null, null);
+            resetFlag.SetValue(null, 0);
+            injectHang.SetValue(null, 1);
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                using var synth = new SpeechSynthesizer();
+                synth.SelectVoice(TargetVoice);
+                synth.SetOutputToNull();
+                synth.Speak("This utterance hangs on purpose.");
+                spoke = "Speak returned";
+            }
+            catch (Exception ex) { spoke = $"Speak threw {ex.GetType().Name}"; }
+            elapsedMs = sw.ElapsedMilliseconds;
             kept = latch.GetValue(null) is true;
-            latch.SetValue(null, false);
-            latchDetail = kept ? "the ceiling's rebuild keeps the DirectML latch" : "the ceiling's rebuild cleared the latch";
+            rebuildQueued = resetFlag.GetValue(null) is 1;
         }
-        return (order && kept,
-            $"ceiling {ceiling} ms vs 2 × watchdog {watchdog} ms + CPU reload {reload} ms; {latchDetail}");
+        finally
+        {
+            hangRelease.Set();          // let the orphaned synthesis unwind
+            Thread.Sleep(500);
+            hangRelease.Reset();
+            injectHang.SetValue(null, 0);
+            ceilingOverride.SetValue(null, 0);
+            latch.SetValue(null, false);
+        }
+        bool hangPathOk = kept && rebuildQueued && elapsedMs < 20_000;
+        return (order && hangPathOk,
+            $"ceiling {ceiling} ms vs 2 × watchdog {watchdog} ms + CPU reload {reload} ms; " +
+            $"injected hang with a 2 s ceiling: {spoke} after {elapsedMs} ms, latch {(kept ? "kept" : "CLEARED")}, " +
+            $"rebuild {(rebuildQueued ? "queued" : "NOT queued")}");
+    }
+
+    /// <summary>
+    /// Item 67: the SDK's progress lines must not reach the standard output of
+    /// the SAPI host the engine is loaded into. Run in a fresh child process —
+    /// the lines are printed while the model loads, once per process — that
+    /// speaks one sentence through SpVoice while this process captures its
+    /// stdout. On the CPU path the SDK prints nothing, which would make the case
+    /// pass vacuously, so the child asks for its own session to be built from
+    /// settings rather than the machine's profile (the bench switch, authorised
+    /// for its own pid) with DirectML on: the DirectML line then always prints,
+    /// "appended" on a machine with a GPU and "init failed" without one.
+    /// </summary>
+    private static (bool, string) B5_StdoutStaysClean(B5 c)
+    {
+        c.Settings(s => s["UseDirectML"] = true);
+        long mark = c.Mark();
+        var psi = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("--b5-stdout-probe");
+        psi.ArgumentList.Add(c.Wav("probe.wav"));
+        string stdout, stderr;
+        int exit;
+        try
+        {
+            using var p = Process.Start(psi)!;
+            // Both streams at once: reading one to the end first deadlocks a
+            // child that fills the other's pipe.
+            var o = p.StandardOutput.ReadToEndAsync();
+            var e = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(120_000)) { p.Kill(); return (false, "probe did not exit in 120 s"); }
+            stdout = o.Result; stderr = e.Result; exit = p.ExitCode;
+        }
+        finally
+        {
+            // Also on the timeout: UseDirectML=true must not outlive the case.
+            c.Restore();
+        }
+
+        string[] sdkMarkers = { "DirectML", "provider appended", "Loaded", "completed in" };
+        var leaked = stdout.Split('\n').Select(l => l.Trim())
+            .Where(l => sdkMarkers.Any(m => l.Contains(m, StringComparison.Ordinal))).ToList();
+        int logged = Lines(c.Since(mark), "sdk: ").Count();
+        bool done = stdout.Contains("PROBE DONE", StringComparison.Ordinal);
+        return (exit == 0 && done && leaked.Count == 0 && logged > 0,
+            $"probe exit {exit}, {(done ? "spoke" : "did NOT finish")}; SDK lines on its stdout: " +
+            $"{(leaked.Count == 0 ? "none" : string.Join(" | ", leaked.Select(l => l.Length > 70 ? l[..70] + "…" : l)))}; " +
+            $"\"sdk:\" lines in engine.log: {logged} (want ≥ 1)");
+    }
+
+    /// <summary>
+    /// The child half of <see cref="B5_StdoutStaysClean"/>: speak one sentence
+    /// through SpVoice into <paramref name="wav"/> and say so on stdout.
+    /// </summary>
+    internal static int B5StdoutProbe(string wav)
+    {
+        // This process's own id: the engine honours the switch only for the
+        // process that set it (BenchSwitches.IsAuthorised).
+        Environment.SetEnvironmentVariable(VibeSuperTonic.Core.Synthesis.BenchSwitches.NoProfileVariable,
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        try
+        {
+            SapiToFile("One sentence from a console host.", 0, wav);
+            Console.WriteLine("PROBE DONE");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"PROBE FAILED {ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
     }
 
     private static (bool, string) B5_SynthesisSilence(B5 c)
