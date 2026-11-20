@@ -122,4 +122,46 @@ public sealed class WaylandCopiedSinceTests
         d.ClipboardTimesOut = false;
         Assert.Equal("Stale.", source.Capture().Text);
     }
+
+    private sealed class CountingKey : ICopyKey
+    {
+        public int Sent;
+        public CopyKeyResult Send() { Sent++; return new CopyKeyResult(true); }
+    }
+
+    /// <summary>
+    /// Item 95, through the reader seam (a real compositor is not reachable from
+    /// a test): <c>read --clipboard</c> asks only for the clipboard, returns its
+    /// text when PRIMARY differs, and never presses Ctrl+C even with AutoCopy on.
+    /// </summary>
+    [Fact]
+    public void Read_clipboard_reads_the_clipboard_only_and_sends_no_key()
+    {
+        var asked = new List<bool>();
+        var key = new CountingKey();
+        var source = new WaylandSelectionSource(clipboardFallback: false, isPrimary =>
+        {
+            asked.Add(isPrimary);
+            string text = isPrimary ? "what was selected" : "what was copied";
+            return new WaylandNative.WaylandCapture(true, true, true, text, null);
+        }, key);
+
+        var result = source.CaptureClipboard(null);
+
+        Assert.True(result.Ok, result.Reason);
+        Assert.Equal("what was copied", result.Text);
+        Assert.Equal([false], asked);
+        Assert.Equal(0, key.Sent);
+    }
+
+    [Fact]
+    public void Read_clipboard_reports_an_empty_and_a_stalled_clipboard()
+    {
+        var empty = new WaylandSelectionSource(false, _ => new WaylandNative.WaylandCapture(true, true, false, null, null));
+        Assert.Contains("clipboard is empty", empty.CaptureClipboard(null).Reason);
+
+        var stalled = new WaylandSelectionSource(false,
+            _ => new WaylandNative.WaylandCapture(true, true, true, "", null, TimedOut: true));
+        Assert.Contains("did not hand it over", stalled.CaptureClipboard(null).Reason);
+    }
 }

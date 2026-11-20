@@ -100,6 +100,13 @@ public sealed class ExportTab : UserControl
             else _status.Text = "Nothing has been read in this window yet.";
         };
 
+        var read = new Button { Content = "Read" };
+        read.Click += async (_, _) =>
+        {
+            string? err = await _reader.SpeakTextAsync(_text.Text ?? "");
+            _status.Text = err ?? "Reading the text aloud…";
+        };
+
         _export.Click += async (_, _) => await ExportAsync();
         _cancel.Click += (_, _) => Cancel();
         _preview.Click += async (_, _) => await PreviewAsync();
@@ -108,7 +115,7 @@ public sealed class ExportTab : UserControl
         Content = new ScrollViewer
         {
             Content = Ui.Page(
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { load, useReader } },
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { load, useReader, read } },
                 _text,
                 new StackPanel
                 {

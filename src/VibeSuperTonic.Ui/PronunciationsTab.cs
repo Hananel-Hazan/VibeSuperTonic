@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using VibeSuperTonic.Core.Settings;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Text;
@@ -112,6 +113,12 @@ public sealed class PronunciationsTab : UserControl
             await RefreshAsync();
         };
 
+        // Review item 99: share the rules as a file.
+        var import = new Button { Content = "Import…" };
+        import.Click += async (_, _) => await ImportAsync();
+        var export = new Button { Content = "Export…" };
+        export.Click += async (_, _) => await ExportAsync();
+
         Content = new ScrollViewer
         {
             Content = Ui.Page(
@@ -123,7 +130,7 @@ public sealed class PronunciationsTab : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 8,
-                    Children = { add, remove, save, revert },
+                    Children = { add, remove, save, revert, import, export },
                 },
                 Field("Match", _match, "The text to look for. A regular expression unless Whole word is set."),
                 Field("Replace with", _replace, "What the model should say instead."),
@@ -225,6 +232,87 @@ public sealed class PronunciationsTab : UserControl
               + (c.RulesEnabled ? "applied." : "currently disabled.")
               + (c.Notes.Count > 0 ? " " + string.Join(" ", c.Notes) : "")
             : "saved.";
+    }
+
+    // ----------------------------------------------------- import and export
+
+    private static readonly FilePickerFileType JsonType = new("Pronunciation rules") { Patterns = ["*.json"] };
+
+    /// <summary>Write the rules as shown on screen (saved or not) to a file of the user's choosing.</summary>
+    private async Task ExportAsync()
+    {
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null) return;
+        var file = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export pronunciation rules",
+            SuggestedFileName = "pronunciations.json",
+            DefaultExtension = "json",
+            FileTypeChoices = [JsonType],
+        });
+        if (file?.TryGetLocalPath() is not { } path) return;
+        try
+        {
+            var root = new JsonObject
+            {
+                ["Enabled"] = JsonValue.Create(_enabledAll.IsChecked == true),
+                ["Rules"] = new JsonArray(_rules.Select(r => (JsonNode)r.DeepClone()).ToArray()),
+            };
+            SettingsFile.Write(path, root);
+            _status.Text = $"exported {_rules.Count} rule{(_rules.Count == 1 ? "" : "s")} to {path}";
+        }
+        catch (Exception ex) { _status.Text = $"could not export to {path}: {ex.Message}"; }
+    }
+
+    /// <summary>
+    /// Add the rules of a file to the list. Nothing is replaced and nothing is saved:
+    /// the rules arrive as unsaved edits, so Revert undoes the import and Save keeps it.
+    /// A rule already in the list (same Match and Replace) is skipped.
+    /// </summary>
+    private async Task ImportAsync()
+    {
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null) return;
+        var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import pronunciation rules",
+            AllowMultiple = false,
+            FileTypeFilter = [JsonType, FilePickerFileTypes.All],
+        });
+        if (files.Count == 0 || files[0].TryGetLocalPath() is not { } path) return;
+        ImportFrom(path);
+    }
+
+    internal void ImportFrom(string path)
+    {
+        JsonArray? incoming;
+        try { incoming = SettingsFile.Read(path)["Rules"] as JsonArray; }
+        catch (Exception ex) { _status.Text = $"{path} could not be read: {ex.Message}"; return; }
+
+        if (incoming is null) { _status.Text = $"{path} has no \"Rules\" list, so nothing was imported."; return; }
+
+        var fresh = new List<JsonObject>();
+        int bad = 0;
+        foreach (var node in incoming)
+        {
+            if (node is not JsonObject r || r["Match"] is not JsonValue m || !m.TryGetValue<string>(out var match)
+                || string.IsNullOrEmpty(match)) { bad++; continue; }
+            string replace = r["Replace"] is JsonValue rv && rv.TryGetValue<string>(out var rs) ? rs : "";
+            bool dup = _rules.Concat(fresh).Any(x =>
+                (x["Match"]?.GetValue<string>() ?? "") == match && (x["Replace"]?.GetValue<string>() ?? "") == replace);
+            if (!dup) fresh.Add((JsonObject)r.DeepClone());
+        }
+
+        if (fresh.Count > 0)
+        {
+            _edits.Edited();
+            _rules.AddRange(fresh);
+            RebuildList(select: _rules.Count - fresh.Count);
+            Preview();
+        }
+        _status.Text = $"imported {fresh.Count} rule{(fresh.Count == 1 ? "" : "s")} from {path}"
+            + (bad > 0 ? $"; skipped {bad} without a Match" : "")
+            + (fresh.Count > 0 ? ". Not saved yet: Save keeps them, Revert drops them." : ".");
     }
 
     // ------------------------------------------------------------------ rules

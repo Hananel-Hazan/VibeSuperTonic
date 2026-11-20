@@ -34,7 +34,7 @@ namespace VibeSuperTonic.Daemon;
 /// <see cref="SelectionFreshness"/> for why staleness is decidable and what the
 /// opt-in is protecting against.</para>
 /// </summary>
-public sealed class X11SelectionSource : ISelectionSource
+public sealed class X11SelectionSource : ISelectionSource, IClipboardCapture
 {
     private readonly bool _clipboardFallback;
 
@@ -76,7 +76,44 @@ public sealed class X11SelectionSource : ISelectionSource
     /// </summary>
     private const int RequestUnits = 1024 * 1024;
 
-    public SelectionResult Capture(string? display = null)
+    public SelectionResult Capture(string? display = null) => OnDisplay(display, CaptureFrom);
+
+    /// <summary>
+    /// <c>vst-ctl read --clipboard</c> (review item 95): CLIPBOARD's text, asked
+    /// for by name. PRIMARY is never consulted and nothing is pressed; the same
+    /// one-deadline conversation as a selection read, so a busy owner costs
+    /// <see cref="SelectionWait.OwnerReplyMs"/> and no more.
+    /// </summary>
+    public SelectionResult CaptureClipboard(string? display) => OnDisplay(display, ClipboardFrom);
+
+    private SelectionResult ClipboardFrom(IntPtr dpy, ServerLink link)
+    {
+        IntPtr clipboard = X11Native.XInternAtom(dpy, "CLIPBOARD", false);
+        IntPtr owner = X11Native.XGetSelectionOwner(dpy, clipboard);
+        if (owner == X11Native.None)
+            return SelectionResult.None("the clipboard is empty.");
+        if (OwnerIsThisProcess(dpy, owner))
+            return SelectionResult.None(
+                "the clipboard holds text copied from VibeSuperTonic's own window; " +
+                "copy text in another application first.");
+
+        IntPtr root = X11Native.XDefaultRootWindow(dpy);
+        IntPtr window = X11Native.XCreateSimpleWindow(dpy, root, 0, 0, 1, 1, 0, 0, 0);
+        try
+        {
+            IntPtr utf8 = X11Native.XInternAtom(dpy, "UTF8_STRING", false);
+            var replies = new Conversations(dpy, window, link);
+            replies.Ask(clipboard, utf8, X11Native.XInternAtom(dpy, "VST_CLIPBOARD", false));
+            replies.Send();
+            return ReadSelection(replies, clipboard, utf8);
+        }
+        finally
+        {
+            X11Native.XDestroyWindow(dpy, window);
+        }
+    }
+
+    private static SelectionResult OnDisplay(string? display, Func<IntPtr, ServerLink, SelectionResult> capture)
     {
         EnsureErrorHandlerInstalled();
 
@@ -99,7 +136,7 @@ public sealed class X11SelectionSource : ISelectionSource
         var link = ServerLink.Watch(dpy);
         try
         {
-            SelectionResult result = CaptureFrom(dpy, link);
+            SelectionResult result = capture(dpy, link);
 
             // A server that died before the conversions were even asked turns
             // up as "nothing is selected" or an unreadable property, and both

@@ -7,6 +7,7 @@ using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Core.Telemetry;
+using VibeSuperTonic.Core.Text;
 using VibeSuperTonic.Daemon.Interop;
 
 namespace VibeSuperTonic.Daemon;
@@ -36,6 +37,13 @@ public sealed partial class DaemonServer : IDisposable
     private readonly LazyAudioSink? _sink;
     private readonly ToggleGate _gate = new();
     private readonly object _gateLock = new();
+
+    /// <summary>
+    /// The hotkey speed step (<see cref="RequestVerb.Rate"/>, review item 92),
+    /// under <see cref="_gateLock"/>. In memory on purpose: it is a listening
+    /// adjustment, not a setting, and settings.json has one writer.
+    /// </summary>
+    private int _rateSteps;
 
     private readonly ConcurrentDictionary<Guid, Subscriber> _subscribers = new();
     private volatile bool _modelLoaded;
@@ -640,6 +648,15 @@ public sealed partial class DaemonServer : IDisposable
             : session.GetValueOrDefault("DISPLAY");
         if (_selection is X11SelectionSource && NativeXAuthority.Apply(session) is { } changed) Log(changed);
 
+        // `read --clipboard` (review item 95): the clipboard, asked for by name,
+        // never PRIMARY and never AutoCopy's Ctrl+C. A source that cannot read
+        // it says so rather than reading the selection instead, which would be
+        // the wrong text spoken with no word about it.
+        if (request.Clipboard == true)
+            return _selection is IClipboardCapture clipboard
+                ? clipboard.CaptureClipboard(display)
+                : SelectionResult.None("this desktop's selection reader cannot read the clipboard.");
+
         // The Wayland source is told what is playing, so a press on that text,
         // which ReadSelection turns into a stop, never has AutoCopy press Ctrl+C
         // first (review item 8). Null when idle: there is nothing to stop.
@@ -765,6 +782,12 @@ public sealed partial class DaemonServer : IDisposable
                 _session.Resume();
                 return Response.Success();
 
+            case RequestVerb.PauseToggle:
+                return PauseToggle();
+
+            case RequestVerb.Rate:
+                return StepRate(request);
+
             case RequestVerb.Status:
                 return new Response { Ok = true, Status = Snapshot() };
 
@@ -876,9 +899,15 @@ public sealed partial class DaemonServer : IDisposable
     private SynthesisOptions? PlanUtterance(
         string? voice, string? language, bool interrupting, out Response? refusal, out string? note)
     {
+        int rateSteps;
+        lock (_gateLock) rateSteps = _rateSteps;
         var plan = _config.Utterance(
             voice ?? _options.VoiceOverride,
-            language ?? _options.LanguageOverride);
+            language ?? _options.LanguageOverride,
+            // The hotkey speed step, as a factor on the configured rate: the
+            // same seam the speechd rate uses (item 92). 1.0 at step 0, which
+            // keeps the unscoped fast path.
+            rateSteps == 0 ? 1.0 : Protocol.RateScale(rateSteps));
         note = plan.Note;
         refusal = null;
 
@@ -1331,7 +1360,13 @@ public sealed partial class DaemonServer : IDisposable
             // rather than of the router, so it answers for the voice that would
             // speak next rather than for the one that spoke last — those differ
             // exactly when someone has edited settings.json since.
-            _engines is null ? null : _config.Utterance(null, null).Engine);
+            _engines is null ? null : _config.Utterance(null, null).Engine,
+            RateStepsNow() is var steps && steps != 0 ? steps : null);
+    }
+
+    private int RateStepsNow()
+    {
+        lock (_gateLock) return _rateSteps;
     }
 
     /// <summary>
@@ -1435,21 +1470,172 @@ public sealed partial class DaemonServer : IDisposable
     /// </summary>
     private Response Seek(Request request)
     {
-        if (request.Offset is not int offset)
-            return Response.Fail("seek needs an offset");
-        if (offset < 0)
-            return Response.Fail("offset cannot be negative");
-
         // CurrentText while a reading is in progress, LastText after it ended.
         // The second is the ordinary case rather than the exotic one: the reading
         // finishes, the text is still on screen, and the user clicks a word in it.
         string? text = request.Text ?? _session.CurrentText ?? _session.LastText;
-        if (string.IsNullOrEmpty(text))
-            return Response.Fail("nothing has been read yet, so there is nothing to seek in");
+
+        int offset;
+        if (request.Sentences is int skip)
+        {
+            // Review item 93: relative, from the word being heard. The text is
+            // the session's own; a Text sent with --sentence would make "the one
+            // being heard" mean nothing.
+            text = _session.CurrentText ?? _session.LastText;
+            if (string.IsNullOrEmpty(text))
+                return Response.Fail("nothing has been read yet, so there is no sentence to skip to");
+            bool idle = _session.State == SpeechState.Idle;
+            if (SentenceTarget(text, idle ? null : _session.LastBoundary?.SourceOffset, idle, skip)
+                    is not int target)
+                return Response.Fail(skip > 0 ? "there is no sentence after this one" : "the reading has finished");
+            offset = target;
+        }
+        else
+        {
+            if (request.Offset is not int at)
+                return Response.Fail("seek needs an offset");
+            if (at < 0)
+                return Response.Fail("offset cannot be negative");
+            if (string.IsNullOrEmpty(text))
+                return Response.Fail("nothing has been read yet, so there is nothing to seek in");
+            offset = at;
+        }
 
         if (offset >= text.Length)
             return Response.Fail($"offset {offset} is past the end of {text.Length} characters");
 
+        return RestartAt(text, offset, request, keepPaused: false);
+    }
+
+    /// <summary>
+    /// Where <c>seek --sentence <paramref name="skip"/></c> starts, or null when
+    /// there is no such sentence (review item 93).
+    ///
+    /// <para>Sentences are the chunker's own first pass,
+    /// <see cref="SentenceChunker.SplitSentences"/>, asked to pack nothing
+    /// (<c>maxLength: 1</c>), so the skip uses the same sentence rule the reading
+    /// pauses on. Not <see cref="SentenceChunker.ChunkWithOffsets"/>: it packs
+    /// sentences into render chunks of at least 80 characters, so "next" would
+    /// skip three short sentences at once (measured: that was this method's first
+    /// version, and its test failed). The spans are recovered the way
+    /// ChunkWithOffsets recovers its own, by walking the non-whitespace
+    /// characters, which the split never changes; they are in the coordinates of
+    /// <paramref name="text"/>, the same ones <see cref="RequestVerb.Seek"/>
+    /// takes.</para>
+    ///
+    /// <para>The sentence "being heard" is the one holding
+    /// <paramref name="position"/>, the last boundary released. With none yet (the
+    /// first chunk is still rendering) it is the first. After the reading has
+    /// ended (<paramref name="idle"/>) the position is past the last sentence, so
+    /// -1 replays the last one and 0 or more has nowhere to go.</para>
+    /// </summary>
+    internal static int? SentenceTarget(string text, int? position, bool idle, int skip)
+    {
+        var sentences = SentenceStarts(text);
+        if (sentences.Count == 0) return null;
+
+        int current;
+        if (idle)
+        {
+            current = sentences.Count;
+        }
+        else
+        {
+            int at = position ?? 0;
+            current = 0;
+            for (int i = 0; i < sentences.Count; i++)
+                if (sentences[i] <= at) current = i;
+        }
+
+        long target = (long)current + skip;
+        if (target >= sentences.Count) return null;
+        return sentences[(int)Math.Max(0, target)];
+    }
+
+    /// <summary>Where each sentence of <paramref name="text"/> starts; see <see cref="SentenceTarget"/>.</summary>
+    internal static List<int> SentenceStarts(string text)
+    {
+        var starts = new List<int>();
+        int cursor = 0;
+        foreach (string sentence in SentenceChunker.SplitSentences(text, maxLength: 1))
+        {
+            int start = -1;
+            foreach (char ch in sentence)
+            {
+                if (char.IsWhiteSpace(ch)) continue;
+                while (cursor < text.Length && char.IsWhiteSpace(text[cursor])) cursor++;
+                // The split only drops or rewrites whitespace; a mismatch means
+                // that stopped being true, and a skip to a wrong place is worse
+                // than the sentences found so far.
+                if (cursor >= text.Length || text[cursor] != ch) return starts;
+                if (start < 0) start = cursor;
+                cursor++;
+            }
+            if (start >= 0) starts.Add(start);
+        }
+        return starts;
+    }
+
+    /// <summary>
+    /// Pause if a reading is playing, resume if one is paused (review item 92).
+    /// </summary>
+    private Response PauseToggle()
+    {
+        if (_session.State == SpeechState.Idle)
+            return new Response { Ok = true, Notice = "nothing is being read" };
+
+        if (_session.IsPaused)
+        {
+            _session.Resume();
+            return new Response { Ok = true, Notice = "resumed" };
+        }
+
+        _session.Pause();
+        return new Response { Ok = true, Notice = "paused" };
+    }
+
+    /// <summary>
+    /// Step the hotkey speed (review item 92). Applied per utterance, through
+    /// <see cref="PlanUtterance"/>, exactly where the speechd rate is: as a factor
+    /// on the configured rate. So a reading in progress is restarted from the word
+    /// being heard, which is the only way a per-utterance rate can reach it; a
+    /// paused one is restarted and paused again, so the press does not unpause
+    /// it.
+    /// </summary>
+    private Response StepRate(Request request)
+    {
+        if (request.RateSteps is not int steps)
+            return Response.Fail("rate needs a step");
+
+        int now;
+        lock (_gateLock)
+        {
+            long next = request.RateAbsolute == true ? steps : (long)_rateSteps + steps;
+            _rateSteps = (int)Math.Clamp(next, -Protocol.MaxRateSteps, Protocol.MaxRateSteps);
+            now = _rateSteps;
+        }
+
+        string notice = $"speed {Protocol.RateScale(now):0.00}x of the configured rate (step {now:+0;-0;0})";
+        if (Math.Abs(steps) > 0 && Math.Abs(now) == Protocol.MaxRateSteps && request.RateAbsolute != true)
+            notice += ", the limit";
+        Log($"rate: {notice}");
+
+        string? text = _session.CurrentText;
+        if (_session.State == SpeechState.Idle || text is null ||
+            _session.LastBoundary is not { } at || at.SourceOffset >= text.Length)
+        {
+            // Nothing heard yet, or nothing playing: the next utterance takes it.
+            return new Response { Ok = true, Notice = notice };
+        }
+
+        var restarted = RestartAt(text, at.SourceOffset, new Request { Verb = RequestVerb.Seek },
+            keepPaused: _session.IsPaused);
+        return restarted.Ok ? restarted with { Action = null, Notice = notice } : restarted;
+    }
+
+    /// <summary>The second half of <see cref="Seek"/>, shared with <see cref="StepRate"/>.</summary>
+    private Response RestartAt(string text, int offset, Request request, bool keepPaused)
+    {
         // Snapped in the daemon, not the client, so every client agrees about
         // where a word starts -- and agrees with the boundary events that drew
         // the highlight the user clicked on.
@@ -1463,6 +1649,10 @@ public sealed partial class DaemonServer : IDisposable
 
         if (!_session.Restart(text, options, startOffset: start))
             return Refuse($"busy ({_session.State})");
+
+        // Pause in Preparing holds the first write (batch 3, item 43), so the
+        // restarted reading waits, at its new speed, for the resume.
+        if (keepPaused) _session.Pause();
 
         lock (_gateLock) _gate.NoteState(_session.State);
         _modelLoaded = true;
@@ -1784,3 +1974,15 @@ public sealed record DaemonOptions(
     string? VoiceOverride = null,
     string? LanguageOverride = null,
     string Version = "unknown");
+
+/// <summary>
+/// A selection source that can also read the clipboard when asked for it by
+/// name: <c>vst-ctl read --clipboard</c> (review item 95). Separate from
+/// <see cref="ISelectionSource"/> so a source without it is refused honestly
+/// rather than silently reading the selection instead.
+/// </summary>
+internal interface IClipboardCapture
+{
+    /// <summary>The clipboard's text, under the same 100 KB cap as a selection.</summary>
+    SelectionResult CaptureClipboard(string? display);
+}

@@ -219,4 +219,84 @@ public class CtlArgsTests
         Assert.Equal(CtlOutcome.Error, r.Outcome);
         Assert.True(r.ShowUsage);
     }
+
+    // ---- batch 4B: items 92, 93, 95 ------------------------------------------
+
+    [Theory]
+    [InlineData("+1", 1)]
+    [InlineData("-1", -1)]
+    [InlineData("0", 0)]
+    [InlineData("-3", -3)]
+    public void SeekBySentenceTakesASignedCount(string count, int expected)
+    {
+        var r = P("seek", "--sentence", count);
+        Assert.Equal(CtlOutcome.Run, r.Outcome);
+        Assert.Equal(RequestVerb.Seek, r.Verb);
+        Assert.Equal(expected, r.SeekSentences);
+        Assert.Null(r.SeekOffset);
+
+        var inline = P("seek", $"--sentence={count}");
+        Assert.Equal(expected, inline.SeekSentences);
+    }
+
+    [Fact]
+    public void SeekBySentenceIsRefusedWhereItMeansNothing()
+    {
+        Assert.Contains("needs a signed count", P("seek", "--sentence", "next").Error);
+        Assert.Contains("not both", P("seek", "--sentence", "+1", "42").Error);
+        Assert.Contains("--sentence is for `seek`", P("read", "--sentence", "+1").Error);
+        // The plain offset form still works, and still needs its number.
+        Assert.Equal(42, P("seek", "42").SeekOffset);
+        Assert.Equal(CtlOutcome.Error, P("seek").Outcome);
+    }
+
+    [Fact]
+    public void ReadClipboardIsAFlagOfReadOnly()
+    {
+        var r = P("read", "--clipboard");
+        Assert.Equal(CtlOutcome.Run, r.Outcome);
+        Assert.Equal(RequestVerb.Read, r.Verb);
+        Assert.True(r.FromClipboard);
+        Assert.False(P("read").FromClipboard);
+
+        Assert.Contains("--clipboard is for `read`", P("toggle", "--clipboard").Error);
+        Assert.Contains("one or the other", P("read", "--clipboard", "some", "text").Error);
+        Assert.Contains("takes no value", P("read", "--clipboard=yes").Error);
+    }
+
+    [Fact]
+    public void PauseToggleIsAVerb()
+    {
+        Assert.Equal(RequestVerb.PauseToggle, P("pausetoggle").Verb);
+        Assert.Equal(RequestVerb.PauseToggle, P("PauseToggle").Verb);
+    }
+
+    [Theory]
+    [InlineData("+1", 1, false)]
+    [InlineData("-1", -1, false)]
+    [InlineData("+3", 3, false)]
+    [InlineData("2", 2, true)]
+    [InlineData("0", 0, true)]
+    [InlineData("reset", 0, true)]
+    [InlineData("RESET", 0, true)]
+    public void RateTakesASignedStepOrAValue(string word, int steps, bool absolute)
+    {
+        var r = P("rate", word);
+        Assert.Equal(CtlOutcome.Run, r.Outcome);
+        Assert.Equal(RequestVerb.Rate, r.Verb);
+        Assert.Equal(steps, r.RateSteps);
+        Assert.Equal(absolute, r.RateAbsolute);
+    }
+
+    [Theory]
+    [InlineData()]
+    [InlineData("faster")]
+    [InlineData("+1", "+1")]
+    [InlineData("1.5")]
+    public void RateWithoutOneStepIsRefused(params string[] rest)
+    {
+        var r = P(["rate", .. rest]);
+        Assert.Equal(CtlOutcome.Error, r.Outcome);
+        Assert.Contains("rate needs a step", r.Error);
+    }
 }

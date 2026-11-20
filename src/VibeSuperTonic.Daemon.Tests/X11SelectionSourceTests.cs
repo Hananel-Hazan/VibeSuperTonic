@@ -147,6 +147,45 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Item 95: <c>read --clipboard</c> reads CLIPBOARD, never PRIMARY, even with
+    /// the fallback off and PRIMARY holding different text; a stalled clipboard
+    /// owner costs one deadline, as a selection read does.
+    /// </summary>
+    [Fact]
+    public void Read_clipboard_reads_CLIPBOARD_not_PRIMARY()
+    {
+        using var server = PrivateXServer.TryStart(output);
+        if (server is null) return;
+
+        using var primary = ScriptedOwner.Start(server.Display, "PRIMARY", "what was selected", time: 2000);
+        using var clipboard = ScriptedOwner.Start(server.Display, "CLIPBOARD", "what was copied", time: 1000);
+        var source = new X11SelectionSource(clipboardFallback: false);
+
+        var result = source.CaptureClipboard(server.Display);
+        Assert.True(result.Ok, result.Reason);
+        Assert.Equal("what was copied", result.Text);
+
+        // And the ordinary read is untouched by it.
+        Assert.Equal("what was selected", source.Capture(server.Display).Text);
+    }
+
+    [Fact]
+    public void A_stalled_clipboard_owner_costs_one_deadline_for_read_clipboard()
+    {
+        using var server = PrivateXServer.TryStart(output);
+        if (server is null) return;
+
+        using var clipboard = ScriptedOwner.Stalled(server.Display, "CLIPBOARD");
+        var clock = Stopwatch.StartNew();
+        var result = new X11SelectionSource().CaptureClipboard(server.Display);
+        clock.Stop();
+        Report($"read --clipboard against a stalled owner: {clock.ElapsedMilliseconds} ms, reason={result.Reason}");
+
+        Assert.False(result.Ok);
+        Assert.InRange(clock.ElapsedMilliseconds, SelectionWait.OwnerReplyMs - 100, SelectionWait.OwnerReplyMs + 1000);
+    }
+
+    /// <summary>
     /// The X server goes away while a capture waits on it. Xlib's default IO
     /// error handling calls <c>exit(1)</c>, so before 2026-11-20 this ended the
     /// whole process — the daemon, here the test host — with nothing to catch

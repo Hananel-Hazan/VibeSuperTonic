@@ -52,6 +52,8 @@ public sealed class CtlArgs
     public bool Marks { get; private set; }
     /// <summary><c>--text-stdin</c> or its alias <c>--stdin</c>.</summary>
     public bool TextFromStdin { get; private set; }
+    /// <summary><c>read --clipboard</c>: the clipboard instead of the selection (item 95).</summary>
+    public bool FromClipboard { get; private set; }
 
     public string? Voice { get; private set; }
     public string? Language { get; private set; }
@@ -64,6 +66,12 @@ public sealed class CtlArgs
     /// <summary>The subject of <c>voice install|remove</c>.</summary>
     public string? VoiceSubject { get; private set; }
     public int? SeekOffset { get; private set; }
+    /// <summary><c>seek --sentence N</c>: sentences to skip, signed (item 93).</summary>
+    public int? SeekSentences { get; private set; }
+    /// <summary><c>rate +N|-N|N|reset</c>: the speed step (item 92).</summary>
+    public int? RateSteps { get; private set; }
+    /// <summary>With <see cref="RateSteps"/>: the number had no sign, so it is the new value.</summary>
+    public bool RateAbsolute { get; private set; }
     /// <summary>The arguments that are not options; element 0 is the verb as typed.</summary>
     public string[] Positional { get; private set; } = [];
 
@@ -116,7 +124,8 @@ public sealed class CtlArgs
                 case "--marks": r.Marks = true; break;
                 case "--yes" or "--accept-licence" or "--accept-license": r.AcceptLicence = true; break;
                 case "--text-stdin" or "--stdin": r.TextFromStdin = true; break;
-                case "--voice" or "--language" or "--rate" or "--volume" or "--out" or "--format":
+                case "--clipboard": r.FromClipboard = true; break;
+                case "--voice" or "--language" or "--rate" or "--volume" or "--out" or "--format" or "--sentence":
                     isFlag = false;
                     break;
                 default:
@@ -158,6 +167,11 @@ public sealed class CtlArgs
                 case "--format":
                     if (ExportFormats.Parse(value) is not { } f) return Fail("--format needs one of: wav, mp3, aac, flac");
                     r.ExportFormat = f; formatText = value; break;
+                case "--sentence":
+                    // Signed: +1 next, -1 previous, 0 the start of the current one.
+                    if (!int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int skip))
+                        return Fail("--sentence needs a signed count, e.g. `seek --sentence +1` or `seek --sentence -1`");
+                    r.SeekSentences = skip; break;
             }
         }
 
@@ -205,11 +219,46 @@ public sealed class CtlArgs
         r.Verb = verb;
         r.Positional = positional.ToArray();
 
-        if (verb == RequestVerb.Seek)
+        if (r.SeekSentences is not null && verb != RequestVerb.Seek)
+            return Fail("--sentence is for `seek`");
+        if (r.FromClipboard && verb != RequestVerb.Read)
+            return Fail("--clipboard is for `read`");
+
+        if (verb == RequestVerb.Seek && r.SeekSentences is not null)
+        {
+            if (positional.Count > 1)
+                return Fail("seek takes a character offset or --sentence, not both");
+        }
+        else if (verb == RequestVerb.Seek)
         {
             if (positional.Count < 2 || !int.TryParse(positional[1], out int offset))
-                return Fail("seek needs a character offset, e.g. `vst-ctl seek 42`");
+                return Fail("seek needs a character offset, e.g. `vst-ctl seek 42`, or `--sentence +1`");
             r.SeekOffset = offset;
+        }
+
+        if (verb == RequestVerb.Read && r.FromClipboard && positional.Count > 1)
+            return Fail("read --clipboard and text on the command line: give one or the other");
+
+        if (verb == RequestVerb.Rate)
+        {
+            // +N and -N step from where the speed is now; a bare N sets it;
+            // `reset` is 0. Each step is Protocol.RateStepFactor.
+            string? word = positional.Count == 2 ? positional[1] : null;
+            if (string.Equals(word, "reset", StringComparison.OrdinalIgnoreCase))
+            {
+                r.RateSteps = 0;
+                r.RateAbsolute = true;
+            }
+            else if (word is { Length: > 0 }
+                     && int.TryParse(word, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int steps))
+            {
+                r.RateSteps = steps;
+                r.RateAbsolute = word[0] is not ('+' or '-');
+            }
+            else
+            {
+                return Fail("rate needs a step: `rate +1` faster, `rate -1` slower, `rate reset`");
+            }
         }
 
         if (r.TextFromStdin)

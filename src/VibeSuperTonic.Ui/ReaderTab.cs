@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using VibeSuperTonic.Core.Ipc;
 using VibeSuperTonic.Core.Session;
 
@@ -104,6 +105,12 @@ public sealed class ReaderTab : UserControl
         // Tunnel, so the click is seen before the control's own selection
         // handling consumes it.
         _text.AddHandler(PointerPressedEvent, OnTextPressed, RoutingStrategies.Tunnel);
+
+        // Review item 94: a dropped .txt file is read aloud. Tunnel, so the TextBox
+        // inside does not take the drop first.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnFileDragOver, RoutingStrategies.Tunnel);
+        AddHandler(DragDrop.DropEvent, OnFileDrop, RoutingStrategies.Tunnel);
 
         // The keyboard path to the same verb (review item 46): move the caret with
         // Shift+arrows or select, then press Enter to read from there.
@@ -373,5 +380,48 @@ public sealed class ReaderTab : UserControl
         int i = _history.SelectedIndex;
         if (i < 0 || i >= _historyTexts.Count) return;
         await _client.SendAsync(new Request { Verb = RequestVerb.Speak, Text = _historyTexts[i] });
+    }
+
+    /// <summary>Largest dropped file the Reader will read (same limit as Export's loader).</summary>
+    private const long MaxDroppedFileBytes = 2 * 1024 * 1024;
+
+    /// <summary>Read typed or pasted text aloud, the same verb as "Recently read".</summary>
+    public async Task<string?> SpeakTextAsync(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return "Nothing to read, the text is empty.";
+        var reply = await _client.SendAsync(new Request { Verb = RequestVerb.Speak, Text = text });
+        return reply is null ? "No daemon is running."
+            : reply.Ok ? null
+            : reply.Error ?? "The daemon refused to speak.";
+    }
+
+    private static string? DroppedTextPath(DragEventArgs e)
+    {
+        var path = e.DataTransfer.TryGetFiles()?.FirstOrDefault()?.TryGetLocalPath();
+        if (path is null) return null;
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".txt" or ".text" or ".md" ? path : null;
+    }
+
+    private void OnFileDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = DroppedTextPath(e) is null ? DragDropEffects.None : DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private async void OnFileDrop(object? sender, DragEventArgs e)
+    {
+        var path = DroppedTextPath(e);
+        e.Handled = true;
+        if (path is null) return;
+        try
+        {
+            if (new FileInfo(path).Length > MaxDroppedFileBytes) { _notice.Text = "That file is larger than 2 MB; split it first."; return; }
+            string text = await File.ReadAllTextAsync(path);
+            string? err = await SpeakTextAsync(text);
+            if (err is not null) _notice.Text = err;
+        }
+        catch (Exception ex) { _notice.Text = "Could not read the file: " + ex.Message; }
     }
 }

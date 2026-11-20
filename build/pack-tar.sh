@@ -888,7 +888,8 @@ No runtime to install. All four binaries carry what they need.
 
   vibesupertonicd     the daemon: holds the warm model, owns the audio device
                       and the tray icon. Long-lived, started on the first
-                      hotkey press. Nothing autostarts it.
+                      hotkey press. Nothing autostarts it
+                      unless you ask: ./install.sh --autostart.
   vibesupertonic-ui   the window: Reader, Voices, Tune, Pronunciations, Status.
                       It is where a voice is CHOSEN and where settings are
                       written — one writer, so two places cannot disagree about
@@ -1136,13 +1137,29 @@ Known limits
   shortcut fires under one. That is a property of the display server.
 
 
+Start the daemon at login (optional)
+------------------------------------
+By default nothing starts the daemon until your first hotkey press, and that
+first press waits while the model loads. To have it loaded at every login:
+
+    ./install.sh --autostart
+
+This writes ONE file, ~/.config/autostart/vibesupertonic-daemon.desktop (an XDG
+autostart entry, which Plasma, GNOME, Cinnamon and most other desktops run at
+login with your session's display and tray). It runs vibesupertonicd --preload.
+The cost is the loaded model's memory for the whole session. Plain ./install.sh
+never creates it, and re-running plain ./install.sh does not remove it. To stop:
+./uninstall.sh, or delete that file. Moving this folder breaks the entry;
+run ./install.sh --autostart again from the new place.
+
 Uninstall
 ---------
-    ./uninstall.sh          removes the shortcuts and the launcher entry
+    ./uninstall.sh          removes the shortcuts, the launcher entry and the
+                            autostart entry
     rm -rf <this folder>    removes everything else, including the models
 
-Nothing is written outside this folder except the desktop shortcut entries,
-which uninstall.sh removes.
+Nothing is written outside this folder except the desktop shortcut entries and,
+only if you asked for it, the autostart entry, which uninstall.sh removes.
 EOF
 
 # The voice and language counts come from the catalog that ships, so INSTALL.txt
@@ -1169,7 +1186,7 @@ cat > "$staging/install.sh" <<'INSTALLER'
 #
 # VibeSuperTonic — install into this folder and bind the global shortcuts.
 #
-#     ./install.sh [--no-bind]
+#     ./install.sh [--no-bind] [--autostart]
 #
 # The product is portable: this folder IS the installation. Nothing is copied
 # anywhere. What this script does is stop a daemon that may still be running from
@@ -1178,7 +1195,23 @@ cat > "$staging/install.sh" <<'INSTALLER'
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bind=1
-[[ "${1:-}" == "--no-bind" ]] && bind=0
+
+# One argument of a desktop entry's Exec=, quoted the way the spec reads it: the
+# value is unescaped as a string first (\\ to \), then split with shell-like
+# quoting, inside which \ " ` $ need a backslash; % is a field code, so %%. A
+# folder whose name holds any of them would otherwise give an entry that runs
+# nothing, with no message anywhere. check-autostart.sh drives an ugly path.
+exec_arg() {
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\\\&/g' -e 's/%/%%/g')"
+}
+autostart=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-bind) bind=0 ;;
+        --autostart) autostart=1 ;;
+        *) echo "unknown option: $arg" >&2; echo "usage: ./install.sh [--no-bind] [--autostart]" >&2; exit 2 ;;
+    esac
+done
 
 echo "VibeSuperTonic — installing in $here"
 
@@ -1278,12 +1311,35 @@ else
 Type=Application
 Name=VibeSuperTonic
 Comment=Read selected text aloud
-Exec="$here/vibesupertonic-ui"
+Exec=$(exec_arg "$here/vibesupertonic-ui")
 Icon=audio-speakers
 Terminal=false
 Categories=Utility;Accessibility;
 EOF
     echo "  added VibeSuperTonic to the application menu"
+fi
+
+# --- opt-in: start the daemon (with the model loaded) at every login ---------
+#
+# XDG autostart, not a systemd user unit: it needs no systemd, runs inside the
+# graphical session (the daemon owns the tray icon and needs DISPLAY or
+# WAYLAND_DISPLAY and the session bus, which a user unit does not get on every
+# desktop), and it is one file. ONLY with --autostart; a plain install never
+# writes it, and uninstall.sh removes it.
+autostart_file="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/vibesupertonic-daemon.desktop"
+if (( autostart )); then
+    mkdir -p "$(dirname "$autostart_file")"
+    cat > "$autostart_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=VibeSuperTonic daemon
+Comment=Keeps the voice model loaded so the first hotkey press is instant
+Exec=$(exec_arg "$here/vibesupertonicd") --preload
+Icon=audio-speakers
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+    echo "  daemon will start at login (--preload): $autostart_file"
 fi
 
 cat <<EOF
@@ -1304,8 +1360,8 @@ cat > "$staging/uninstall.sh" <<'UNINSTALLER'
 #
 # VibeSuperTonic — remove the desktop integration.
 #
-# Deletes ONLY what install.sh created outside this folder: the global shortcuts
-# and the application-menu entry. Your models, settings and logs live in this
+# Deletes ONLY what install.sh created outside this folder: the global shortcuts,
+# the application-menu entry and the autostart entry. Your models, settings and logs live in this
 # folder and are removed by deleting it.
 
 set -euo pipefail
@@ -1319,6 +1375,8 @@ vst_unbind || true
 
 rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/vibesupertonic-ui.desktop"
 echo "removed the application-menu entry"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/vibesupertonic-daemon.desktop"
+echo "removed the autostart entry, if there was one"
 
 cat <<EOF
 

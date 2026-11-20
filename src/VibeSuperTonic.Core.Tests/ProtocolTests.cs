@@ -276,6 +276,52 @@ public class ProtocolTests
         Assert.Contains("DBUS_SESSION_BUS_ADDRESS", tray, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Batch 4B (items 92, 93, 95): the two verbs and four fields reach the
+    /// source-generated serializer, by name, and are absent when unset.
+    /// </summary>
+    [Fact]
+    public void The_pause_rate_sentence_and_clipboard_fields_round_trip()
+    {
+        foreach (var verb in new[] { RequestVerb.PauseToggle, RequestVerb.Rate })
+        {
+            string line = Protocol.Encode(new Request { Verb = verb });
+            Assert.Contains(verb.ToString(), line, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(verb, Protocol.TryDecode<Request>(line)!.Verb);
+        }
+
+        var sent = new Request
+        {
+            Verb = RequestVerb.Seek, Sentences = -1, RateSteps = 3, RateAbsolute = true, Clipboard = true,
+        };
+        var got = Protocol.TryDecode<Request>(Protocol.Encode(sent))!;
+        Assert.Equal(-1, got.Sentences);
+        Assert.Equal(3, got.RateSteps);
+        Assert.True(got.RateAbsolute);
+        Assert.True(got.Clipboard);
+
+        string bare = Protocol.Encode(new Request { Verb = RequestVerb.Read });
+        Assert.DoesNotContain("sentences", bare, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("clipboard", bare, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rateSteps", bare, StringComparison.OrdinalIgnoreCase);
+
+        var status = new StatusPayload(SessionState(), false, true, "M1", "en", "t", RateSteps: -2);
+        Assert.Equal(-2, Protocol.TryDecode<StatusPayload>(Protocol.Encode(status))!.RateSteps);
+
+        static VibeSuperTonic.Core.Session.SpeechState SessionState() => VibeSuperTonic.Core.Session.SpeechState.Idle;
+    }
+
+    [Fact]
+    public void A_rate_step_is_ten_percent_and_clamped_at_seven()
+    {
+        Assert.Equal(1.0, Protocol.RateScale(0));
+        Assert.Equal(1.1, Protocol.RateScale(1), 6);
+        Assert.Equal(Protocol.RateScale(Protocol.MaxRateSteps), Protocol.RateScale(50));
+        Assert.Equal(Protocol.RateScale(-Protocol.MaxRateSteps), Protocol.RateScale(-50));
+        Assert.InRange(Protocol.RateScale(-Protocol.MaxRateSteps), 0.5, 0.52);
+        Assert.InRange(Protocol.RateScale(Protocol.MaxRateSteps), 1.94, 2.0);
+    }
+
     [Fact]
     public void The_new_verbs_round_trip_by_name()
     {

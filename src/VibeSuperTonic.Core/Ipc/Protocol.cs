@@ -215,6 +215,25 @@ public enum RequestVerb
     /// trusts.</para>
     /// </summary>
     Shutdown,
+
+    /// <summary>
+    /// Pause if speaking, resume if paused (review item 92). One key for both,
+    /// decided in the daemon, which is the only process that knows which one is
+    /// true; <see cref="Pause"/> and <see cref="Resume"/> stay for scripts.
+    /// A no-op while idle.
+    /// </summary>
+    PauseToggle,
+
+    /// <summary>
+    /// Step the hotkey speed up or down (review item 92). <c>RateSteps</c> is
+    /// the step, relative unless <c>RateAbsolute</c> is set. Held by the daemon
+    /// in memory and applied per utterance, as a factor on the configured rate
+    /// the way the speechd <c>Request.Rate</c> is, so it never edits
+    /// <c>settings.json</c> (the Tune tab owns that) and a daemon restart
+    /// returns to the configured speed. A reading in progress restarts from
+    /// the current word at the new speed.
+    /// </summary>
+    Rate,
 }
 
 /// <summary>
@@ -288,6 +307,37 @@ public sealed record Request
     /// Ignored by every other verb.
     /// </summary>
     public int? Offset { get; init; }
+
+    /// <summary>
+    /// <see cref="RequestVerb.Seek"/> only: skip this many sentences from the one
+    /// being heard, +1 for the next and -1 for the previous (review item 93).
+    /// Replaces <see cref="Offset"/> when set. Sentences are the chunker's own
+    /// spans (<c>SentenceChunker.ChunkWithOffsets</c> with no merging), so the
+    /// skip lands where the reading would have paused anyway.
+    /// </summary>
+    public int? Sentences { get; init; }
+
+    /// <summary>
+    /// <see cref="RequestVerb.Rate"/> only: the speed step. Each step is a factor
+    /// of <see cref="Protocol.RateStepFactor"/>, and the total is clamped to
+    /// ±<see cref="Protocol.MaxRateSteps"/>.
+    /// </summary>
+    public int? RateSteps { get; init; }
+
+    /// <summary>
+    /// <see cref="RequestVerb.Rate"/> only: <see cref="RateSteps"/> is the new
+    /// value rather than a change to the current one (<c>vst-ctl rate 0</c>
+    /// resets).
+    /// </summary>
+    public bool? RateAbsolute { get; init; }
+
+    /// <summary>
+    /// <see cref="RequestVerb.Read"/> only: read the clipboard rather than the
+    /// selection (review item 95). Without it the clipboard is reached only as
+    /// the <c>ClipboardFallback</c> setting's fallback when PRIMARY is empty or
+    /// stale.
+    /// </summary>
+    public bool? Clipboard { get; init; }
 
     /// <summary>
     /// The client's <c>$DISPLAY</c>, forwarded so the daemon can read the X11
@@ -470,6 +520,10 @@ public sealed record Response
 /// </param>
 /// <param name="SourceOffset">Where in <paramref name="Text"/> the reader is, or null.</param>
 /// <param name="SourceLength">How many characters that covers, or null.</param>
+/// <param name="RateSteps">
+/// The hotkey speed step (<see cref="RequestVerb.Rate"/>), or null at 0, so a
+/// status line from a daemon nobody stepped is unchanged.
+/// </param>
 /// <param name="Inference">
 /// What the next utterance will render on, and why — "CUDA, 4 threads (benchmark
 /// 2026-08-24)" or "CPU, 2 threads (on battery, benchmark 2026-08-24)".
@@ -491,7 +545,8 @@ public sealed record StatusPayload(
     int? SourceLength = null,
     string? Tray = null,
     string? Inference = null,
-    string? Engine = null);
+    string? Engine = null,
+    int? RateSteps = null);
 
 /// <summary>
 /// Where this instance reads its configuration, and what it made of it.
@@ -785,6 +840,20 @@ public static class Protocol
     /// including nothing — gets the length only.
     /// </summary>
     public const string DiagnosticsSnippet = "snippet";
+
+    /// <summary>
+    /// What one <see cref="RequestVerb.Rate"/> step multiplies the speed by. 10%
+    /// is audible on one press and reaches the stretch's 0.5x and 2x limits in
+    /// seven, which is the bound <see cref="MaxRateSteps"/> sets.
+    /// </summary>
+    public const double RateStepFactor = 1.1;
+
+    /// <summary>±7 steps: 1.1^7 is 1.95x, 1.1^-7 is 0.51x.</summary>
+    public const int MaxRateSteps = 7;
+
+    /// <summary>The speed factor for <paramref name="steps"/>, clamped.</summary>
+    public static double RateScale(int steps) =>
+        Math.Pow(RateStepFactor, Math.Clamp(steps, -MaxRateSteps, MaxRateSteps));
 
     /// <summary>
     /// Kept for callers that want the options directly. The serializer itself

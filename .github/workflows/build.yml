@@ -170,6 +170,13 @@ jobs:
       - name: Check sandbox-setup.sh against a fake snap and Flatpak
         run: bash build/check-sandbox-setup.sh --negative-control
 
+      # install.sh's two desktop entries (item 98): the daemon autostart is
+      # opt-in, uninstall removes it, and both Exec= lines still run their
+      # program from a folder named with a space, " ` $ \ and %. A wrong Exec=
+      # is an entry the desktop runs to nothing, silently. Hermetic, a second.
+      - name: Check install.sh's autostart and menu entries
+        run: bash build/check-autostart.sh
+
       # THE STORE PACKAGES' EXPORT FFMPEG (build/build-ffmpeg.sh), built here as
       # the snap's part builds it, then: its check passing, every sabotage of
       # that check, of the manifests' pins and of the recipe's own refusals

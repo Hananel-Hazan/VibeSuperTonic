@@ -16,7 +16,10 @@ using VibeSuperTonic.Core.Telemetry;
 //   vst-ctl toggle              press: speak, or stop if already speaking
 //   vst-ctl speak "some text"   speak this specific text
 //   vst-ctl seek 42             re-read from character 42 of what is on screen
-//   vst-ctl stop | pause | resume
+//   vst-ctl seek --sentence +1  next sentence (-1 previous)
+//   vst-ctl stop | pause | resume | pausetoggle
+//   vst-ctl rate +1 | -1 | reset   hotkey speed, one 10% step at a time
+//   vst-ctl read --clipboard    read the clipboard instead of the selection
 //   vst-ctl status              one JSON line
 //   vst-ctl subscribe           stream events until interrupted
 //   vst-ctl reload              re-read settings.json and pronunciations.json
@@ -154,7 +157,7 @@ if (textFromStdin)
 var request = new Request
 {
     Verb = verb,
-    Text = verb == RequestVerb.Seek
+    Text = verb is RequestVerb.Seek or RequestVerb.Rate
         ? null
         // The only meaning diagnostics gives its text field; see Protocol.DiagnosticsSnippet.
         : verb == RequestVerb.Diagnostics
@@ -163,6 +166,10 @@ var request = new Request
         : positional.Length > 1 ? string.Join(' ', positional.Skip(1)) : null,
 
     Offset = seekOffset,
+    Sentences = parsed.SeekSentences,
+    RateSteps = parsed.RateSteps,
+    RateAbsolute = parsed.RateSteps is not null && parsed.RateAbsolute ? true : null,
+    Clipboard = parsed.FromClipboard ? true : null,
 
     // Which voice, and therefore which ENGINE: the daemon routes to Piper
     // exactly when the id names an installed Piper voice, so this one flag is
@@ -441,12 +448,20 @@ static void PrintUsage() =>
         vst-ctl <verb> [text]
 
           read         read the selection, interrupting anything playing
+          read --clipboard   read the clipboard instead of the selection
           toggle       speak the selection, or stop if already speaking
           speak TEXT   speak TEXT
           seek N       start again from character N of the current text
+          seek --sentence +1   skip to the next sentence (-1 the previous,
+                       0 the start of the one being heard)
           stop         stop speaking
           pause        stop feeding the device; buffered audio plays out
           resume       continue
+          pausetoggle  pause if speaking, resume if paused
+          rate +1      speak faster by one step of 10% (-1 slower, a bare N sets
+                       the step, `rate reset` goes back to settings.json's speed).
+                       Held by the daemon until it stops; a reading in progress
+                       restarts from the current word
           status       print the daemon's state as one JSON line
           subscribe    print the event stream until interrupted
           reload       re-read settings.json and pronunciations.json

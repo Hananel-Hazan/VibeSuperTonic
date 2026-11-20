@@ -26,7 +26,7 @@ namespace VibeSuperTonic.Daemon;
 /// outside the session cannot use it anyway — see the note on the failure
 /// message below.</para>
 /// </summary>
-public sealed class WaylandSelectionSource : ISelectionSource
+public sealed class WaylandSelectionSource : ISelectionSource, IClipboardCapture
 {
     private readonly bool _clipboardFallback;
     private readonly Func<ISelectionReader> _open;
@@ -115,6 +115,51 @@ public sealed class WaylandSelectionSource : ISelectionSource
     /// press there may be a new highlight in an application that never publishes
     /// one, and the copy is the only way to find out.</para>
     /// </summary>
+    /// <summary>
+    /// <c>vst-ctl read --clipboard</c> (review item 95): the clipboard's text,
+    /// asked for by name, through one connection. PRIMARY is never read and
+    /// AutoCopy never presses Ctrl+C, so nothing is sent to the focused window.
+    /// The same receive budget as a selection read.
+    /// </summary>
+    public SelectionResult CaptureClipboard(string? display)
+    {
+        using var reader = _open();
+        var got = reader.Read(false);
+
+        if (!got.Connected)
+            return SelectionResult.None(
+                "no Wayland display. The daemon was started outside a graphical " +
+                "session, so it cannot see the clipboard — speak text explicitly, " +
+                "or start it from the desktop session.");
+
+        if (!got.ProtocolPresent)
+            return SelectionResult.None(
+                "this compositor does not offer ext-data-control-v1, so a " +
+                "background process cannot read the clipboard. KDE and wlroots " +
+                "compositors support it; GNOME deliberately does not.");
+
+        if (got.Error is { } why)
+            return SelectionResult.None(why);
+
+        if (!got.HadOffer)
+            return SelectionResult.None("the clipboard is empty.");
+
+        if (got.TimedOut && string.IsNullOrEmpty(got.Text))
+            return SelectionResult.None(
+                $"the application holding the clipboard did not hand it over within " +
+                $"{Budget.FirstByteMs / 1000.0:0.#} s. It is most likely busy; press again in a moment.");
+
+        if (string.IsNullOrEmpty(got.Text))
+            return SelectionResult.None("the clipboard holds no text.");
+
+        if (got.TimedOut)
+            return Cap(got.Text!,
+                $"the application stopped sending part way through, so only the first " +
+                $"{got.Text!.Length} characters were read");
+
+        return Cap(got.Text!, null);
+    }
+
     public SelectionResult Capture(string? display, string? reading) =>
         Capture(display, () => reading);
 

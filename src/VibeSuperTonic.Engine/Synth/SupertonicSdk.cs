@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -528,6 +531,186 @@ namespace Supertonic
     }
 
     // ============================================================================
+    // Persisted optimised graphs
+    // ============================================================================
+
+    /// <summary>
+    /// ORT's optimised graph, saved beside a model so the next process start skips
+    /// the optimisation pass. Shared by the Supertonic loader and the Piper
+    /// backend, so there is one rule for when a saved graph may be trusted.
+    ///
+    /// <para><b>The file name is the key.</b> It folds in the source's file name,
+    /// size and last-write time, the ORT version, the process architecture and the
+    /// CPU's vector instruction sets (see <see cref="Prefix"/> for the one that is
+    /// spelled out rather than hashed).
+    /// Until 2026-11-20 the Supertonic cache was trusted whenever its files
+    /// existed, so a model replaced by "Repair all" kept running its old graph on
+    /// CPU while DirectML ran the new one (review item 10). A changed model now
+    /// has a different name, so nothing has to remember to delete the old graph;
+    /// the stale one is pruned once the new one is published.</para>
+    ///
+    /// <para><b>Written under a private temp name, then renamed.</b> ORT writes
+    /// the graph during session creation, and two hosts starting together could
+    /// otherwise read a half-written file: a protobuf error and a silent
+    /// utterance. A rename either shows the whole file or none of it.</para>
+    ///
+    /// <para>Platform-neutral on purpose: this file is compiled into the Windows
+    /// engine as well as the Linux backend.</para>
+    /// </summary>
+    public static class OptimizedGraphCache
+    {
+        private static readonly Lazy<string> OrtVersion =
+            new(() => OrtEnv.Instance().GetVersionString());
+
+        /// <summary>Temp files older than this belong to a process that died mid-write.</summary>
+        private static readonly TimeSpan AbandonedTempAge = TimeSpan.FromHours(1);
+
+        /// <summary>
+        /// ORT warns, on every save at ORT_ENABLE_ALL, that the NCHWc layout it
+        /// writes "may contain hardware specific optimizations". The instruction
+        /// sets MLAS chooses its kernels by are therefore part of the key, so a
+        /// portable home carried to another machine re-optimises instead of
+        /// running a graph laid out for a different CPU.
+        /// </summary>
+        private static readonly string CpuFeatures = string.Concat(
+            System.Runtime.Intrinsics.X86.Avx.IsSupported ? "avx," : "",
+            System.Runtime.Intrinsics.X86.Avx2.IsSupported ? "avx2," : "",
+            System.Runtime.Intrinsics.X86.Fma.IsSupported ? "fma," : "",
+            System.Runtime.Intrinsics.X86.Avx512F.IsSupported ? "avx512f," : "",
+            System.Runtime.Intrinsics.X86.Avx512BW.IsSupported ? "avx512bw," : "",
+            System.Runtime.Intrinsics.X86.AvxVnni.IsSupported ? "avxvnni," : "",
+            System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported ? "neon," : "");
+
+        /// <summary>16 hex characters naming exactly one (source file, runtime, CPU) triple.</summary>
+        public static string Key(string sourcePath)
+        {
+            var source = new FileInfo(sourcePath);
+            string material = string.Join("|",
+                source.Name,
+                source.Length.ToString(CultureInfo.InvariantCulture),
+                source.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+                OrtVersion.Value,
+                CpuFeatures);
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(material));
+            return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+        }
+
+        /// <summary>Where the optimised graph for <paramref name="sourcePath"/> lives now.</summary>
+        public static string PathFor(string sourcePath, string cacheDir, string stem) =>
+            Path.Combine(cacheDir, Prefix(stem) + Key(sourcePath) + ".onnx");
+
+        /// <summary>
+        /// The architecture is in the name rather than the hash so that pruning
+        /// stays within one: the Windows x64 and x86 engines share one
+        /// <c>models</c> folder, and each would otherwise delete the other's graph
+        /// on every load and re-optimise on the next.
+        /// </summary>
+        private static string Prefix(string stem) =>
+            stem + ".optimized-" + RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant() + "-";
+
+        /// <summary>
+        /// A session for <paramref name="sourcePath"/>: from the saved graph when it
+        /// matches the source, otherwise optimised at <c>ORT_ENABLE_ALL</c> and
+        /// saved for next time. <paramref name="newOptions"/> supplies everything
+        /// else (threads, memory settings); it is called once per attempt, and the
+        /// optimisation level and output path are set here. A cache directory that
+        /// cannot be written costs the saving, never the session.
+        /// </summary>
+        public static InferenceSession Load(
+            string sourcePath, string cacheDir, string stem, Func<SessionOptions> newOptions, out bool cacheHit)
+        {
+            string final = PathFor(sourcePath, cacheDir, stem);
+
+            if (File.Exists(final))
+            {
+                var hitOptions = newOptions();
+                hitOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL;
+                try
+                {
+                    var session = new InferenceSession(final, hitOptions);
+                    cacheHit = true;
+                    return session;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Unreadable despite its key (a disk that filled during an
+                    // older release's write). Rebuild it rather than fail forever.
+                    hitOptions.Dispose();
+                    TryDelete(final);
+                }
+            }
+
+            cacheHit = false;
+            string temp = final + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
+                + "-" + Guid.NewGuid().ToString("N") + ".tmp";
+            var options = newOptions();
+            options.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
+            options.OptimizedModelFilePath = temp;
+
+            InferenceSession built;
+            try
+            {
+                built = new InferenceSession(sourcePath, options);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // Most often the directory refused the write. Load without saving;
+                // if the model itself is broken this throws the real error.
+                // Not narrowed to OnnxRuntimeException: measured with ORT 1.22.1,
+                // a refused write carries an error code the managed binding has no
+                // name for, and it arrives as a KeyNotFoundException.
+                options.Dispose();
+                TryDelete(temp);
+                var plain = newOptions();
+                plain.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
+                return new InferenceSession(sourcePath, plain);
+            }
+
+            Publish(temp, final);
+            Prune(cacheDir, stem, keep: final);
+            return built;
+        }
+
+        private static void Publish(string temp, string final)
+        {
+            try
+            {
+                // No overwrite: a process that published the same key first wrote
+                // the same graph, and on Windows a file another host has open
+                // cannot be replaced anyway.
+                File.Move(temp, final, overwrite: false);
+            }
+            catch (IOException) { TryDelete(temp); }
+            catch (UnauthorizedAccessException) { TryDelete(temp); }
+        }
+
+        /// <summary>Removes this stem's graphs for other keys, and temp files nobody is still writing.</summary>
+        private static void Prune(string cacheDir, string stem, string keep)
+        {
+            try
+            {
+                foreach (string old in Directory.GetFiles(cacheDir, Prefix(stem) + "*.onnx"))
+                    if (!string.Equals(Path.GetFullPath(old), Path.GetFullPath(keep), StringComparison.OrdinalIgnoreCase))
+                        TryDelete(old);
+
+                DateTime cutoff = DateTime.UtcNow - AbandonedTempAge;
+                foreach (string temp in Directory.GetFiles(cacheDir, Prefix(stem) + "*.tmp"))
+                    if (File.GetLastWriteTimeUtc(temp) < cutoff)
+                        TryDelete(temp);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        private static void TryDelete(string path)
+        {
+            try { File.Delete(path); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // ============================================================================
     // Helper class with utility functions
     // ============================================================================
 
@@ -575,39 +758,12 @@ namespace Supertonic
 
         public static (InferenceSession dp, InferenceSession textEnc, InferenceSession vectorEst, InferenceSession vocoder)
             LoadOnnxAll(string onnxDir, SessionOptions opts)
-            => LoadOnnxAll(onnxDir, opts, writeOptimizedTo: null, null);
-
-        public static (InferenceSession dp, InferenceSession textEnc, InferenceSession vectorEst, InferenceSession vocoder)
-            LoadOnnxAll(string onnxDir, SessionOptions opts, string? writeOptimizedTo, string[]? modelNames)
         {
-            modelNames ??= new[] { "duration_predictor", "text_encoder", "vector_estimator", "vocoder" };
-
-            InferenceSession LoadOne(string name)
-            {
-                var path = Path.Combine(onnxDir, name + ".onnx");
-                if (writeOptimizedTo is null) return LoadOnnx(path, opts);
-                // Per-model OptimizedModelFilePath — needs its own SessionOptions because the
-                // path isn't part of the per-call API. Mirror the master options here.
-                var perModel = new SessionOptions
-                {
-                    GraphOptimizationLevel = opts.GraphOptimizationLevel,
-                    ExecutionMode = opts.ExecutionMode,
-                    EnableMemoryPattern = opts.EnableMemoryPattern,
-                    EnableCpuMemArena = opts.EnableCpuMemArena,
-                    InterOpNumThreads = opts.InterOpNumThreads,
-                    IntraOpNumThreads = opts.IntraOpNumThreads,
-                    OptimizedModelFilePath = Path.Combine(writeOptimizedTo, name + ".onnx"),
-                };
-                return LoadOnnx(path, perModel);
-            }
-
-            return (
-                LoadOne(modelNames[0]),
-                LoadOne(modelNames[1]),
-                LoadOne(modelNames[2]),
-                LoadOne(modelNames[3])
-            );
+            InferenceSession LoadOne(string name) => LoadOnnx(Path.Combine(onnxDir, name + ".onnx"), opts);
+            return (LoadOne(ModelNames[0]), LoadOne(ModelNames[1]), LoadOne(ModelNames[2]), LoadOne(ModelNames[3]));
         }
+
+        private static readonly string[] ModelNames = { "duration_predictor", "text_encoder", "vector_estimator", "vocoder" };
 
         // ============================================================================
         // Configuration loading
@@ -779,21 +935,14 @@ namespace Supertonic
             // First-run cost: graph optimization adds ~1-3s per model. We persist the optimized
             // graph alongside the original (in models\onnx-optimized\) so subsequent process
             // starts skip optimization entirely — load straight from the optimized .onnx.
-            string optimizedDir = Path.Combine(onnxDir, "..", "onnx-optimized");
-            optimizedDir = Path.GetFullPath(optimizedDir);
+            // Each saved graph is named for the exact model and runtime it came from
+            // (OptimizedGraphCache), so a repaired or updated model is re-optimised
+            // rather than served from the old graph.
+            string optimizedDir = Path.GetFullPath(Path.Combine(onnxDir, "..", "onnx-optimized"));
 
-            var modelNames = new[] { "duration_predictor", "text_encoder", "vector_estimator", "vocoder" };
-            bool cacheHit = !useGpu
-                && Directory.Exists(optimizedDir)
-                && modelNames.All(n => File.Exists(Path.Combine(optimizedDir, n + ".onnx")));
-
-            string loadDir = cacheHit ? optimizedDir : onnxDir;
-
-            var opts = new SessionOptions
+            SessionOptions NewOptions() => new SessionOptions
             {
-                GraphOptimizationLevel = cacheHit
-                    ? GraphOptimizationLevel.ORT_DISABLE_ALL
-                    : GraphOptimizationLevel.ORT_ENABLE_ALL,
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                 ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
                 EnableMemoryPattern = !useGpu,
                 EnableCpuMemArena = !useGpu,
@@ -801,8 +950,12 @@ namespace Supertonic
                 IntraOpNumThreads = Math.Max(0, intraOpThreads),
             };
 
+            var cfgs = LoadCfgs(onnxDir);
+            InferenceSession dpOrt, textEncOrt, vectorEstOrt, vocoderOrt;
+
             if (useGpu)
             {
+                var opts = NewOptions();
 #if ORT_DIRECTML
                 // AppendExecutionProvider_DML takes priority — ops it can't run fall back to CPU.
                 // Throws if the DirectML provider can't initialize (e.g. no DX12 GPU). We let
@@ -842,16 +995,28 @@ namespace Supertonic
                 else opts.AppendExecutionProvider_CUDA(directMLDevice);
                 Console.WriteLine($"GPU provider appended (device {directMLDevice})");
 #endif
+                (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) = LoadOnnxAll(onnxDir, opts);
             }
-            else if (!cacheHit)
+            else
             {
-                try { Directory.CreateDirectory(optimizedDir); } catch { /* best-effort */ }
+                try { Directory.CreateDirectory(optimizedDir); } catch { /* best-effort; Load copes */ }
+
+                InferenceSession LoadCached(string name)
+                {
+                    var session = OptimizedGraphCache.Load(
+                        Path.Combine(onnxDir, name + ".onnx"), optimizedDir, name, NewOptions, out _);
+                    // The unkeyed graph earlier releases wrote under the plain name.
+                    try { File.Delete(Path.Combine(optimizedDir, name + ".onnx")); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    return session;
+                }
+
+                (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) = (
+                    LoadCached(ModelNames[0]), LoadCached(ModelNames[1]),
+                    LoadCached(ModelNames[2]), LoadCached(ModelNames[3]));
             }
 
-            var cfgs = LoadCfgs(onnxDir);
-            var writeOptimizedTo = (!useGpu && !cacheHit) ? optimizedDir : null;
-            var (dpOrt, textEncOrt, vectorEstOrt, vocoderOrt) =
-                LoadOnnxAll(loadDir, opts, writeOptimizedTo: writeOptimizedTo, modelNames);
             var textProcessor = LoadTextProcessor(onnxDir);
 
             return new TextToSpeech(cfgs, textProcessor, dpOrt, textEncOrt, vectorEstOrt, vocoderOrt);

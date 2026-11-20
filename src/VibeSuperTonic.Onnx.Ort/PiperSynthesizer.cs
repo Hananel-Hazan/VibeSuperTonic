@@ -1,5 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using Supertonic;
 using VibeSuperTonic.Core.Synthesis;
 using VibeSuperTonic.Core.Synthesis.Piper;
 
@@ -236,17 +237,33 @@ public sealed class PiperSynthesizer : ISynthesizer
     {
         if (_session is not null) return _session;
 
-        var sessionOptions = new SessionOptions
+        SessionOptions NewOptions() => new()
         {
             IntraOpNumThreads = _intraOpThreads,
             InterOpNumThreads = _interOpThreads,
         };
 
+        // CPU: the optimised graph is saved beside the voice's calibration.json
+        // and reused while the .onnx is the same file (review item 82). The level
+        // was already ORT_ENABLE_ALL (the managed default, read from a fresh
+        // SessionOptions), so the saving is the optimisation pass itself.
+        // Measured 2026-11-20 on en_US-ryan-medium, 20 threads, 5 to 6 fresh
+        // processes each: 502-528 ms before; 554-605 ms on the run that writes
+        // the 63 MB graph; 398-419 ms on every run after. Same samples out.
+        // A GPU provider keeps the old path: its graph is provider-specific and
+        // none of the GPU packs has been measured with a saved one.
+        if (!ExecutionProviders.IsGpu(_provider))
+        {
+            string dir = Path.GetDirectoryName(Path.GetFullPath(_modelPath))!;
+            _session = OptimizedGraphCache.Load(
+                _modelPath, dir, Path.GetFileNameWithoutExtension(_modelPath), NewOptions, out _);
+            return _session;
+        }
+
+        var sessionOptions = NewOptions();
         try
         {
-            if (ExecutionProviders.IsGpu(_provider))
-                OrtProviders.Append(sessionOptions, _provider, 0);
-
+            OrtProviders.Append(sessionOptions, _provider, 0);
             _session = new InferenceSession(_modelPath, sessionOptions);
         }
         catch

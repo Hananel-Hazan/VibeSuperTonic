@@ -207,14 +207,19 @@ internal sealed class TrayIcon : IDisposable
                     SpeechState.Preparing => TrayState.Preparing,
                     _ => TrayState.Idle,
                 };
-                if (_state == TrayState.Idle) { _notice = ""; _sentences = 0; }
+                // The notice is NOT cleared here. A Notice (item 42: nothing
+                // speakable) or an Error arrives just before the Idle that ends
+                // the utterance, so clearing it on Idle meant the hotkey user,
+                // who has only this tooltip, never saw either. It lasts until the
+                // next press, whose Preparing replaces it.
+                if (_state == TrayState.Idle) _sentences = 0;
                 break;
 
             case SessionEventKind.Error:
                 _notice = evt.Message ?? "";
                 break;
 
-            // Item 42. Like an Error, it is cleared by the Idle that follows.
+            // Item 42. Like an Error, it stays until the next Preparing.
             case SessionEventKind.Notice:
                 _notice = evt.Notice ?? "";
                 break;
@@ -238,7 +243,7 @@ internal sealed class TrayIcon : IDisposable
         EmitLayoutUpdated(_menu.NextRevision());
     }
 
-    private string ToolTip()
+    internal string ToolTip()
     {
         string head = _state switch
         {
@@ -284,6 +289,14 @@ internal sealed class TrayIcon : IDisposable
         new MenuRow(1,
             () => _state == TrayState.Idle ? "Read the selection" : "Stop reading",
             () => Invoke(RequestVerb.Toggle)),
+
+        // Item 92. Only while something is being read: idle, there is nothing
+        // to pause. One label for both directions, because the session does not
+        // announce a pause and the daemon decides which one the click means.
+        new MenuRow(6,
+            () => "Pause or resume reading",
+            () => Invoke(RequestVerb.PauseToggle))
+        { Visible = () => _state != TrayState.Idle },
 
         new MenuRow(2, () => "Open the window", OpenWindow),
 

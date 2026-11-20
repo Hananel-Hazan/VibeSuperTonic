@@ -21,7 +21,15 @@ namespace VibeSuperTonic.Daemon;
 ///     models/piper/en_US-lessac-medium/en_US-lessac-medium.onnx
 ///                                     /en_US-lessac-medium.onnx.json
 ///                                     /calibration.json      &lt;- written by us
+///                                     /en_US-lessac-medium.optimized-&lt;key&gt;.onnx  &lt;- ORT's, by us
 /// </code>
+///
+/// <para>The last is the optimised graph <c>PiperSynthesizer</c> saves on a
+/// voice's first CPU load (<c>OptimizedGraphCache</c>, review item 82). Its key
+/// changes with the model's size, mtime and the runtime, so a replaced model is
+/// never served from it; about the model's own size on disk. It deliberately
+/// does not end in <c>.onnx.json</c> and is not <c>&lt;id&gt;.onnx</c>, so the scan
+/// below never mistakes it for a voice.</para>
 ///
 /// <para>A directory per voice rather than a flat folder, because the
 /// calibration is ours and has to live somewhere the voice's own files do not

@@ -2,11 +2,29 @@
 #
 # VibeSuperTonic — desktop keybindings (Phase 5)
 #
-# Registers two global shortcuts with the desktop rather than grabbing keys
+# Registers global shortcuts with the desktop rather than grabbing keys
 # ourselves:
 #
 #     Ctrl+`            vst-ctl read      read what is selected NOW, interrupting
 #     Ctrl+~            vst-ctl stop      unconditional silence, from any state
+#
+# and, since 2026-11-20 (review items 92, 93, 95), six more, all on Ctrl+Alt so
+# they stay clear of the two above and of the editors' own Ctrl+Shift keys:
+#
+#     Ctrl+Alt+`        vst-ctl pausetoggle          pause, or resume
+#     Ctrl+Alt+=        vst-ctl rate +1              10% faster
+#     Ctrl+Alt+-        vst-ctl rate -1              10% slower
+#     Ctrl+Alt+PgDn     vst-ctl seek --sentence +1   next sentence
+#     Ctrl+Alt+PgUp     vst-ctl seek --sentence -1   previous sentence
+#     Ctrl+Alt+~        vst-ctl read --clipboard     read the clipboard
+#
+# Chosen to avoid the defaults known to collide: Ctrl+Alt+arrows (Cinnamon and
+# older GNOME switch workspaces), Ctrl+Alt+V (Klipper), Ctrl+Alt+T (terminal),
+# Ctrl+Alt+Delete and Ctrl+Alt+L. Not checked against every desktop's
+# defaults; the conflict scan below is what catches one, and it leaves that key
+# unbound rather than stealing it. PgUp/PgDn rather than [ and ], because the
+# bracket keys are mirrored under the Hebrew layout and "next" would become
+# "previous" with the layout; - and = are the same keysyms in both groups.
 #
 # The primary key never means stop. It reads the current selection, cutting off
 # whatever is playing -- so changing selection and pressing once does the
@@ -102,9 +120,15 @@ VST_KB_DUMMY="__dummy__"
 # The two shortcuts, as parallel arrays. Names are what the user sees in
 # System Settings -> Keyboard -> Shortcuts -> Custom Shortcuts, and are also
 # how vst_unbind finds what to remove.
-VST_KB_NAMES=("VibeSuperTonic: Speak selection" "VibeSuperTonic: Stop speaking")
-VST_KB_VERBS=("read" "stop")
-VST_KB_ACCELS=("<Control>grave" "<Control><Shift>grave")
+VST_KB_NAMES=("VibeSuperTonic: Speak selection" "VibeSuperTonic: Stop speaking"
+              "VibeSuperTonic: Pause or resume" "VibeSuperTonic: Faster" "VibeSuperTonic: Slower"
+              "VibeSuperTonic: Next sentence" "VibeSuperTonic: Previous sentence"
+              "VibeSuperTonic: Read the clipboard")
+VST_KB_VERBS=("read" "stop" "pausetoggle" "rate +1" "rate -1"
+              "seek --sentence +1" "seek --sentence -1" "read --clipboard")
+VST_KB_ACCELS=("<Control>grave" "<Control><Shift>grave"
+               "<Control><Alt>grave" "<Control><Alt>equal" "<Control><Alt>minus"
+               "<Control><Alt>Page_Down" "<Control><Alt>Page_Up" "<Control><Alt><Shift>grave")
 
 # Schemas worth scanning for a conflict. Not exhaustive — a conflict we miss
 # costs a warning, not a broken install, and the desktop resolves duplicate
@@ -456,14 +480,32 @@ _vst_kb_preflight() {
 # the honest answer for that is a key of the user's choosing in System Settings.
 
 VST_KB_KDE_DESKTOP_ID="vibesupertonic.desktop"
-VST_KB_KDE_ACTIONS=("Read" "Stop")
-VST_KB_KDE_ACCELS=('Ctrl+`' 'Ctrl+~')
+VST_KB_KDE_ACTIONS=("Read" "Stop" "PauseToggle" "Faster" "Slower" "NextSentence" "PreviousSentence" "ReadClipboard")
+VST_KB_KDE_ACCELS=('Ctrl+`' 'Ctrl+~' 'Ctrl+Alt+`' 'Ctrl+Alt+=' 'Ctrl+Alt+-' 'Ctrl+Alt+PgDown' 'Ctrl+Alt+PgUp' 'Ctrl+Alt+~')
 
 # Alternate spellings of THE SAME PHYSICAL KEY, per action, empty where none is
 # needed. `Ctrl+;` is keycode 49 under the Hebrew group; Stop needs none because
 # asciitilde is already shared by both.
-VST_KB_KDE_ALT_ACCELS=('Ctrl+;' '')
-VST_KB_KDE_ACTION_NAMES=("Speak selection" "Stop speaking")
+VST_KB_KDE_ALT_ACCELS=('Ctrl+;' '' 'Ctrl+Alt+;' '' '' '' '' '')
+VST_KB_KDE_ACTION_NAMES=("Speak selection" "Stop speaking" "Pause or resume" "Faster" "Slower"
+                         "Next sentence" "Previous sentence" "Read the clipboard")
+
+# The arrays above are parallel, and a missing entry in one of them binds a key
+# to the wrong verb with nothing reporting it. Checked at the top of bind,
+# unbind and status, so every entry point, install.sh's included, refuses the
+# same way before touching anything.
+_vst_kb_check_arrays() {
+    local n=${#VST_KB_NAMES[@]} a
+    for a in VST_KB_VERBS VST_KB_ACCELS VST_KB_KDE_ACTIONS VST_KB_KDE_ACCELS \
+             VST_KB_KDE_ALT_ACCELS VST_KB_KDE_ACTION_NAMES; do
+        local -n arr="$a"
+        if (( ${#arr[@]} != n )); then
+            _vst_kb_error "keybindings.sh is broken: $a has ${#arr[@]} entries, VST_KB_NAMES has $n."
+            return 1
+        fi
+        unset -n arr
+    done
+}
 
 # A .desktop Exec field, quoted only when it needs to be. The freedesktop spec
 # splits this with shell-like rules, so an install path containing a space breaks
@@ -768,6 +810,7 @@ _vst_kb_backend() {
 # --- the two entry points --------------------------------------------------
 
 vst_bind() {
+    _vst_kb_check_arrays || return 2
     local dir="${1:-}"
     if [[ -z "$dir" ]]; then
         _vst_kb_error "vst_bind needs the install directory containing vst-ctl."
@@ -877,6 +920,7 @@ _vst_kb_alloc_id_excluding() {
 }
 
 vst_unbind() {
+    _vst_kb_check_arrays || return 2
     case "$(_vst_kb_backend)" in
         kde)      _vst_kde_unbind; return $? ;;
         cinnamon) ;;
@@ -915,6 +959,7 @@ vst_unbind() {
 }
 
 vst_kb_status() {
+    _vst_kb_check_arrays || return 2
     case "$(_vst_kb_backend)" in
         kde)      _vst_kde_status; return $? ;;
         cinnamon) ;;
@@ -955,6 +1000,12 @@ VibeSuperTonic desktop keybindings.
 
   Ctrl+\`            vst-ctl read
   Ctrl+~            vst-ctl stop
+  Ctrl+Alt+\`        vst-ctl pausetoggle
+  Ctrl+Alt+=        vst-ctl rate +1             (faster)
+  Ctrl+Alt+-        vst-ctl rate -1             (slower)
+  Ctrl+Alt+PgDn     vst-ctl seek --sentence +1  (next sentence)
+  Ctrl+Alt+PgUp     vst-ctl seek --sentence -1  (previous sentence)
+  Ctrl+Alt+~        vst-ctl read --clipboard
 
 VST_KB_DRY_RUN=1 prints every mutating call instead of making it.
 VST_KB_BACKEND=kde|cinnamon forces a backend instead of detecting one.
