@@ -25,6 +25,20 @@ public enum SessionEventKind
     Error,
 
     /// <summary>
+    /// Something the user should know that is neither a state change nor a
+    /// failure. <c>Notice</c> says what. Today that is one thing: an utterance
+    /// whose text held nothing speakable once sanitised — whitespace, zero-width
+    /// characters, icon-font glyphs — which used to go Preparing, Finished, Idle
+    /// with no word anywhere, so the key appeared to do nothing.
+    ///
+    /// <para>Its own kind rather than a late <c>Notice</c> on Preparing: that
+    /// event has already gone out by the time the worker learns the text is
+    /// empty. Not an <see cref="Error"/>: the daemon logs those as failed
+    /// utterances, and nothing failed.</para>
+    /// </summary>
+    Notice,
+
+    /// <summary>
     /// The window should come to the front. Not a speech event, and it travels
     /// this channel because this is the only stream the window is listening on.
     ///
@@ -130,7 +144,9 @@ public sealed record SessionEvent
     /// <summary>
     /// Something the user should know about this utterance, which nonetheless
     /// started normally. Rides on the <see cref="SpeechState.Preparing"/>
-    /// transition beside <see cref="Text"/>, and is null the rest of the time.
+    /// transition beside <see cref="Text"/>, and on a
+    /// <see cref="SessionEventKind.Notice"/> event, and is null the rest of the
+    /// time.
     ///
     /// <para><b>Why it is here and not only on <c>Response.Notice</c>.</b> A
     /// response goes to the client that sent the request, and in the hotkey path
@@ -174,6 +190,10 @@ public sealed record SessionEvent
         SourceOffset = startOffset,
         Notice = notice,
     };
+
+    /// <summary>A <see cref="SessionEventKind.Notice"/> event.</summary>
+    public static SessionEvent NoticeOf(string notice) =>
+        new() { Kind = SessionEventKind.Notice, Notice = notice };
 
     public static SessionEvent Error(string message) =>
         new() { Kind = SessionEventKind.Error, Message = message };

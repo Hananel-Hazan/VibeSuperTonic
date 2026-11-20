@@ -505,6 +505,130 @@ public class SentenceChunkerTests
         }
     }
 
+    // ------------------------------------------------- scripts without spaces
+
+    // Item 12 of the 2026-11-09 review. Twenty-character sentences, so a
+    // 2,000-character paragraph is a hundred of them; packed to 200 that is
+    // about ten chunks. Before the fix the break regex only knew ASCII
+    // terminators followed by whitespace, and the whole paragraph was one chunk.
+    private static string CjkParagraph(char terminator = '。')
+    {
+        var sb = new System.Text.StringBuilder();
+        const string Sentence = "吾輩は猫である名前はまだ無いどこで生れたか";   // 20 characters
+        while (sb.Length < 2000) sb.Append(Sentence, 0, 19).Append(terminator);
+        return sb.ToString();
+    }
+
+    [Fact]
+    public void A_long_cjk_paragraph_is_split_at_its_full_stops()
+    {
+        string text = CjkParagraph();
+        Assert.Equal(2000, text.Length);
+
+        var chunks = SentenceChunker.Chunk(text);
+
+        Assert.InRange(chunks.Count, 9, 12);
+        Assert.All(chunks, c => Assert.True(c.Length <= SentenceChunker.MaxChunkChars + 80, $"{c.Length} chars"));
+        Assert.All(chunks, c => Assert.EndsWith("。", c));
+        // No space is invented between sentences that had none.
+        Assert.All(chunks, c => Assert.DoesNotContain(" ", c));
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
+    [Theory]
+    [InlineData('！')]
+    [InlineData('？')]
+    public void Fullwidth_exclamation_and_question_marks_end_sentences_too(char terminator)
+    {
+        Assert.InRange(SentenceChunker.Chunk(CjkParagraph(terminator)).Count, 9, 12);
+    }
+
+    [Fact]
+    public void Devanagari_danda_and_arabic_question_mark_end_sentences()
+    {
+        // These scripts have spaces, so before the fix they were cut at 200
+        // characters mid-sentence instead of at their own terminators.
+        string hindi = string.Concat(Enumerable.Repeat("यह एक साधारण वाक्य है जो काफी लंबा है। ", 20)).TrimEnd();
+        var chunks = SentenceChunker.Chunk(hindi);
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, c => Assert.EndsWith("।", c));
+
+        string arabic = string.Concat(Enumerable.Repeat("هل هذه جملة عادية طويلة بما يكفي للاختبار؟ ", 20)).TrimEnd();
+        chunks = SentenceChunker.Chunk(arabic);
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, c => Assert.EndsWith("؟", c));
+    }
+
+    [Fact]
+    public void A_long_cjk_run_with_no_full_stop_is_cut_at_an_ideographic_comma_or_hard()
+    {
+        // 、 is a soft boundary like a comma.
+        string commas = string.Concat(Enumerable.Repeat("吾輩は猫である名前は、", 60));
+        var chunks = SentenceChunker.Chunk(commas);
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks.SkipLast(1), c => Assert.EndsWith("、", c));
+        Assert.Equal(commas, string.Concat(chunks));
+
+        // Nothing at all to break on: a hard cut, because between two
+        // ideographs severs no word, rather than one 600-character render.
+        string bare = string.Concat(Enumerable.Repeat("吾輩猫", 200));
+        chunks = SentenceChunker.Chunk(bare);
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, c => Assert.True(c.Length <= SentenceChunker.MaxChunkChars + 80));
+        Assert.Equal(bare, string.Concat(chunks));
+    }
+
+    [Fact]
+    public void A_hard_cut_never_separates_a_surrogate_pair()
+    {
+        // U+20000, a CJK Extension B ideograph, is two UTF-16 units. 199 BMP
+        // ideographs put a pair across the 200-character window's edge.
+        string text = new string('猫', 199) + string.Concat(Enumerable.Repeat("\U00020000", 150));
+        var chunks = SentenceChunker.Chunk(text);
+
+        Assert.True(chunks.Count > 1);
+        foreach (var c in chunks)
+        {
+            Assert.False(char.IsLowSurrogate(c[0]), "chunk starts with a lone low surrogate");
+            Assert.False(char.IsHighSurrogate(c[^1]), "chunk ends with a lone high surrogate");
+        }
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
+    [Fact]
+    public void A_closing_quote_or_a_second_terminator_stays_with_its_sentence()
+    {
+        var pieces = SentenceChunker.SplitSentences("「本当？！」と彼は言った。次の文。", maxLength: 8);
+
+        Assert.Equal(["「本当？！」と彼は言った。", "次の文。"], pieces);
+    }
+
+    [Fact]
+    public void Cjk_chunks_still_align_to_their_source()
+    {
+        string text = CjkParagraph();
+        foreach (var chunk in SentenceChunker.ChunkWithOffsets(text))
+            Assert.Equal(chunk.Text, text.Substring(chunk.Start, chunk.Length));
+    }
+
+    [Fact]
+    public void Latin_text_ending_in_an_emoji_keeps_its_space_when_glued()
+    {
+        // Fable review of batch 3: every surrogate counted as CJK, so the short
+        // paragraph below was glued to the next with no space and the model
+        // read "🙏See" as one token.
+        var chunks = SentenceChunker.Chunk("Thanks \U0001F64F\n\nSee you soon.");
+        Assert.Single(chunks);
+        Assert.Equal("Thanks \U0001F64F See you soon.", chunks[0]);
+    }
+
+    [Fact]
+    public void A_curly_closing_quote_stays_with_its_chinese_sentence()
+    {
+        var pieces = SentenceChunker.SplitSentences("\u201C你好。\u201D他说。", maxLength: 4);
+        Assert.DoesNotContain(pieces, p => p.StartsWith('\u201D'));
+    }
+
     private static string NonWhitespace(string s) =>
         new(s.Where(c => !char.IsWhiteSpace(c)).ToArray());
 }

@@ -119,12 +119,20 @@ public sealed class SpeechSession : IDisposable
     private SpeechState _state = SpeechState.Idle;
     private bool _disposed;
 
-    // Pause is a modifier on Speaking rather than a state of its own: the hotkey
-    // contract has four states and adding a fifth would change what the key
-    // means, which is a product decision and not this class's to make. The
-    // clock needs no special handling — with writing stopped the sink drains,
-    // latency falls to zero and played converges on written, which is the
-    // truth: everything written really has been heard.
+    // Pause is a modifier on Preparing and Speaking rather than a state of its
+    // own: the hotkey contract has four states and adding a fifth would change
+    // what the key means, which is a product decision and not this class's to
+    // make. The clock needs no special handling — with writing stopped the sink
+    // drains, latency falls to zero and played converges on written, which is
+    // the truth: everything written really has been heard.
+    //
+    // Preparing too, since 2026-11-20 (review item 43). A cold load is 2-5 s,
+    // the user presses pause in it, and speech started anyway when the model
+    // was ready, because Pause refused anything but Speaking. The writer waits
+    // on this before EVERY write, the first one included, so a pause taken in
+    // Preparing holds the first audio until Resume; the state stays Preparing
+    // until that write, as it always has. Set again on the way to Idle (see
+    // SetStateLocked), because an utterance can now end while paused.
     private readonly ManualResetEventSlim _unpaused = new(true);
 
     public SpeechSession(ISynthesizer synth, IAudioSink sink, SpeechSessionOptions? options = null)
@@ -156,12 +164,27 @@ public sealed class SpeechSession : IDisposable
     /// Every event the session produces. Raised on the worker thread, so a
     /// handler that blocks stalls playback — subscribers that do real work
     /// should hand off.
+    ///
+    /// <para><b>And a handler that blocks on a state change stalls
+    /// <see cref="Stop"/> and <see cref="Speak"/> too</b>, on whatever thread
+    /// called them: state changes are announced under <c>_emitGate</c>, which
+    /// both take, so a stop press waits behind a subscriber still handling the
+    /// previous announcement. Checked 2026-11-20 (review item 63) for the two
+    /// subscribers the daemon attaches: <c>DaemonServer.OnSessionEvent</c> only
+    /// <c>TryWrite</c>s each line onto a bounded per-client channel and drops a
+    /// client whose queue is full, so a stalled socket cannot reach this thread;
+    /// <c>TrayIcon.OnSessionEvent</c> sends its D-Bus signals with
+    /// <c>TrySendMessage</c>. A new subscriber must keep that shape.</para>
     /// </summary>
     public event Action<SessionEvent>? Emitted;
 
     public SpeechState State { get { lock (_gate) return _state; } }
 
-    /// <summary>True while paused. Only meaningful in <see cref="SpeechState.Speaking"/>.</summary>
+    /// <summary>
+    /// True while paused. Only meaningful in <see cref="SpeechState.Preparing"/>
+    /// and <see cref="SpeechState.Speaking"/>; false whenever the session is
+    /// <see cref="SpeechState.Idle"/>.
+    /// </summary>
     public bool IsPaused => !_unpaused.IsSet;
 
     /// <summary>
@@ -342,7 +365,7 @@ public sealed class SpeechSession : IDisposable
         // was stopped and B started — reset the event B's Speak had just set.
         lock (_gate)
         {
-            if (_state != SpeechState.Speaking) return;
+            if (_state is not (SpeechState.Preparing or SpeechState.Speaking)) return;
             AfterPauseCheck?.Invoke();
             _unpaused.Reset();
         }
@@ -356,6 +379,15 @@ public sealed class SpeechSession : IDisposable
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     public Action? AfterPauseCheck { get; set; }
+
+    /// <summary>
+    /// How long an utterance's teardown waits for its renderer to return after
+    /// cancelling it. Ten seconds in the product; a test seam, like
+    /// <see cref="AfterPauseCheck"/>, so a renderer that ignores cancellation
+    /// can be driven without a ten-second test. Never set outside tests.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public TimeSpan RendererStopTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     public void Resume() => _unpaused.Set();
 
@@ -497,6 +529,14 @@ public sealed class SpeechSession : IDisposable
 
             if (chunks.Count == 0)
             {
+                // Said, not just finished. A selection of icon-font glyphs or
+                // zero-width characters sanitises to nothing, and this used to go
+                // Preparing, Finished, Idle with no word anywhere: the key did
+                // nothing and nothing said why (review item 42). Before Finished,
+                // because subscribers forget the utterance on its terminal event.
+                Emit(SessionEvent.NoticeOf(startOffset > 0
+                    ? "nothing to read after that point"
+                    : "nothing to read: the text has no speakable characters"));
                 Finish(SessionEventKind.Finished, 0);
                 return;
             }
@@ -573,10 +613,12 @@ public sealed class SpeechSession : IDisposable
             // an allocation — 50 s was 4 MB, and int.MaxValue ms would not fit.
             short[]? silence = gapFrames > 0 ? new short[(int)Math.Min(blockFrames, gapFrames)] : null;
 
+            // Only called when gapFrames > 0, which is exactly when silence exists.
             void WriteSilence(long frames)
             {
-                for (long left = frames; left > 0; left -= silence!.Length)
-                    WriteFrames(left >= silence.Length ? silence : silence[..(int)left]);
+                short[] block = silence!;
+                for (long left = frames; left > 0; left -= block.Length)
+                    WriteFrames(left >= block.Length ? block : block[..(int)left]);
             }
 
             // Chunk audio and inter-chunk silence both go through here, which is
@@ -703,16 +745,48 @@ public sealed class SpeechSession : IDisposable
             // Drain the renderer before releasing anything it might still be
             // writing into. Disposing the collection with a producer mid-Add
             // throws inside the producer and loses the real reason we stopped.
+            //
+            // Cancelled on every path, not only a stop's: after a write failure
+            // the renderer used to go on synthesising the next chunk, which made
+            // the bounded wait below a matter of luck. On Finished it has already
+            // returned, and this is a no-op.
             rendered.CompleteAdding();
-            try { renderTask?.Wait(TimeSpan.FromSeconds(10)); } catch { /* cancelled */ }
+            try { cts.Cancel(); } catch (ObjectDisposedException) { /* cannot happen: disposed below */ }
+
+            bool rendererReturned = true;
+            if (renderTask is not null)
+            {
+                try { rendererReturned = renderTask.Wait(RendererStopTimeout); }
+                catch { /* faulted or cancelled: either way it has returned */ }
+            }
+
             while (rendered.TryTake(out _)) { }   // the third part of stop: discard queued PCM
-            rendered.Dispose();
 
             lock (_gate)
             {
                 if (ReferenceEquals(_cts, cts)) _cts = null;
             }
-            cts.Dispose();
+
+            if (rendererReturned)
+            {
+                rendered.Dispose();
+                cts.Dispose();
+            }
+            else
+            {
+                // A RENDERER THAT IGNORED ITS CANCELLATION (review item 62). The
+                // session goes Idle anyway — waiting longer is a key that does
+                // nothing for as long as a native call cares to run — so the next
+                // utterance can start beside it, inside the same synthesizer. That
+                // used to happen in silence, with the collection it was about to
+                // Add into disposed under it. Now it is said, and the collection
+                // and the token source are left to the collector rather than
+                // disposed: the late Add then fails as adding-completed, which the
+                // renderer already treats as the end.
+                Emit(SessionEvent.Error(
+                    $"the renderer did not stop within {RendererStopTimeout.TotalSeconds:0.#} s of being " +
+                    "cancelled; it is still inside the synthesizer, and the next utterance may start beside it"));
+            }
 
             if (cancelled)
             {
@@ -791,6 +865,15 @@ public sealed class SpeechSession : IDisposable
             {
                 if (_state == state) return;
                 _state = state;
+
+                // An utterance can end while paused — Pause is honoured in
+                // Preparing, so one with nothing to read, or whose renderer
+                // failed, never reaches a write that would wait on it. Under the
+                // same lock Pause checks the state in, so no pause can land
+                // between this and Idle and survive it. Not once Dispose has
+                // begun: it disposes the event after a bounded wait for this
+                // worker, and _disposed is set under this lock before that.
+                if (state == SpeechState.Idle && !_disposed) _unpaused.Set();
             }
             Emit(SessionEvent.Of(state));
         }

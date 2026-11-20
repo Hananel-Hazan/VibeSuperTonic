@@ -213,6 +213,11 @@ internal sealed class TrayIcon : IDisposable
             case SessionEventKind.Error:
                 _notice = evt.Message ?? "";
                 break;
+
+            // Item 42. Like an Error, it is cleared by the Idle that follows.
+            case SessionEventKind.Notice:
+                _notice = evt.Notice ?? "";
+                break;
         }
 
         if (before != (_state, _notice, _sentences)) Refresh();

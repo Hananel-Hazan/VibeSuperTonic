@@ -201,6 +201,11 @@ internal sealed class SpeechdModule
     /// </summary>
     private void HandleInit()
     {
+        // INIT owes a reply like every other command (item 107): one that goes
+        // unanswered is a module speechd drops, and a refusal at least says why
+        // in speechd's log, where Run's catch writes the exception.
+        Owe("399 ERR CANT INIT MODULE");
+
         if (!_voices.EspeakPresent)
         {
             // No fast voice means no fallback, and no fallback means every
@@ -352,7 +357,9 @@ internal sealed class SpeechdModule
         // KEY ECHO GETS ITS OWN SWITCHES (item 2). A CHAR is said with --punct
         // and, when the client asked, espeak's capital announcement; a space,
         // which as text is nothing at all, is named instead — see CharEcho. That
-        // SSML is the module's own and is not parsed as the client's.
+        // SSML is the module's own and is not parsed as the client's. A KEY is
+        // a key name, handed to espeak as tts:key so that it is named in the
+        // voice's language rather than read as an English word (item 104).
         var echo = type == SpeechdMessageType.Char
             ? new EspeakEcho(Punctuation: true, Capitals: _capitals, Ssml: false)
             : default;
@@ -363,6 +370,12 @@ internal sealed class SpeechdModule
             fragments = null;
             plain = named;
             echo = echo with { Ssml = true };
+        }
+        else if (type == SpeechdMessageType.Key && CharEcho.KeySsml(text) is { } key)
+        {
+            fragments = null;
+            plain = key;
+            echo = new EspeakEcho(Punctuation: false, Capitals: 0, Ssml: true);
         }
         else
         {
@@ -505,12 +518,26 @@ internal sealed class SpeechdModule
     /// file</c>, exits 0 and writes a WAV of silence, which looked like success:
     /// a Hebrew user heard nothing for every key echo and for every sentence while
     /// the daemon was down, and nothing was logged. So the first run in a language
-    /// is held whole until its stderr has ended, and if it says the language is
-    /// missing its audio is dropped and the text is said again without
-    /// <c>-v</c>. That is logged once, and every later run in that language goes
-    /// straight to the default voice. A language seen to work streams as before.
-    /// The default voice reads foreign script letter by letter or by name, which
-    /// is poor, but it is not silence.</para>
+    /// holds back its leading silence, and if the run ends with nothing but
+    /// silence <em>and</em> espeak-ng said it could not read a dictionary, that
+    /// silence is dropped and the text is said again without <c>-v</c>. That is
+    /// logged once, and every later run in that language goes straight to the
+    /// default voice. The default voice reads foreign script letter by letter or
+    /// by name, which is poor, but it is not silence.</para>
+    ///
+    /// <para><b>Both signals, not the stderr line alone (item 105).</b> The line
+    /// alone once demoted a language for the module's life, and the line names a
+    /// file rather than a language. A missing dictionary writes samples that are
+    /// all exactly zero (measured on the shipped payload, <c>-v ja</c> and
+    /// <c>-v ko</c>: 13 274 and 33 162 bytes, none non-zero), while speech has a
+    /// non-zero byte within its first 1.2 KB (<c>de</c>, <c>en</c>, <c>he</c>).
+    /// So a complaint beside real speech is logged nowhere and changes nothing.
+    /// A demotion still lasts the module's life: it now needs a run that said
+    /// nothing at all, which is what a missing dictionary is.</para>
+    ///
+    /// <para><b>It streams (item 106).</b> It used to hold the whole WAV until
+    /// stderr ended; now only the leading zeros wait, and the first non-zero
+    /// sample releases them and everything after it as it arrives.</para>
     /// </summary>
     private bool RunEspeak(string text, string? language, int rateAdj, EspeakEcho echo)
     {
@@ -587,9 +614,9 @@ internal sealed class SpeechdModule
     /// Run one renderer and forward its WAV as audio blocks.
     /// </summary>
     /// <param name="checkLanguage">
-    /// Hold the whole WAV until the renderer's stderr has ended, and send none of
-    /// it if espeak-ng said it cannot speak the voice it was given. See
-    /// <see cref="RunEspeak"/>.
+    /// Hold back the WAV's leading silence, and send none of it if the run was
+    /// silence throughout and espeak-ng said it cannot speak the voice it was
+    /// given. See <see cref="RunEspeak"/>.
     /// </param>
     /// <param name="why">espeak-ng's own line, when the outcome is LanguageMissing.</param>
     private RenderOutcome Render(Func<Process> start, string what, bool checkLanguage, out string? why)
@@ -652,19 +679,9 @@ internal sealed class SpeechdModule
             Stream pcm = stdout;
             if (checkLanguage)
             {
-                // espeak renders a sentence in milliseconds, so holding one run
-                // per language costs nothing a listener hears; stdin is still
-                // watched while it runs.
-                var rest = Task.Run(() =>
-                {
-                    var held = new MemoryStream();
-                    stdout.CopyTo(held);
-                    held.Position = 0;
-                    return held;
-                });
-                if (!AwaitAside(rest)) return RenderOutcome.Silent;
-                if (Lacks() is { } missing) { why = missing; return RenderOutcome.LanguageMissing; }
-                pcm = rest.GetAwaiter().GetResult();
+                if (HoldLeadingSilence(stdout) is not { } gate) return RenderOutcome.Silent;
+                if (!gate.Heard && Lacks() is { } missing) { why = missing; return RenderOutcome.LanguageMissing; }
+                pcm = gate.Pcm;
             }
 
             _streamRate = wav.SampleRate;
@@ -700,6 +717,78 @@ internal sealed class SpeechdModule
         {
             StopProcess(process);
         }
+    }
+
+    /// <summary>
+    /// Read <paramref name="stdout"/> up to its first non-zero byte, counting the
+    /// zeros before it rather than keeping them. Returns the stream to send from
+    /// (those zeros, then the rest), and whether a non-zero byte was found before
+    /// the end; null if a STOP or PAUSE arrived first. stdin is looked at between
+    /// reads, as the audio loop does.
+    /// </summary>
+    private (Stream Pcm, bool Heard)? HoldLeadingSilence(Stream stdout)
+    {
+        var chunk = new byte[AudioBlock.MaxChunkBytes];
+        long zeros = 0;
+
+        while (true)
+        {
+            if (DrainCommandsAndCheckInterrupt()) return null;
+
+            int n = stdout.Read(chunk, 0, chunk.Length);
+            if (n <= 0) return (new HeldSilence(zeros, [], stdout), false);
+
+            if (chunk.AsSpan(0, n).IndexOfAnyExcept((byte)0) < 0)
+            {
+                zeros += n;
+                continue;
+            }
+
+            return (new HeldSilence(zeros, chunk[..n], stdout), true);
+        }
+    }
+
+    /// <summary>
+    /// <c>zeros</c> zero bytes, then <c>head</c>, then whatever <c>rest</c> still
+    /// has: what <see cref="HoldLeadingSilence"/> read, put back in front.
+    /// </summary>
+    private sealed class HeldSilence(long zeros, byte[] head, Stream rest) : Stream
+    {
+        private long _zeros = zeros;
+        private int _headAt;
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (count == 0) return 0;
+
+            if (_zeros > 0)
+            {
+                int k = (int)Math.Min(_zeros, count);
+                Array.Clear(buffer, offset, k);
+                _zeros -= k;
+                return k;
+            }
+
+            if (_headAt < head.Length)
+            {
+                int k = Math.Min(head.Length - _headAt, count);
+                Array.Copy(head, _headAt, buffer, offset, k);
+                _headAt += k;
+                return k;
+            }
+
+            return rest.Read(buffer, offset, count);
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>
@@ -918,10 +1007,11 @@ internal sealed class SpeechdModule
         _out.Flush();
 
         // Pay down the debt Run's catch would otherwise settle. Any terminator
-        // settles an utterance, so a STOP or a PAUSE is not followed by an END.
+        // settles an utterance, so a STOP or a PAUSE is not followed by an END;
+        // INIT's success settles the refusal it owed.
         int paid = _owed.IndexOf(line);
         if (paid >= 0) _owed.RemoveRange(0, paid + 1);
-        else if (line is "702 END" or "703 STOP" or "704 PAUSE") _owed.Clear();
+        else if (line is "702 END" or "703 STOP" or "704 PAUSE" or "299 OK LOADED SUCCESSFULLY") _owed.Clear();
     }
 
     // ----------------------------------------------------------------- utils

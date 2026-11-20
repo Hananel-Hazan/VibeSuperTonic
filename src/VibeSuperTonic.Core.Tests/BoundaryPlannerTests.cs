@@ -33,7 +33,7 @@ public class BoundaryPlannerTests
         ulong AudioStreamOffsetBytes, int SourceOffset, int SourceLength, BoundaryKind Kind);
 
     private static bool EngineIsWordChar(char c) =>
-        char.IsLetterOrDigit(c) || c == '\'' || c == '-';
+        char.IsLetterOrDigit(c) || c == '\'' || c == '\u2019' || c == '\u02BC' || c == '-';
 
     /// <summary>Transcribed from <c>SapiEngine.SpeakChunkExec.SourceLengthAt</c>.</summary>
     private static int EngineSourceLengthAt(TextOffsetMap map, int indexInChunk, int lengthInChunk)
@@ -314,6 +314,36 @@ public class BoundaryPlannerTests
         // the same frame and fire the lot at once.
         BoundaryPlanner.PlanChunk(planned, "Some words here.", TextOffsetMap.Identity(16), 0, 0, 0);
         Assert.Empty(planned);
+    }
+
+    [Theory]
+    [InlineData("don't stop")]
+    [InlineData("don\u2019t stop")]
+    [InlineData("don\u02BCt stop")]
+    public void A_curly_apostrophe_is_part_of_the_word_as_a_straight_one_is(string text)
+    {
+        // Item 13: text from Word, browsers and PDFs uses U+2019, and "don’t"
+        // highlighted as two words.
+        var planned = new List<BoundaryEvent>();
+        BoundaryPlanner.PlanChunk(planned, text, TextOffsetMap.Identity(text.Length), 0, 44_100, 0);
+
+        var words = planned.Where(e => e.Kind == BoundaryKind.Word).ToList();
+        Assert.Equal(2, words.Count);
+        Assert.Equal(0, words[0].SourceOffset);
+        Assert.Equal(5, words[0].SourceLength);
+        Assert.Equal(0, BoundaryPlanner.SnapToWordStart(text, 4));
+    }
+
+    [Fact]
+    public void A_seek_onto_a_low_surrogate_steps_back_to_the_high_one()
+    {
+        // Item 15: U+20000 is two UTF-16 units; a seek landing on the second
+        // one would start the render with a lone low surrogate.
+        string text = "ab \U00020000 cd";
+        Assert.True(char.IsLowSurrogate(text[4]));
+
+        Assert.Equal(3, BoundaryPlanner.SnapToWordStart(text, 4));
+        Assert.Equal(3, BoundaryPlanner.SnapToWordStart(text, 3));
     }
 
     [Fact]

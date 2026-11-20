@@ -61,7 +61,7 @@ public static class Dehyphenator
         if (string.IsNullOrEmpty(text))
         {
             map = TextOffsetMap.Identity(text?.Length ?? 0);
-            return text;
+            return text ?? string.Empty;
         }
 
         int first = -1;
@@ -112,10 +112,13 @@ public static class Dehyphenator
     /// </summary>
     private static int DropLength(string text, int at)
     {
-        if (text[at] != '-') return 0;
+        if (!IsHyphen(text[at])) return 0;
         if (at == 0 || !char.IsLetter(text[at - 1])) return 0;
 
         int i = at + 1;
+        // Text copied from browsers and PDFs often leaves spaces or tabs between
+        // the hyphen and the line break.
+        while (i < text.Length && (text[i] == ' ' || text[i] == '\t')) i++;
         if (i < text.Length && text[i] == '\r') i++;
         if (i >= text.Length || text[i] != '\n') return 0;
         i++;
@@ -127,4 +130,7 @@ public static class Dehyphenator
 
         return i - at;
     }
+
+    /// <summary>The hyphen-minus and U+2010, the Unicode hyphen.</summary>
+    private static bool IsHyphen(char c) => c == '-' || c == '\u2010';
 }

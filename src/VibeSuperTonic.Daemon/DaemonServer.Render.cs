@@ -324,8 +324,14 @@ public sealed partial class DaemonServer
                         fragment.Lang ?? request.Language,
                         speechdScale * SpeechRate.RateAdjScale(fragment.RateAdj));
 
+                    // The hotkey path's lead cap, on the first chunk of the
+                    // utterance only: that render is the wait before a screen
+                    // reader's first sound (review item 83). Later fragments
+                    // follow audio already playing, so they keep full chunks.
+                    bool first = !steps.Any(s => s.Text is not null);
                     foreach (string chunk in SentenceChunker.Chunk(
-                                 spoken, options.MaxChunkChars, options.MinChunkChars))
+                                 spoken, options.MaxChunkChars, options.MinChunkChars,
+                                 first ? options.LeadChunkChars : 0))
                     {
                         if (!string.IsNullOrWhiteSpace(chunk))
                             steps.Add(new RenderStep(chunk, plan, 0, null));

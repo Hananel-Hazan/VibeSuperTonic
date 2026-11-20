@@ -140,4 +140,16 @@ public sealed class DehyphenationTests
         Assert.Equal("Configu-\nrations".Length, map.SourceLength);
         Assert.Equal(9, map.ToSource("Configu".Length));
     }
+
+    [Fact]
+    public void Joins_when_a_space_follows_the_hyphen() =>
+        Assert.Equal("configurations", Join("configu- \nrations"));
+
+    [Fact]
+    public void Joins_when_a_tab_and_carriage_return_follow_the_hyphen() =>
+        Assert.Equal("configurations", Join("configu-\t\r\nrations"));
+
+    [Fact]
+    public void Joins_across_a_unicode_hyphen() =>
+        Assert.Equal("configurations", Join("configu\u2010\nrations"));
 }

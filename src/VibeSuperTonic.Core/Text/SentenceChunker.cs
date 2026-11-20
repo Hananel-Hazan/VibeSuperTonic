@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace VibeSuperTonic.Core.Text;
@@ -77,10 +78,32 @@ public static class SentenceChunker
 
     // Abbreviations that end in a period but do not end a sentence. Anchored as
     // lookbehinds so the split happens after real terminators only.
+    //
+    // Two kinds of terminator. The ASCII ones, the Devanagari danda (U+0964)
+    // and the Arabic question mark (U+061F) end a sentence only when whitespace
+    // follows, as the vendored original required. The ideographic full stop and
+    // the fullwidth ! and ? (U+3002, U+FF01, U+FF1F) end one with or without it,
+    // because Japanese and Chinese put no space between sentences: before this,
+    // a 2,000-character paragraph of them was one chunk (review item 12). One
+    // followed by a closing bracket or quote is not a break at all — 「…。」と
+    // 言った goes on — and a run of them ("？！") is not split in the middle.
+    private const string FullwidthTerminators = "\u3002\uFF01\uFF1F";
+    private const string CjkClosers = "\u300D\u300F\uFF09\u3015\u3011\u300B\u3009\u201D\u2019\uFF3D\uFF5D";
     private static readonly Regex ParagraphBreak = new(@"\n\s*\n+", RegexOptions.Compiled);
     private static readonly Regex SentenceBreak = new(
-        @"(?<!Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.|Sr\.|Jr\.|Ph\.D\.|etc\.|e\.g\.|i\.e\.|vs\.|Inc\.|Ltd\.|Co\.|Corp\.|St\.|Ave\.|Blvd\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+",
+        @"(?<!Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.|Sr\.|Jr\.|Ph\.D\.|etc\.|e\.g\.|i\.e\.|vs\.|Inc\.|Ltd\.|Co\.|Corp\.|St\.|Ave\.|Blvd\.)(?<!\b[A-Z]\.)" +
+        @"(?:(?<=[.!?\u0964\u061F])\s+" +
+        $@"|(?<=[{FullwidthTerminators}])\s*(?![{FullwidthTerminators}{CjkClosers}]))",
         RegexOptions.Compiled);
+
+    /// <summary>
+    /// What goes between two pieces the chunker glues back together: a space,
+    /// unless the left one ends in a script written without spaces (a sentence
+    /// after "。", a clause after "、"), where a space would be one the text
+    /// never had.
+    /// </summary>
+    private static string Joiner(string left) =>
+        left.Length > 0 && IsUnspacedAt(left, left.Length - 1) ? "" : " ";
 
     /// <summary>
     /// Three passes:
@@ -144,7 +167,7 @@ public static class SentenceChunker
                 bool eitherIsTiny = merged[^1].Length < minChars || chunk.Length < minChars;
                 if (eitherIsTiny && combinedLength <= mergeCeiling)
                 {
-                    merged[^1] = merged[^1] + " " + chunk;
+                    merged[^1] = merged[^1] + Joiner(merged[^1]) + chunk;
                     continue;
                 }
             }
@@ -161,7 +184,7 @@ public static class SentenceChunker
             var lead = SplitSentences(merged[0], leadChars);
             if (lead.Count > 1)
             {
-                merged[0] = string.Join(" ", lead.Skip(1));
+                merged[0] = lead.Skip(2).Aggregate(lead[1], (acc, s) => acc + Joiner(acc) + s);
                 merged.Insert(0, lead[0]);
             }
         }
@@ -291,7 +314,7 @@ public static class SentenceChunker
 
                 if (current.Length + sentence.Length + 1 <= maxLength)
                 {
-                    if (!string.IsNullOrEmpty(current)) current += " ";
+                    if (!string.IsNullOrEmpty(current)) current += Joiner(current);
                     current += sentence;
                 }
                 else
@@ -336,6 +359,14 @@ public static class SentenceChunker
     /// latter half happens to contain no spaces. The final fallback overshoots
     /// <paramref name="end"/> for the same reason — an oversize chunk is a
     /// pacing problem, a severed word is an audible one.
+    ///
+    /// <para>Except where no word can be severed: Japanese and Chinese have no
+    /// spaces, so a run of them with no punctuation used to come back whole,
+    /// however long. Between two ideographs or kana a cut is as clean as a
+    /// space, so before overshooting take the latest such cut in the window —
+    /// never between the halves of a surrogate pair, and never before a
+    /// combining mark. The ideographic and fullwidth comma, semicolon and colon
+    /// are soft boundaries beside the ASCII ones.</para>
     /// </summary>
     private static int FindSoftBoundary(string text, int start, int end)
     {
@@ -343,12 +374,18 @@ public static class SentenceChunker
         for (int i = end - 1; i > half; i--)
         {
             char c = text[i];
-            if (c == ',' || c == ';' || c == ':' || c == '—') return i + 1;
+            if (c is ',' or ';' or ':' or '—' or '\u3001' or '\uFF0C' or '\uFF1B' or '\uFF1A')
+                return i + 1;
         }
 
         for (int i = end - 1; i > start; i--)
         {
             if (char.IsWhiteSpace(text[i])) return i + 1;
+        }
+
+        for (int i = end; i > half; i--)
+        {
+            if (IsCleanUnspacedCut(text, i)) return i;
         }
 
         for (int i = end; i < text.Length; i++)
@@ -358,4 +395,48 @@ public static class SentenceChunker
 
         return text.Length;
     }
+
+    /// <summary>
+    /// True when cutting <paramref name="text"/> before index <paramref name="i"/>
+    /// severs no word: one side is in a script written without spaces, and the
+    /// cut splits neither a surrogate pair nor a base from its combining mark.
+    /// </summary>
+    private static bool IsCleanUnspacedCut(string text, int i)
+    {
+        if (i <= 0 || i >= text.Length) return false;
+        char after = text[i];
+        if (char.IsLowSurrogate(after)) return false;
+        var category = CharUnicodeInfo.GetUnicodeCategory(after);
+        if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark
+            or UnicodeCategory.EnclosingMark) return false;
+        return IsUnspacedAt(text, i - 1) || IsUnspacedAt(text, i);
+    }
+
+    /// <summary>
+    /// CJK radicals through unified ideographs (kana, CJK punctuation and
+    /// bopomofo included), compatibility ideographs, fullwidth forms, and the
+    /// supplementary ideograph planes (Extension B onward, U+20000 to U+3FFFF).
+    /// A surrogate is judged by the code point its pair makes, not by being a
+    /// surrogate: an emoji is not CJK, and treating it as CJK glued
+    /// "Thanks 🙏" to the next sentence with no space (Fable review of batch 3).
+    /// A lone surrogate is not. Thai, Lao, Khmer and Myanmar also go without
+    /// spaces but are left out: their clusters carry combining vowels, and they
+    /// have spaces between phrases in practice, which the whitespace fallback
+    /// takes.
+    /// </summary>
+    private static bool IsUnspacedAt(string s, int i)
+    {
+        char c = s[i];
+        if (char.IsHighSurrogate(c))
+            return i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])
+                && IsUnspacedCodePoint(char.ConvertToUtf32(c, s[i + 1]));
+        if (char.IsLowSurrogate(c))
+            return i > 0 && char.IsHighSurrogate(s[i - 1])
+                && IsUnspacedCodePoint(char.ConvertToUtf32(s[i - 1], c));
+        return IsUnspacedCodePoint(c);
+    }
+
+    private static bool IsUnspacedCodePoint(int cp) =>
+        cp is >= 0x2E80 and <= 0x9FFF or >= 0xF900 and <= 0xFAFF or >= 0xFF00 and <= 0xFFEF
+            or >= 0x20000 and <= 0x3FFFF;
 }

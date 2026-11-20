@@ -863,7 +863,10 @@ public sealed class SapiEngine : ISpTTSEngine, ISpObjectWithToken
         }
     }
 
-    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '\'' || c == '-';
+    // U+2019 and U+02BC as well as the ASCII apostrophe, so "don’t" is one word
+    // event, as it is in Core's BoundaryPlanner (review item 13).
+    private static bool IsWordChar(char c) =>
+        char.IsLetterOrDigit(c) || c == '\'' || c == '\u2019' || c == '\u02BC' || c == '-';
 
     private static unsafe void EmitBookmark(
         delegate* unmanaged[Stdcall]<IntPtr, SPEVENT*, uint, int> addEvents,

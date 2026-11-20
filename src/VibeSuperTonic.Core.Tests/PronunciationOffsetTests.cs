@@ -295,4 +295,17 @@ public class PronunciationOffsetTests
         Assert.Contains("percent", config.Apply("50%s here", compiled));
         Assert.DoesNotContain("percent", config.Apply("50%sx here", compiled));
     }
+
+    [Fact]
+    public void Straight_apostrophe_rule_fires_on_curly_apostrophe_and_offsets_hold()
+    {
+        const string source = "I don\u2019t know why we can\u2019t go";
+        var cfg = Config(Rule("don't", "do not"));
+
+        string spoken = cfg.Apply(source, Compile(cfg), out var map);
+        Assert.Equal("I do not know why we can\u2019t go", spoken);
+
+        int why = spoken.IndexOf("why", StringComparison.Ordinal);
+        Assert.Equal(source.IndexOf("why", StringComparison.Ordinal), map.ToSource(why));
+    }
 }

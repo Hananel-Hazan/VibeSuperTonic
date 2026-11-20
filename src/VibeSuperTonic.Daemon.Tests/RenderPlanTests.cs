@@ -157,6 +157,30 @@ public class RenderPlanTests : IDisposable
         Assert.Equal(["run cube control now", "hello"], steps.Where(s => s.Text is not null).Select(s => s.Text!).ToArray());
     }
 
+    /// <summary>
+    /// Item 83: the screen-reader path chunked without the hotkey's lead, so
+    /// the first sound of every Orca sentence waited for a render of up to 200
+    /// characters. Only the first chunk is capped; later ones keep full size.
+    /// </summary>
+    [Fact]
+    public void The_first_chunk_is_capped_by_the_lead_as_on_the_hotkey_path()
+    {
+        var config = Loaded();
+        int lead = config.SessionOptionsFor(null).LeadChunkChars;
+        Assert.Equal(64, lead);
+
+        var steps = Plan(config,
+            "<speak>The sea is everything. It covers seven tenths of the globe. " +
+            "Its breath is pure and healthy. It is an immense desert, where man is never lonely." +
+            "<break time=\"1s\"/>A second fragment starts here. And it goes on for a while longer than that.</speak>");
+        var texts = steps.Where(s => s.Text is not null).Select(s => s.Text!).ToList();
+
+        Assert.True(texts[0].Length <= lead, $"first chunk is {texts[0].Length} characters: {texts[0]}");
+        Assert.StartsWith("The sea is everything.", texts[0]);
+        // A later fragment is not split again: only first audio is latency.
+        Assert.Equal("A second fragment starts here. And it goes on for a while longer than that.", texts[^1]);
+    }
+
     [Fact]
     public void A_long_fragment_is_chunked_and_every_chunk_keeps_the_fragments_plan()
     {

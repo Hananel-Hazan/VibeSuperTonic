@@ -31,8 +31,15 @@ public static class BoundaryPlanner
     /// What counts as part of a word. Matches <c>SapiEngine.IsWordChar</c>
     /// exactly, apostrophes and hyphens included, so "don't" and "well-known"
     /// are one highlight on both platforms rather than two or three.
+    ///
+    /// <para>The right single quotation mark U+2019 and the modifier letter
+    /// apostrophe U+02BC count as apostrophes too: text from Word, browsers and
+    /// PDFs writes "don’t", which otherwise highlights as two words. (U+02BC is
+    /// a letter to <c>char.IsLetter</c> already; it is named so the intent does
+    /// not rest on a Unicode category.)</para>
     /// </summary>
-    public static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '\'' || c == '-';
+    public static bool IsWordChar(char c) =>
+        char.IsLetterOrDigit(c) || c == '\'' || c == '\u2019' || c == '\u02BC' || c == '-';
 
     /// <summary>
     /// Move <paramref name="offset"/> back to the first character of the word it
@@ -57,6 +64,10 @@ public static class BoundaryPlanner
         ArgumentNullException.ThrowIfNull(text);
         if (offset <= 0) return 0;
         if (offset >= text.Length) return text.Length;
+
+        // Never start a render on the second half of a surrogate pair: the
+        // fragment would begin with a lone low surrogate.
+        if (char.IsLowSurrogate(text[offset]) && char.IsHighSurrogate(text[offset - 1])) offset--;
 
         if (!IsWordChar(text[offset])) return offset;
 

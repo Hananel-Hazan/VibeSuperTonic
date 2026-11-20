@@ -36,7 +36,7 @@ public static class Ssml
         if (text is null) return false;
 
         int at = 0;
-        while (at < text.Length && char.IsWhiteSpace(text[at])) at++;
+        at = SkipProlog(text, at);
 
         // "<speak>" and "<speak version=...>" both, and "<speaker" neither: the
         // name has to end where a tag name is allowed to end.
@@ -47,6 +47,38 @@ public static class Ssml
         return after >= text.Length
                || text[after] is '>' or '/'
                || char.IsWhiteSpace(text[after]);
+    }
+
+    /// <summary>
+    /// Skips whitespace, a BOM, <c>&lt;?...?&gt;</c>, comments and
+    /// <c>&lt;!DOCTYPE ...&gt;</c> before the root element.
+    /// </summary>
+    private static int SkipProlog(string text, int at)
+    {
+        while (at < text.Length)
+        {
+            if (char.IsWhiteSpace(text[at]) || text[at] == '\uFEFF') { at++; continue; }
+            if (string.CompareOrdinal(text, at, "<?", 0, 2) == 0)
+            {
+                int e = text.IndexOf("?>", at + 2, StringComparison.Ordinal);
+                if (e < 0) return at;
+                at = e + 2; continue;
+            }
+            if (string.CompareOrdinal(text, at, "<!--", 0, 4) == 0)
+            {
+                int e = text.IndexOf("-->", at + 4, StringComparison.Ordinal);
+                if (e < 0) return at;
+                at = e + 3; continue;
+            }
+            if (string.CompareOrdinal(text, at, "<!", 0, 2) == 0)
+            {
+                int e = text.IndexOf('>', at + 2);
+                if (e < 0) return at;
+                at = e + 1; continue;
+            }
+            break;
+        }
+        return at;
     }
 
     /// <summary>

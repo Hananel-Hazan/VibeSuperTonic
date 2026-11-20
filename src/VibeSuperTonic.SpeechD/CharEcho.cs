@@ -11,9 +11,8 @@ internal readonly record struct EspeakEcho(bool Punctuation, int Capitals, bool 
 
 /// <summary>
 /// Character echo (SSIP <c>CHAR</c>) of characters espeak-ng says nothing for when
-/// given them as text (item 2 of docs/CODE-REVIEW-2026-11-09.md). SSIP <c>KEY</c>
-/// messages do not come through here and are still spoken as English key names:
-/// item 104 of that file.
+/// given them as text (item 2 of docs/CODE-REVIEW-2026-11-09.md), and key echo
+/// (SSIP <c>KEY</c>, item 104 of that file).
 ///
 /// <para><b>Whitespace.</b> SSIP sends a space as the word <c>space</c>, because a
 /// bare space cannot travel on its command line (ssip.info, "CHAR"). Read as
@@ -40,6 +39,28 @@ internal static class CharEcho
 
         return code is { } c ? $"<say-as interpret-as=\"tts:char\">&#{c};</say-as>" : null;
     }
+
+    /// <summary>
+    /// The SSML that names the SSIP key <paramref name="key"/> (<c>space</c>,
+    /// <c>shift_a</c>, <c>a</c>), or null when it is blank.
+    ///
+    /// <para>As text, a key name is English in every voice: a German one said
+    /// <c>(en)sp'eIs(de)</c> for <c>space</c>. Inside <c>&lt;say-as
+    /// interpret-as="tts:key"&gt;</c> espeak-ng splits the name at underscores,
+    /// names single characters, and turns <c>space</c>, <c>underscore</c>,
+    /// <c>double-quote</c> and <c>tab</c> into the character they stand for,
+    /// which it then names in the voice's language: <c>l'e:rts'aIC@n</c>
+    /// ("Leerzeichen"), <c>Unt3Str'IC</c>, <c>tsi:t'A:t</c>, measured with
+    /// <c>-x -v de</c> against the shipped payload on 2026-11-20. Other names
+    /// (<c>shift</c>, <c>return</c>, <c>escape</c>) espeak-ng has no translation
+    /// for, and they are read as words in the voice's own phonemes. The same
+    /// format string is in speech-dispatcher 0.12.1's <c>sd_espeak-ng</c> (found
+    /// with <c>strings</c>).</para>
+    /// </summary>
+    internal static string? KeySsml(string key) =>
+        string.IsNullOrWhiteSpace(key)
+            ? null
+            : $"<say-as interpret-as=\"tts:key\">{System.Security.SecurityElement.Escape(key.Trim())}</say-as>";
 
     /// <summary>
     /// speech-dispatcher's <c>cap_let_recogn</c> as espeak-ng's <c>-k</c>. The

@@ -143,6 +143,12 @@ public sealed class PronunciationsConfig
         {
             string pattern = Regex.Escape(r.Match);
 
+            // Text from Word, browsers and PDFs writes the apostrophe as U+2019
+            // (or U+02BC); a rule typed with ' must still fire on it, and the
+            // reverse. Each such character becomes a class of all three, which
+            // keeps the match the same length, so offsets are unaffected.
+            pattern = Regex.Replace(pattern, "['\u2019\u02BC]", "['\u2019\u02BC]");
+
             // \b is a transition between a word and a non-word character, so it
             // can only anchor a side that actually starts or ends with a word
             // character. Wrapping a symbol in \b...\b produces a rule that can

@@ -190,4 +190,46 @@ public class SpeechdAudioTests
     {
         Assert.Equal(10000, AudioBlock.MaxChunkBytes);
     }
+
+    // ------------------------------------------------------------ WAV header
+
+    /// <summary>
+    /// The header walk loops for as long as the stream supplies chunks, and its
+    /// <c>fmt </c> buffer was a <c>stackalloc</c> inside that loop (CA2014): every
+    /// repeated <c>fmt </c> chunk took sixteen more bytes of stack, released only
+    /// when the method returned. A stream of repeated chunks — a producer gone
+    /// wrong, on the pipe the module reads — then ended the process with a stack
+    /// overflow, which no handler can catch. Run on a small stack so the old
+    /// shape overflows in a fraction of the input it would need on a default one.
+    /// </summary>
+    [Fact]
+    public void A_header_with_many_fmt_chunks_does_not_grow_the_stack()
+    {
+        const int Repeats = 100_000;          // 1.6 MB of stackalloc in the old shape
+        var wav = new MemoryStream();
+        var w = new BinaryWriter(wav);
+        w.Write("RIFF"u8); w.Write(0xFFFFFFFFu); w.Write("WAVE"u8);
+        for (int i = 0; i < Repeats; i++)
+        {
+            w.Write("fmt "u8); w.Write(16u);
+            w.Write((short)1); w.Write((short)1); w.Write(22050); w.Write(44100);
+            w.Write((short)2); w.Write((short)16);
+        }
+        w.Write("data"u8); w.Write(0xFFFFFFFFu);
+        w.Flush();
+        wav.Position = 0;
+
+        WavHeader? header = null;
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { header = WavHeader.Read(wav); }
+            catch (Exception ex) { failure = ex; }
+        }, maxStackSize: 256 * 1024);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)));
+
+        Assert.Null(failure);
+        Assert.Equal(new WavHeader(22050, 1, 16), header);
+    }
 }

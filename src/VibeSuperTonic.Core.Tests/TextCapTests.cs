@@ -95,6 +95,36 @@ public class TextCapTests
         Assert.NotNull(notice);
     }
 
+    [Theory]
+    [InlineData('。')]
+    [InlineData('！')]
+    [InlineData('？')]
+    [InlineData('।')]
+    [InlineData('؟')]
+    public void Non_ascii_terminators_are_sentence_boundaries(char terminator)
+    {
+        // Item 12: a Japanese selection used to be cut mid-sentence at the limit.
+        string text = new string('猫', 700) + terminator + new string('猫', 500);
+
+        string capped = TextCap.Apply(text, 1000, out _);
+
+        Assert.Equal(701, capped.Length);
+        Assert.Equal(terminator, capped[^1]);
+    }
+
+    [Fact]
+    public void A_hard_cut_never_splits_a_surrogate_pair()
+    {
+        // Item 15: the blind cut at maxChars left a lone high surrogate at the
+        // end, which reaches espeak as U+FFFD.
+        string text = new string('x', 999) + string.Concat(Enumerable.Repeat("\U00020000", 100));
+
+        string capped = TextCap.Apply(text, 1000, out _);
+
+        Assert.Equal(999, capped.Length);
+        Assert.False(char.IsHighSurrogate(capped[^1]));
+    }
+
     [Fact]
     public void A_nonsensical_limit_is_rejected_rather_than_silently_clamped()
     {

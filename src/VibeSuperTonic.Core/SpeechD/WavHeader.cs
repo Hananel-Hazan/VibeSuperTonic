@@ -48,7 +48,12 @@ public readonly record struct WavHeader(int SampleRate, int Channels, int Bits)
         // required to be second: espeak-ng and .NET both happen to write them in
         // the obvious order, and depending on that would be a silent break the
         // day one of them adds a LIST chunk.
+        // Both buffers outside the loop (CA2014). The loop runs for as long as
+        // the stream supplies chunks, and a stackalloc inside it is released only
+        // when this method returns: a pipe repeating 'fmt ' took sixteen bytes of
+        // stack per chunk until the process died of a stack overflow.
         Span<byte> head = stackalloc byte[8];
+        Span<byte> fmt = stackalloc byte[16];
         while (true)
         {
             if (!ReadExactly(input, head)) return null;
@@ -59,7 +64,6 @@ public readonly record struct WavHeader(int SampleRate, int Channels, int Bits)
             {
                 if (size < 16) return null;
 
-                Span<byte> fmt = stackalloc byte[16];
                 if (!ReadExactly(input, fmt)) return null;
 
                 channels = BitConverter.ToInt16(fmt[2..4]);

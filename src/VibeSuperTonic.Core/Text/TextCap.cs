@@ -21,8 +21,14 @@ public static class TextCap
     /// Sentence terminators, plus the paragraph break — a selection from a PDF
     /// or a code comment can run for pages without a full stop, and a blank line
     /// is a better cut than a hard one.
+    ///
+    /// <para>The same terminators <see cref="SentenceChunker"/> splits at:
+    /// ideographic and fullwidth stops (Japanese and Chinese have no spaces, and
+    /// a selection of them was cut mid-sentence), the Devanagari danda and the
+    /// Arabic question mark.</para>
     /// </summary>
-    private static readonly char[] Terminators = ['.', '!', '?', '\n'];
+    private static readonly char[] Terminators =
+        ['.', '!', '?', '\n', '\u3002', '\uFF01', '\uFF1F', '\u0964', '\u061F'];
 
     /// <summary>
     /// How far back from the limit a sentence boundary is still worth taking:
@@ -62,6 +68,12 @@ public static class TextCap
         if (cut >= 0) cut++;
 
         if (cut < maxChars * MinKeptFraction) cut = maxChars;
+
+        // A blind cut must not land between the halves of a surrogate pair: the
+        // kept text would end in a lone high surrogate, which reaches espeak as
+        // U+FFFD.
+        if (cut > 0 && cut < text.Length && char.IsLowSurrogate(text[cut])
+            && char.IsHighSurrogate(text[cut - 1])) cut--;
 
         int dropped = text.Length - cut;
         notice = $"selection was {text.Length:N0} characters; " +

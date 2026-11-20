@@ -50,7 +50,22 @@ public sealed class ModelDownloader
 {
     private readonly string _baseDir;
     private readonly Manifest _manifest;
-    private readonly HttpClient _http;
+    /// <summary>
+    /// One client for the process (review item 64). A client per downloader meant
+    /// one per voice install, each holding its own connection pool and never
+    /// disposed. Static is the documented lifetime for <see cref="HttpClient"/>.
+    /// </summary>
+    private static readonly HttpClient _http = CreateClient();
+
+    /// <summary>How many files may be in flight at once (review item 89).</summary>
+    internal const int MaxParallelFiles = 2;
+
+    private static HttpClient CreateClient()
+    {
+        var c = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("VibeSuperTonic/1.0");
+        return c;
+    }
     private readonly FileLockDescriber? _lockDescriber;
 
     /// <param name="lockDescriber">
@@ -63,8 +78,6 @@ public sealed class ModelDownloader
         _baseDir = baseDir;
         _manifest = manifest;
         _lockDescriber = lockDescriber;
-        _http = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibeSuperTonic/1.0");
     }
 
     /// <summary>
@@ -84,50 +97,70 @@ public sealed class ModelDownloader
     /// Optional byte-level progress for the file in flight. Null costs nothing —
     /// the copy loop is only entered when someone is listening.
     /// </param>
-    /// <param name="ct">Cancellation. A part file is removed on the way out.</param>
+    /// <param name="ct">
+    /// Cancellation. <b>The <c>.part</c> file is kept</b>, so the next run resumes
+    /// it with a <c>Range</c> request; it is removed only when it can never be
+    /// completed (wrong length, a server that refuses the range, a failed hash).
+    /// </param>
     public async Task<bool> EnsureAllAsync(
         IProgress<string>? log, IProgress<DownloadProgress>? bytes, CancellationToken ct)
     {
         bool allOk = true;
         bool anyEmptyUrl = false;
-        foreach (var f in _manifest.Files)
+        using var gate = new SemaphoreSlim(MaxParallelFiles);
+        var tasks = _manifest.Files.Select(async f =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                var (ok, empty) = await EnsureOneAsync(f, log, bytes, ct);
+                if (!ok) Volatile.Write(ref allOk, false);
+                if (empty) Volatile.Write(ref anyEmptyUrl, true);
+            }
+            finally { gate.Release(); }
+        }).ToList();
+        await Task.WhenAll(tasks);
+        if (anyEmptyUrl)
+        {
+            log?.Report("");
+            log?.Report("Note: this build's manifest has empty URLs (template). For a self-fixing");
+            log?.Report("install, edit models-manifest.json with real Hugging Face download URLs and");
+            log?.Report("SHA-256 hashes, then click Repair again.");
+        }
+        return allOk;
+    }
+
+    private async Task<(bool Ok, bool EmptyUrl)> EnsureOneAsync(
+        ManifestEntry f, IProgress<string>? log, IProgress<DownloadProgress>? bytes, CancellationToken ct)
+    {
         {
             if (ResolveInsideBase(f.Path) is not { } fullPath)
             {
                 log?.Report($"SKIP {f.Path} — escapes the models directory");
-                allOk = false;
-                continue;
+                return (false, false);
             }
 
             if (await VerifyAsync(fullPath, f, ct))
             {
                 log?.Report($"OK   {f.Path}");
-                continue;
+                return (true, false);
             }
 
-            // Skip entries with no usable source: the manifest is a template
-            // until release time. Tell the user what's missing and how to get it
-            // instead of throwing.
             var sources = f.AllSources().ToList();
             if (sources.Count == 0)
             {
                 log?.Report($"SKIP {f.Path} — no download URL in manifest. " +
                             "Either copy this file in manually, or fill in a URL in models-manifest.json.");
-                anyEmptyUrl = true;
-                allOk = false;
-                continue;
+                return (false, true);
             }
 
-            // Block if a process holds the existing (stale) file. No describer
-            // means the platform does not need the check.
             if (File.Exists(fullPath) && _lockDescriber is not null)
             {
                 string? who = _lockDescriber(fullPath);
                 if (!string.IsNullOrEmpty(who))
                 {
                     log?.Report($"LOCKED {f.Path} — held by: {who}. Close them and retry.");
-                    allOk = false;
-                    continue;
+                    return (false, false);
                 }
             }
 
@@ -135,14 +168,18 @@ public sealed class ModelDownloader
 
             // Try every source in turn, and re-verify after EACH one. A mirror
             // that serves a truncated or stale file must fall through to the
-            // next source rather than leaving a corrupt model on disk — which
-            // is also why the hash check lives inside the loop instead of after
-            // it. A source that downloads fine but hashes wrong is a bad source.
+            // next source rather than leaving a corrupt model on disk. A source
+            // that downloads fine but hashes wrong is a bad source.
             bool got = false;
             for (int i = 0; i < sources.Count && !got; i++)
             {
                 string src = sources[i];
-                if (i > 0) log?.Report($"     primary failed — trying mirror {i}: {Shorten(src)}");
+                if (i > 0)
+                {
+                    log?.Report($"     primary failed — trying mirror {i}: {Shorten(src)}");
+                    // A partial from another source must not be resumed by this one.
+                    try { File.Delete(fullPath + ".part"); } catch { }
+                }
                 if (!await DownloadAsync(fullPath, src, f, log, bytes, ct)) continue;
                 if (await VerifyAsync(fullPath, f, ct)) { got = true; break; }
                 log?.Report($"FAIL hash mismatch on {f.Path} from {Shorten(src)}");
@@ -153,17 +190,9 @@ public sealed class ModelDownloader
             {
                 log?.Report($"FAIL {f.Path} — no source produced a verified file " +
                             $"({sources.Count} tried)");
-                allOk = false;
             }
+            return (got, false);
         }
-        if (anyEmptyUrl)
-        {
-            log?.Report("");
-            log?.Report("Note: this build's manifest has empty URLs (template). For a self-fixing");
-            log?.Report("install, edit models-manifest.json with real Hugging Face download URLs and");
-            log?.Report("SHA-256 hashes, then click Repair again.");
-        }
-        return allOk;
     }
 
     /// <summary>Host + last path segment — enough to tell sources apart in the log.</summary>
@@ -177,10 +206,39 @@ public sealed class ModelDownloader
         string tmp = fullPath + ".part";
         try
         {
-            using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            // A .part at least as long as the manifest says can never be completed
+            // by appending; start over.
+            long have = File.Exists(tmp) ? new FileInfo(tmp).Length : 0;
+            if (have > 0 && f.Bytes > 0 && have >= f.Bytes) { File.Delete(tmp); have = 0; }
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (have > 0) req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(have, null);
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+            {
+                File.Delete(tmp);
+                log?.Report($"FAIL {f.Path}: server refused the resume range; partial discarded, retry will start over");
+                return false;
+            }
             resp.EnsureSuccessStatusCode();
+
+            bool resumed = resp.StatusCode == System.Net.HttpStatusCode.PartialContent && have > 0;
+            if (!resumed) have = 0;   // a 200 sends the whole body
+
+            // Refuse a wrong length before reading a byte (review item 47).
+            long? declared = resp.Content.Headers.ContentLength;
+            long expected = f.Bytes > 0 ? f.Bytes - have : -1;
+            if (declared is long d && expected >= 0 && d != expected)
+            {
+                log?.Report($"FAIL {f.Path}: server declares {d} bytes, expected {expected}; refused before download");
+                if (!resumed) { try { File.Delete(tmp); } catch { } }
+                return false;
+            }
+
             await using var src = await resp.Content.ReadAsStreamAsync(ct);
-            await using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            await using (var dst = new FileStream(tmp, resumed ? FileMode.Append : FileMode.Create,
+                                                  FileAccess.Write, FileShare.None))
             {
                 if (bytes is null)
                 {
@@ -188,21 +246,18 @@ public sealed class ModelDownloader
                 }
                 else
                 {
-                    bytes.Report(new DownloadProgress(f.Path, 0, f.Bytes));
+                    bytes.Report(new DownloadProgress(f.Path, have, f.Bytes));
                     var buffer = new byte[81920];
-                    long done = 0;
-                    long lastReported = 0;
+                    long done = have;
+                    long lastReported = have;
                     int n;
                     while ((n = await src.ReadAsync(buffer, ct)) > 0)
                     {
                         await dst.WriteAsync(buffer.AsMemory(0, n), ct);
                         done += n;
 
-                        // Roughly every 512 KB rather than every 80 KB chunk. A
-                        // 114 MB voice is 1400 reports at this rate and 1500 at
-                        // the other, but the receiver is a UI thread marshal on
-                        // the far side of a socket, and a progress bar nobody
-                        // can see move faster than this does not need the wakeups.
+                        // Roughly every 512 KB rather than every 80 KB chunk; the
+                        // receiver is a UI thread marshal on the far side of a socket.
                         if (done - lastReported < 512 * 1024 && done != f.Bytes) continue;
                         lastReported = done;
                         bytes.Report(new DownloadProgress(f.Path, done, f.Bytes));
@@ -212,10 +267,15 @@ public sealed class ModelDownloader
             File.Move(tmp, fullPath, overwrite: true);
             return true;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Keep the .part: the next run resumes it.
+            throw;
+        }
         catch (Exception ex)
         {
+            // Network failure mid-body: the .part is a valid prefix, keep it for Range resume.
             log?.Report($"FAIL {f.Path}: {ex.Message}");
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
             return false;
         }
     }

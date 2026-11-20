@@ -127,6 +127,62 @@ public class SpeechSessionTests
         Assert.Empty(synth.Rendered);
     }
 
+    /// <summary>
+    /// A selection that sanitises to nothing — whitespace, zero-width characters,
+    /// icon-font glyphs from the private use area — used to finish in silence
+    /// with nothing said anywhere: the key did nothing, and nothing explained
+    /// why. It now says so on the event stream, before the terminal event.
+    /// </summary>
+    [Theory]
+    [InlineData("   \n\t ")]
+    [InlineData("\u200B\u200C\u200D")]
+    [InlineData("\uE001 \uF8FF")]
+    public async Task Text_with_nothing_to_read_says_so_instead_of_finishing_silently(string text)
+    {
+        var (session, synth, sink, log) = Build();
+        using var _ = session;
+
+        Assert.True(session.Speak(text, Voice));
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var notice = Assert.Single(log.OfKind(SessionEventKind.Notice));
+        Assert.Contains("nothing to read", notice.Notice);
+        Assert.Equal(0, sink.WriteCount);
+        Assert.Empty(synth.Rendered);
+        Assert.Empty(log.OfKind(SessionEventKind.Error));
+
+        // Before Finished, so a subscriber that clears its state on the terminal
+        // event has already seen it.
+        var kinds = log.Events.Select(e => e.Kind).ToList();
+        Assert.True(kinds.IndexOf(SessionEventKind.Notice) < kinds.IndexOf(SessionEventKind.Finished));
+    }
+
+    [Fact]
+    public async Task A_seek_past_the_last_word_says_there_is_nothing_after_it()
+    {
+        var (session, _, sink, log) = Build();
+        using var _s = session;
+
+        const string Text = "One two.   ";
+        Assert.True(session.Speak(Text, Voice, startOffset: Text.Length - 2));
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var notice = Assert.Single(log.OfKind(SessionEventKind.Notice));
+        Assert.Contains("nothing to read after", notice.Notice);
+        Assert.Equal(0, sink.WriteCount);
+    }
+
+    [Fact]
+    public async Task Ordinary_text_carries_no_notice()
+    {
+        var (session, _, _, log) = Build();
+        using var _s = session;
+
+        session.Speak("Hello there.", Voice);
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Empty(log.OfKind(SessionEventKind.Notice));
+    }
+
     // --------------------------------------------------------------------- stop
 
     [Fact]
@@ -384,6 +440,178 @@ public class SpeechSessionTests
 
         Assert.Equal(SpeechState.Idle, session.State);
         Assert.Single(log.OfKind(SessionEventKind.Stopped));
+    }
+
+    /// <summary>
+    /// A cold load the user pauses through. Pause used to be refused outside
+    /// Speaking, so a press during the 2-5 s load did nothing and speech started
+    /// anyway seconds later. The writer waits on the pause before every write,
+    /// the first one included, so a pause in Preparing now holds the first audio
+    /// until Resume.
+    /// </summary>
+    [Fact]
+    public async Task Pause_during_preparing_holds_the_first_write_until_resume()
+    {
+        var synth = new GatedSynth();
+        var sink = new FakeSink();
+        using var session = new SpeechSession(synth, sink, Options());
+        var log = new Recorder();
+        session.Emitted += log.Add;
+
+        Assert.True(session.Speak("One two three.", Voice));
+        Assert.True(synth.Entered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(SpeechState.Preparing, session.State);
+
+        session.Pause();
+        Assert.True(session.IsPaused, "a pause during Preparing was ignored");
+
+        // The model finishes loading. Audio is ready, and must not be written.
+        synth.Release.Set();
+        Thread.Sleep(300);
+        Assert.Equal(0, sink.WriteCount);
+        Assert.Equal(SpeechState.Preparing, session.State);
+        Assert.Empty(log.OfKind(SessionEventKind.Started));
+
+        session.Resume();
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Single(log.OfKind(SessionEventKind.Started));
+        Assert.Single(log.OfKind(SessionEventKind.Finished));
+        Assert.True(sink.WriteCount > 0);
+        Assert.Empty(log.OfKind(SessionEventKind.Error));
+        Assert.False(session.IsPaused);
+    }
+
+    [Fact]
+    public async Task Stop_releases_an_utterance_paused_during_preparing()
+    {
+        var synth = new GatedSynth();
+        var sink = new FakeSink();
+        using var session = new SpeechSession(synth, sink, Options());
+        var log = new Recorder();
+        session.Emitted += log.Add;
+
+        Assert.True(session.Speak("One two three.", Voice));
+        Assert.True(synth.Entered.Wait(TimeSpan.FromSeconds(5)));
+        session.Pause();
+        synth.Release.Set();
+        Thread.Sleep(50);
+
+        session.Stop();
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(SpeechState.Idle, session.State);
+        Assert.Single(log.OfKind(SessionEventKind.Stopped));
+        Assert.Empty(log.OfKind(SessionEventKind.Started));
+        Assert.Empty(log.OfKind(SessionEventKind.Error));
+        Assert.Equal(0, sink.WriteCount);
+        Assert.False(session.IsPaused);
+    }
+
+    /// <summary>
+    /// Pause is now reachable in Preparing, so an utterance can END while paused
+    /// — one with nothing to read, or whose renderer failed. Idle must not report
+    /// a pause that belongs to nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_utterance_that_ends_while_paused_does_not_leave_idle_paused()
+    {
+        var synth = new GatedSynth { Throw = new InvalidOperationException("model file is corrupt") };
+        var sink = new FakeSink();
+        using var session = new SpeechSession(synth, sink, Options());
+        var log = new Recorder();
+        session.Emitted += log.Add;
+
+        Assert.True(session.Speak("One two three.", Voice));
+        Assert.True(synth.Entered.Wait(TimeSpan.FromSeconds(5)));
+        session.Pause();
+        synth.Release.Set();
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(SpeechState.Idle, session.State);
+        Assert.Single(log.OfKind(SessionEventKind.Error));
+        Assert.False(session.IsPaused, "idle, and still reporting a pause");
+    }
+
+    // ------------------------------------------------- a renderer that will not stop
+
+    /// <summary>
+    /// The teardown waits a bounded time for the renderer and then carries on to
+    /// Idle, so the next utterance can start beside a renderer still inside the
+    /// synthesizer. That used to happen in silence, and the collection the
+    /// renderer was about to write into was disposed under it. It is now
+    /// reported as an Error, and the session still works.
+    /// </summary>
+    [Fact]
+    public async Task A_renderer_that_ignores_cancellation_is_reported_not_abandoned_silently()
+    {
+        var synth = new GatedSynth { IgnoreCancellation = true };
+        var sink = new FakeSink();
+        using var session = new SpeechSession(synth, sink, Options());
+        session.RendererStopTimeout = TimeSpan.FromMilliseconds(200);
+        var log = new Recorder();
+        session.Emitted += log.Add;
+
+        Assert.True(session.Speak("One two three.", Voice));
+        Assert.True(synth.Entered.Wait(TimeSpan.FromSeconds(5)));
+
+        session.Stop();
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(SpeechState.Idle, session.State);
+        Assert.Single(log.OfKind(SessionEventKind.Stopped));
+        var error = Assert.Single(log.OfKind(SessionEventKind.Error));
+        Assert.Contains("renderer", error.Message);
+
+        // Reported before the terminal event, which is where the daemon and the
+        // tray stop listening to this utterance.
+        var kinds = log.Events.Select(e => e.Kind).ToList();
+        Assert.True(kinds.IndexOf(SessionEventKind.Error) < kinds.IndexOf(SessionEventKind.Stopped));
+
+        // The stuck call returns at last, into a queue that is still there to
+        // refuse it, and the session goes on working.
+        synth.Release.Set();
+        Assert.True(SpinUntil(() => synth.Returned));
+        Thread.Sleep(50);
+        synth.IgnoreCancellation = false;
+        Assert.True(session.Speak("Four five.", Voice));
+        await session.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Single(log.OfKind(SessionEventKind.Finished));
+        Assert.Single(log.OfKind(SessionEventKind.Error));
+    }
+
+    /// <summary>
+    /// Holds its first <see cref="Synthesize"/> until <see cref="Release"/> is
+    /// set: a cold model load the test controls. With
+    /// <see cref="IgnoreCancellation"/> it is a native inference that does not
+    /// notice its terminate flag.
+    /// </summary>
+    private sealed class GatedSynth : ISynthesizer
+    {
+        private int _calls;
+        public int SampleRate => 44100;
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public ManualResetEventSlim Release { get; } = new(false);
+        public bool IgnoreCancellation { get; set; }
+        public Exception? Throw { get; set; }
+        public volatile bool Returned;
+
+        public short[] Synthesize(string text, SynthesisOptions options, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                Entered.Set();
+                if (IgnoreCancellation) Release.Wait();
+                else Release.Wait(cancellationToken);
+                Returned = true;
+                if (Throw is { } ex) throw ex;
+            }
+            else cancellationToken.ThrowIfCancellationRequested();
+            return new short[4410];
+        }
+
+        public Task PreloadAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void Dispose() { }
     }
 
     // ------------------------------------------------------------------ helpers

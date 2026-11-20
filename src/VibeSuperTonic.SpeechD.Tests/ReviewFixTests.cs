@@ -44,6 +44,7 @@ public sealed class ReviewFixTests : IDisposable
 
         Wav(Path.Combine(root, "speech.wav"), Speech);
         Wav(Path.Combine(root, "silence.wav"), new byte[8]);
+        File.WriteAllBytes(Path.Combine(root, "raw.pcm"), Speech);
 
         Script(Path.Combine(root, "vst-ctl"), ctl, root);
         Script(Path.Combine(root, "espeak", "espeak-ng"),
@@ -52,6 +53,12 @@ public sealed class ReviewFixTests : IDisposable
             "case \"$*\" in\n" +
             "  *'-v ja'*) echo \"Can't read dictionary file: '$ROOT/espeak/espeak-ng-data/ja_dict'\" >&2; cat '$ROOT/silence.wav'; exit 0 ;;\n" +
             "  *'-v zz'*) echo 'Error: The specified espeak-ng voice does not exist.' >&2; exit 1 ;;\n" +
+            // Item 105: a complaint about some other file, with real speech.
+            "  *'-v nl'*) echo \"Can't read dictionary file: '$ROOT/espeak/espeak-ng-data/nl_extra'\" >&2; cat '$ROOT/speech.wav'; exit 0 ;;\n" +
+            // Item 106: half the speech, then a wait for the test to see it arrive.
+            "  *'-v fi'*) cat '$ROOT/speech.wav'; i=0; while [ ! -e '$ROOT/go' ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done\n" +
+            "    if [ -e '$ROOT/go' ]; then echo streamed > '$ROOT/result'; else echo held > '$ROOT/result'; fi\n" +
+            "    cat '$ROOT/raw.pcm'; exit 0 ;;\n" +
             "esac\n" +
             "cat '$ROOT/speech.wav'", root);
         return root;
@@ -362,5 +369,141 @@ public sealed class ReviewFixTests : IDisposable
             replies[..2]);
         Assert.DoesNotContain(replies, r => r.StartsWith("200 OK VOICE LIST", StringComparison.Ordinal));
         Assert.Equal("299 OK LOADED SUCCESSFULLY", replies[^1]);
+    }
+    // ------------------------------------------------------------ item 104
+
+    /// <summary>
+    /// SSIP <c>KEY</c> names reach espeak-ng inside a <c>tts:key</c> say-as, the
+    /// format speech-dispatcher's own sd_espeak-ng uses. espeak-ng then names
+    /// space, underscore, double-quote, tab and single characters in the voice's
+    /// language: measured with <c>-x -v de</c> against the shipped payload,
+    /// <c>space</c> as text is <c>(en)sp'eIs(de)</c> and inside tts:key
+    /// <c>l'e:rts'aIC@n</c> ("Leerzeichen"). Before the fix the name went as
+    /// plain text, with no <c>-m</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("space", "space")]
+    [InlineData("shift_a", "shift_a")]
+    [InlineData("<", "&lt;")]
+    [InlineData("double-quote", "double-quote")]
+    public void A_key_is_named_in_the_voice_s_language(string key, string escaped)
+    {
+        string root = Install();
+
+        var (replies, wire) = Run(root, _ => { }, "SET", "language=de", ".", "KEY", key, ".");
+
+        var call = Assert.Single(EspeakCalls(root));
+        Assert.Contains("-m", call);
+        Assert.Equal("de", call[Array.IndexOf(call, "-v") + 1]);
+        Assert.Equal($"<say-as interpret-as=\"tts:key\">{escaped}</say-as>", call[^1]);
+        Assert.Single(AudioBlocks(wire));
+        Assert.Contains("702 END", replies);
+    }
+
+    // ------------------------------------------------------------ item 105
+
+    /// <summary>
+    /// A "Can't read dictionary file" line beside real speech is not a missing
+    /// language: the speech is sent, nothing is said twice, and the language
+    /// keeps its voice. Before the fix the speech was dropped, the text said
+    /// again in the default voice and the language demoted for the module's life.
+    /// </summary>
+    [Fact]
+    public void A_dictionary_complaint_beside_real_speech_does_not_demote_the_language()
+    {
+        string root = Install();
+        var log = new List<string>();
+
+        var (_, wire) = Run(root, log.Add, "SET", "language=nl", ".", "CHAR", "a", ".", "CHAR", "b", ".");
+
+        var calls = EspeakCalls(root);
+        Assert.Equal(2, calls.Length);
+        Assert.All(calls, c => Assert.Equal("nl", c[Array.IndexOf(c, "-v") + 1]));
+        Assert.Equal(new[] { Speech, Speech }, AudioBlocks(wire));
+        Assert.Empty(log);
+    }
+
+    // ------------------------------------------------------------ item 106
+
+    /// <summary>
+    /// The first run in a language streams: the fake espeak sends its first
+    /// samples and then waits, up to 5 s, for them to reach the server before it
+    /// sends the rest. Before the fix the module held the whole WAV, so the fake
+    /// waited out its 5 s and wrote "held".
+    /// </summary>
+    [Fact]
+    public void The_first_run_in_a_language_streams_its_audio()
+    {
+        string root = Install();
+        var input = new MemoryStream(Encoding.UTF8.GetBytes("SET\nlanguage=fi\n.\nCHAR\na\n.\n"));
+        var output = new SignalOnAudio(Path.Combine(root, "go"));
+
+        new SpeechdModule(input, output, new Voices(root, root), _ => { }, inputFd: -1).Run();
+
+        Assert.Equal("streamed", File.ReadAllText(Path.Combine(root, "result")).Trim());
+        Assert.Equal(new[] { Speech, Speech }, AudioBlocks(output.ToArray()));
+    }
+
+    /// <summary>Creates a file once the first complete audio block has been written.</summary>
+    private sealed class SignalOnAudio(string signal) : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            base.Write(buffer, offset, count);
+            Signal();
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            base.Write(buffer);
+            Signal();
+        }
+
+        private void Signal()
+        {
+            if (!File.Exists(signal) &&
+                Encoding.Latin1.GetString(ToArray()).Contains("\n705 AUDIO\n", StringComparison.Ordinal))
+                File.WriteAllText(signal, "");
+        }
+    }
+
+    // ------------------------------------------------------------ item 107
+
+    /// <summary>
+    /// A failure inside INIT still answers INIT, with a reply speechd reads as a
+    /// refusal rather than waiting for one that never comes. The failure is
+    /// injected as the first write of INIT's reply throwing. Before the fix INIT
+    /// owed nothing, so nothing at all was written.
+    /// </summary>
+    [Fact]
+    public void A_failure_inside_init_still_answers_it()
+    {
+        string root = Install();
+        var log = new List<string>();
+        var input = new MemoryStream(Encoding.UTF8.GetBytes("INIT\n"));
+        var output = new ThrowOnFirst("299-");
+
+        new SpeechdModule(input, output, new Voices(root, root), log.Add, inputFd: -1).Run();
+
+        string[] replies = Encoding.UTF8.GetString(output.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(["399 ERR CANT INIT MODULE"], replies);
+        Assert.Contains(log, l => l.StartsWith("INIT:", StringComparison.Ordinal));
+    }
+
+    /// <summary>Throws once, on the first write that begins with <c>prefix</c>.</summary>
+    private sealed class ThrowOnFirst(string prefix) : MemoryStream
+    {
+        private bool _thrown;
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (!_thrown && Encoding.UTF8.GetString(buffer).StartsWith(prefix, StringComparison.Ordinal))
+            {
+                _thrown = true;
+                throw new IOException("injected");
+            }
+
+            base.Write(buffer);
+        }
     }
 }

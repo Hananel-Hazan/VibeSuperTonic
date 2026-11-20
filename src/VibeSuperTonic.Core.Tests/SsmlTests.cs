@@ -181,4 +181,13 @@ public class SsmlTests
         Assert.Equal("", Ssml.Strip(""));
         Assert.False(Ssml.IsDocument(null));
     }
+
+    [Fact]
+    public void An_xml_prolog_and_doctype_do_not_hide_the_document()
+    {
+        const string xml = "<?xml version=\"1.0\"?><speak>Hello <b>there</b></speak>";
+        Assert.True(Ssml.IsDocument(xml));
+        Assert.Equal("Hello there", Ssml.Strip(xml));
+        Assert.True(Ssml.IsDocument("\uFEFF<?xml version=\"1.0\"?>\n<!DOCTYPE speak>\n<speak>x</speak>"));
+    }
 }

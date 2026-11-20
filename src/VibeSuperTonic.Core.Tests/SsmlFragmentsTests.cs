@@ -544,4 +544,11 @@ public class SsmlFragmentsTests
         Assert.Equal("m", Assert.Single(chunkBack!.Audio!.Marks!).Name);
         Assert.DoesNotContain("marks", Protocol.Encode(new Response { Ok = true, Audio = new AudioChunk(1, 1, null, true) }));
     }
+
+    [Fact]
+    public void A_document_with_an_xml_prolog_parses()
+    {
+        Assert.True(SsmlDocument.TryParse("<?xml version=\"1.0\"?><speak>Hello</speak>", out var fragments));
+        Assert.NotEmpty(fragments);
+    }
 }

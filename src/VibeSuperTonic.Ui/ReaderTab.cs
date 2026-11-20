@@ -195,6 +195,14 @@ public sealed class ReaderTab : UserControl
 
             case SessionEventKind.Error:
                 _notice.Text = evt.Message;
+                _notice.IsVisible = true;
+                break;
+
+            // Nothing speakable in the text (item 42): say so instead of
+            // letting the key look dead.
+            case SessionEventKind.Notice:
+                _notice.Text = evt.Notice;
+                _notice.IsVisible = true;
                 break;
         }
     }
