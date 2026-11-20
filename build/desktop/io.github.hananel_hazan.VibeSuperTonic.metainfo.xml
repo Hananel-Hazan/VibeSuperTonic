@@ -63,19 +63,19 @@
   </description>
 
   <!-- Pinned to the release tag so the URLs never move (Flathub asks for that).
-       They resolve once v0.2.17 is pushed; the build validates with no network. -->
+       They resolve once v0.3.0 is pushed; the build validates with no network. -->
   <screenshots>
     <screenshot type="default">
       <caption>Reading the selection aloud, highlighting each word</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/reader.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.3.0/docs/screenshots/reader.png</image>
     </screenshot>
     <screenshot>
       <caption>Downloading voices, with each voice's licence shown first</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/voices.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.3.0/docs/screenshots/voices.png</image>
     </screenshot>
     <screenshot>
       <caption>Engine, voice, speed and quality, for all voices or just one</caption>
-      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.2.19/docs/screenshots/tune.png</image>
+      <image>https://raw.githubusercontent.com/Hananel-Hazan/VibeSuperTonic/v0.3.0/docs/screenshots/tune.png</image>
     </screenshot>
   </screenshots>
 
@@ -110,6 +110,18 @@
 
   <releases>
     <!-- The date is the day it is packed; docs/RELEASING.md step 1 sets it. -->
+    <!-- 0.3.0 is under development (docs/FIX-PLAN-2026-11-09.md). This entry was
+         added on 2026-11-20 so CI's snap and Flatpak jobs run again; the date and
+         the list are provisional and are finished at pack time. -->
+    <release version="0.3.0" date="2026-11-20" type="stable">
+      <description>
+        <ul>
+          <li>Screen readers: text in a language with no installed voice is read in the default voice instead of being silent, and reading single characters speaks punctuation, spaces and capitals</li>
+          <li>Hebrew and Arabic voices now have their pronunciation data in the package</li>
+          <li>The background service starts listening before it loads a voice, starts with the voice you chose, and survives errors that used to stop it</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.19" date="2026-11-08" type="stable">
       <description>
         <ul>
