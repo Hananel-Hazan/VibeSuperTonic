@@ -201,6 +201,26 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
 
         private PrivateXServer(Process process, string display) => (_process, Display) = (process, display);
 
+        // DIAGNOSTICS (2026-11-20). CI's linux job began failing here with the
+        // owner's XOpenDisplay returning null right after this server's own
+        // probe connected, and the server's stderr was thrown away, so nothing
+        // said why. It is kept now, and a failed open reports it.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _stderr = new();
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, PrivateXServer> Running = new();
+
+        /// <summary>What a failed connection to <paramref name="display"/> should say.</summary>
+        public static string Diagnose(string display)
+        {
+            string auth = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(Posix.getenv("XAUTHORITY")) ?? "(unset)";
+            string n = display.TrimStart(':');
+            string files = $"lock={File.Exists($"/tmp/.X{n}-lock")} socket={File.Exists($"/tmp/.X11-unix/X{n}")}";
+            if (!Running.TryGetValue(display, out var server))
+                return $"no server of ours on {display}; native XAUTHORITY={auth}; {files}";
+            string state = server._process.HasExited ? $"exited with {server._process.ExitCode}" : "running";
+            return $"server on {display} {state}; native XAUTHORITY={auth}; {files}; stderr: "
+                + string.Join(" | ", server._stderr.TakeLast(15));
+        }
+
         private static bool OnPath(string exe) =>
             (Environment.GetEnvironmentVariable("PATH") ?? "")
                 .Split(':', StringSplitOptions.RemoveEmptyEntries)
@@ -235,11 +255,11 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
 
                 var p = Process.Start(psi)!;
                 p.OutputDataReceived += (_, _) => { };
-                p.ErrorDataReceived += (_, _) => { };
+                var server = new PrivateXServer(p, $":{n}");
+                p.ErrorDataReceived += (_, e) => { if (e.Data is { } line) server._stderr.Enqueue(line); };
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
 
-                var server = new PrivateXServer(p, $":{n}");
                 var clock = Stopwatch.StartNew();
                 while (clock.ElapsedMilliseconds < 5000 && !p.HasExited)
                 {
@@ -248,6 +268,7 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
                     {
                         X11Native.XCloseDisplay(probe);
                         output.WriteLine($"{exe} on {server.Display}");
+                        Running[server.Display] = server;
                         return server;
                     }
                     Thread.Sleep(50);
@@ -280,6 +301,7 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
 
         public void Dispose()
         {
+            Running.TryRemove(new KeyValuePair<string, PrivateXServer>(Display, this));
             Kill();
             _process.Dispose();
         }
@@ -310,7 +332,7 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
         private static ScriptedOwner Create(string display, string selectionName, string? text, uint? time, bool pump)
         {
             IntPtr dpy = X11Native.XOpenDisplay(display);
-            Assert.NotEqual(IntPtr.Zero, dpy);
+            Assert.True(dpy != IntPtr.Zero, $"XOpenDisplay({display}) failed: {PrivateXServer.Diagnose(display)}");
 
             IntPtr window = X11Native.XCreateSimpleWindow(dpy, X11Native.XDefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
             IntPtr selection = X11Native.XInternAtom(dpy, selectionName, false);
@@ -448,5 +470,8 @@ public sealed class X11SelectionSourceTests(ITestOutputHelper output)
 
         [DllImport("libc", SetLastError = true)]
         internal static extern int kill(int pid, int sig);
+
+        [DllImport("libc")]
+        internal static extern IntPtr getenv(string name);
     }
 }
